@@ -1,0 +1,54 @@
+name: imagine
+
+x-base: &base
+  image: 'jsi/imagine:latest'
+
+x-base-test-config: &base-test-config
+  <<: *base
+  volumes:
+    - type: bind
+      source: examples/test_images
+      target: /imagine/images
+      read_only: true
+    - type: bind
+      source: examples/test_images_results
+      target: /imagine/results
+
+services:
+  imagine:
+    <<: *base
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - type: bind
+        source: '${IMAGINE_IMAGES}'
+        target: /imagine/images
+        read_only: true
+      - type: bind
+        source: '${IMAGINE_RESULTS}'
+        target: /imagine/results
+
+  imagine-test-generate-features:
+    <<: *base-test-config
+    command:
+      - '4'
+      - datafile.tsv
+      - '15'
+      - generate_features
+
+  imagine-test-learning-benchmark:
+    <<: *base-test-config
+    command:
+      - '4'
+      - datafile.tsv
+      - '15'
+      - learning_benchmark
+
+  imagine-test-data-visualization:
+    <<: *base-test-config
+    command:
+      - '4'
+      - datafile.tsv
+      - '15'
+      - data_visualization

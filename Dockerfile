@@ -1,0 +1,23 @@
+FROM python:3.11-slim
+
+WORKDIR /opt/imagine
+
+RUN apt-get update && apt-get install -y libhdf5-dev graphviz locales curl git zip parallel && pip install --upgrade pip
+
+RUN apt-get install -y imagemagick
+
+# requirements
+COPY src/requirements.docker.txt .
+
+RUN pip install --no-cache-dir -r requirements.docker.txt
+
+# processing and ranking
+COPY src/create_final_df_from_results.py src/feature_generator.py src/create_joint_df.py src/analysis.py src/run_analysis.sh src/feature_ranking_lite.py ./
+
+# visualizations
+COPY src/visualizations/pipeline_visualizations.py src/visualizations/visualize.py ./visualizations/
+
+# util
+COPY src/remove_layers.sh ./
+
+ENTRYPOINT [ "bash", "run_analysis.sh" ]

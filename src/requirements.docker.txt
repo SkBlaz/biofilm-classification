@@ -1,0 +1,13 @@
+pandas
+tqdm
+multipagetiff
+numpy
+scikit-learn
+scipy
+numba
+plotly
+numba
+xgboost
+scikit-image
+tpot
+autogluon

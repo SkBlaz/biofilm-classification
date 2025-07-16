@@ -1,0 +1,3 @@
+model;mean accuracy;std accuracy
+majority class;0.0;0.0
+bagging;0.34875;0.25218730638158615
