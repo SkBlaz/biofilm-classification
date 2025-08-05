@@ -7,7 +7,7 @@
 
 ########################################################################################################################
 
-if [ $# -lt 4 ]; then
+if [ $# -lt 3 ]; then
   echo "Not enough input parameters"
   echo ""
   echo "Usage:"
@@ -18,16 +18,18 @@ if [ $# -lt 4 ]; then
   echo -e "\t\t--rm"
   echo -e "\t\t-it jsi/imagine"
   echo -e "\t\t<nb parallel jobs (4)>"
-  echo -e "\t\t<dataset name (datafile.tsv)>"
+  echo -e "\t\t<dataset name (datafile.tsv) | -> for image-only inference>"
   echo -e "\t\t<top features to visualize (10)>"
   echo -e "\t\t<task (generate_features | learning_benchmark | data_visualization | inference)>"
   echo
   echo "For the inference task:"
-  echo "- If images (*.tif) are found in the images folder, features will be generated automatically"
-  echo "- If no images are found, the system will use the specified dataset file"
+  echo "- For image-only inference: use '-' as dataset name, e.g.:"
+  echo "  docker compose run --rm imagine 4 - 10 inference"
+  echo "- For feature-based inference: specify the dataset file, e.g.:"
+  echo "  docker compose run --rm imagine 4 datafile.tsv 10 inference"
   echo
   echo "If you are running the script directly:"
-  echo "=> run_analysis.sh <image folder> <nb parallel jobs (4)> <dataset name (datafile.tsv)> <top features to visualize (10)> <results folder (./your/results)> <task>"
+  echo "=> run_analysis.sh <image folder> <nb parallel jobs (4)> <dataset name (datafile.tsv) | -> <top features to visualize (10)> <results folder (./your/results)> <task>"
   exit
 fi
 
@@ -37,6 +39,11 @@ INPUT_DATASETNAME="$2"
 INPUT_NB_VISUALIZATION_FEATURES="$3"
 LEARNING_TASK="$4"
 OUTPUT_RESULTS_FOLDER='/imagine/results'
+
+# Handle image-only inference case
+if [ "$INPUT_DATASETNAME" = "-" ]; then
+  INPUT_DATASETNAME="generated_features.tsv"
+fi
 
 RESULTS_CREATE_DF="${OUTPUT_RESULTS_FOLDER}/${INPUT_DATASETNAME}"
 RESULTS_RANKING_FILE="${OUTPUT_RESULTS_FOLDER}/rankings.tsv"

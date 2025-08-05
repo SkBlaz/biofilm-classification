@@ -31,13 +31,13 @@ echo "=== Usage Examples ==="
 echo
 echo "1. Docker usage for image-level inference (NEW!):"
 echo "   # Place your .tif images in a folder and run:"
-echo "   docker compose run --rm imagine 4 datafile.tsv 10 inference"
-echo "   # The system will automatically detect images and run the full pipeline"
+echo "   docker compose run --rm imagine 4 - 10 inference"
+echo "   # Use '-' as dataset name for pure image inference"
 echo
 echo "2. Docker usage for feature-level inference:"
 echo "   # If you already have computed features:"
 echo "   docker compose run --rm imagine 4 datafile.tsv 10 inference"
-echo "   # The system will use the pre-computed datafile.tsv"
+echo "   # Specify the actual TSV filename for feature-based inference"
 echo
 echo "3. Direct usage:"
 echo "   python3 src/inference.py --data /path/to/data.tsv \\"

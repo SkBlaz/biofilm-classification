@@ -57,6 +57,14 @@ services:
     <<: *base-test-config
     command:
       - '4'
+      - '-'
+      - '15'
+      - inference
+
+  imagine-test-inference-features:
+    <<: *base-test-config
+    command:
+      - '4'
       - datafile.tsv
       - '15'
       - inference
