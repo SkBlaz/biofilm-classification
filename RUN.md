@@ -46,7 +46,10 @@ All commands should run and produce results (in folder `./examples/test_images_r
 1. docker compose run --rm imagine-test-generate-features
 2. docker compose run --rm imagine-test-learning-benchmark
 3. docker compose run --rm imagine-test-data-visualization
+4. docker compose run --rm imagine-test-inference
 ```
+
+The inference test will demonstrate both image-level and feature-level inference capabilities.
 
 
 ## Mounting volumes of data into the containers
@@ -166,7 +169,12 @@ This will produce a folder called `tmp` in the results folder. The folder contai
 
 ## Task: Inference
 
-The inference task allows you to use previously trained models to generate predictions on new data. This task requires that you have already run the `learning_benchmark` task to train and save models.
+The inference task allows you to use previously trained models to generate predictions on new data. This task supports two modes:
+
+1. **Image-level inference** (NEW!): Automatically generates features from raw .tif images and runs inference
+2. **Feature-level inference**: Uses pre-computed features from a dataset file
+
+This task requires that you have already run the `learning_benchmark` task to train and save models.
 
 ```sh
 docker compose run --rm imagine 4 data.tsv 10 inference
@@ -174,12 +182,17 @@ docker compose run --rm imagine 4 data.tsv 10 inference
 
 **Prerequisites:**
 - Models must exist in the results folder (created by running `learning_benchmark`)
-- Dataset file must exist (created by running `generate_features` or provided manually)
+- For image-level inference: .tif image files in the images folder
+- For feature-level inference: Dataset file must exist (created by running `generate_features` or provided manually)
 
 **What it does:**
-- Loads trained models from the `models/` directory in your results folder
+- **Image-level mode**: If .tif images are found in the images folder, automatically runs the complete pipeline:
+  1. Feature generation from images
+  2. Dataset creation and preprocessing  
+  3. Model loading and prediction generation
+- **Feature-level mode**: If no images are found, uses the specified dataset file directly
 - Applies the same preprocessing pipeline used during training
-- Generates predictions for all samples in the dataset
+- Generates predictions for all samples
 - Outputs results to `inference_results/` directory
 
 **Output files:**
@@ -187,9 +200,19 @@ docker compose run --rm imagine 4 data.tsv 10 inference
 - `probabilities/` - Directory containing prediction probabilities for each model
 - `inference_summary.json` - Summary of the inference run including model performance metrics
 
-**Example workflow:**
-1. Run feature generation: `docker compose run --rm imagine 4 data.tsv 10 generate_features`
+**Example workflows:**
+
+**Workflow 1: Complete pipeline with image-level inference**
+1. Train models: `docker compose run --rm imagine 4 training_data.tsv 10 learning_benchmark`
+2. Add new .tif images to your images folder
+3. Run inference: `docker compose run --rm imagine 4 unused.tsv 10 inference`
+   (The system will automatically detect and process the .tif images)
+
+**Workflow 2: Feature-level inference with pre-computed features**
+1. Generate features: `docker compose run --rm imagine 4 data.tsv 10 generate_features`
 2. Train models: `docker compose run --rm imagine 4 data.tsv 10 learning_benchmark`
 3. Generate predictions: `docker compose run --rm imagine 4 data.tsv 10 inference`
 
-If you have new unlabeled data for prediction, simply replace the dataset file with your new data (ensure it has the same feature columns) and run the inference task.
+For new unlabeled data, you can either:
+- Place .tif images in the images folder for automatic feature generation
+- Replace the dataset file with your new data (ensuring it has the same feature columns) for direct inference
