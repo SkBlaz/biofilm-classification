@@ -14,8 +14,9 @@ fi
 echo "This demo shows the new inference functionality that was just implemented."
 echo "The inference mode allows you to:"
 echo "  1. Load previously trained models"
-echo "  2. Generate predictions on new data"  
+echo "  2. Generate predictions from raw images OR pre-computed features"  
 echo "  3. Output results to a specified folder"
+echo "  4. NEW: Full pipeline from image files to predictions!"
 echo
 
 echo "=== Available Tasks ==="
@@ -28,11 +29,17 @@ echo
 
 echo "=== Usage Examples ==="
 echo
-echo "1. Docker usage (recommended):"
-echo "   docker compose run --rm imagine 4 datafile.tsv 10 learning_benchmark"
+echo "1. Docker usage for image-level inference (NEW!):"
+echo "   # Place your .tif images in a folder and run:"
 echo "   docker compose run --rm imagine 4 datafile.tsv 10 inference"
+echo "   # The system will automatically detect images and run the full pipeline"
 echo
-echo "2. Direct usage:"
+echo "2. Docker usage for feature-level inference:"
+echo "   # If you already have computed features:"
+echo "   docker compose run --rm imagine 4 datafile.tsv 10 inference"
+echo "   # The system will use the pre-computed datafile.tsv"
+echo
+echo "3. Direct usage:"
 echo "   python3 src/inference.py --data /path/to/data.tsv \\"
 echo "                           --models_dir /path/to/models \\"
 echo "                           --output_dir /path/to/results"
@@ -46,6 +53,8 @@ echo "  ✅ Both labeled and unlabeled datasets"
 echo "  ✅ Multiple model types (RandomForest, Logistic Regression, etc.)"
 echo "  ✅ Proper preprocessing pipeline preservation"
 echo "  ✅ Error handling and validation"
+echo "  ✅ NEW: Full inference pipeline from raw images"
+echo "  ✅ NEW: Automatic feature generation during inference"
 echo
 
 echo "=== Output Files ==="

@@ -22,6 +22,9 @@ if [ $# -lt 4 ]; then
   echo -e "\t\t<top features to visualize (10)>"
   echo -e "\t\t<task (generate_features | learning_benchmark | data_visualization | inference)>"
   echo
+  echo "For the inference task:"
+  echo "- If images (*.tif) are found in the images folder, features will be generated automatically"
+  echo "- If no images are found, the system will use the specified dataset file"
   echo
   echo "If you are running the script directly:"
   echo "=> run_analysis.sh <image folder> <nb parallel jobs (4)> <dataset name (datafile.tsv)> <top features to visualize (10)> <results folder (./your/results)> <task>"
@@ -97,15 +100,43 @@ if [ $LEARNING_TASK = "inference" ]; then
     exit 1
   fi
   
-  if [ ! -f "$RESULTS_CREATE_DF" ]; then
-    echo "Error: Dataset file not found at $RESULTS_CREATE_DF"
-    echo "Please ensure the dataset file exists or run generate_features task first."
+  # Check if we have image files in the input folder for full inference
+  if ls "${INPUT_IMAGE_FOLDER}"/*.tif 1> /dev/null 2>&1; then
+    echo "Found image files in $INPUT_IMAGE_FOLDER - Running full inference from images"
+    
+    # Create temporary directories for feature generation
+    TEMP_FEATURE_DIR="${OUTPUT_RESULTS_FOLDER}/temp_inference_features"
+    TEMP_RAW_DIR="${OUTPUT_RESULTS_FOLDER}/temp_inference_raw"
+    TEMP_ANALYSIS_DIR="${OUTPUT_RESULTS_FOLDER}/temp_inference_analysis"
+    TEMP_DATASET="${OUTPUT_RESULTS_FOLDER}/temp_inference_dataset.tsv"
+    
+    mkdir -p "${TEMP_FEATURE_DIR}" "${TEMP_RAW_DIR}" "${TEMP_ANALYSIS_DIR}"
+    
+    echo "Step 1: Generating features from images..."
+    ls "${INPUT_IMAGE_FOLDER}"/*.tif | awk -v res=$TEMP_FEATURE_DIR '{print "python feature_generator.py --outfolder " res " --file "$1}' | parallel --progress --verbose -j"${INPUT_PARALLELISM}"
+    
+    echo "Step 2: Creating joint dataframe..."
+    python create_joint_df.py "${TEMP_FEATURE_DIR}" "${TEMP_RAW_DIR}"
+    
+    echo "Step 3: Computing aggregated features..."
+    python analysis.py "${TEMP_RAW_DIR}" "${TEMP_ANALYSIS_DIR}"
+    
+    echo "Step 4: Creating final dataset..."
+    python create_final_df_from_results.py "${TEMP_ANALYSIS_DIR}" "${TEMP_DATASET}"
+    
+    echo "Step 5: Running inference on generated features..."
+    python inference.py --data "$TEMP_DATASET" --models_dir "$MODELS_DIR" --output_dir "$INFERENCE_OUTPUT_DIR"
+    
+    # Clean up temporary files
+    echo "Cleaning up temporary files..."
+    rm -rf "${TEMP_FEATURE_DIR}" "${TEMP_RAW_DIR}" "${TEMP_ANALYSIS_DIR}" "${TEMP_DATASET}"
+    
+  elif [ -f "$RESULTS_CREATE_DF" ]; then
+    echo "Using pre-computed features from $RESULTS_CREATE_DF"
+    python inference.py --data "$RESULTS_CREATE_DF" --models_dir "$MODELS_DIR" --output_dir "$INFERENCE_OUTPUT_DIR"
+  else
+    echo "Error: No input data found for inference."
+    echo "Either provide image files (*.tif) in $INPUT_IMAGE_FOLDER or ensure dataset file exists at $RESULTS_CREATE_DF"
     exit 1
   fi
-  
-  echo "Running inference using models from $MODELS_DIR"
-  echo "Dataset: $RESULTS_CREATE_DF"
-  echo "Output: $INFERENCE_OUTPUT_DIR"
-  
-  python inference.py --data "$RESULTS_CREATE_DF" --models_dir "$MODELS_DIR" --output_dir "$INFERENCE_OUTPUT_DIR"
 fi 
