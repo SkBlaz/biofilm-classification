@@ -30,11 +30,14 @@ echo
 echo "=== Usage Examples ==="
 echo
 echo "1. New inference interface (cross-platform):"
-echo "   # Linux/macOS:"
-echo "   IMAGINE_MODELS=/path/to/models IMAGINE_IMAGES=/path/to/images IMAGINE_RESULTS=/path/to/output docker compose run --rm imagine-inference"
+echo "   docker compose run --rm imagine 4 - 10 inference /path/to/models /path/to/images /path/to/output"
 echo
-echo "   # Windows or cross-platform alternative:"
-echo "   docker compose run --rm -e IMAGINE_MODELS=/path/to/models -e IMAGINE_IMAGES=/path/to/images -e IMAGINE_RESULTS=/path/to/output imagine-inference"
+echo "   Examples:"
+echo "   # Linux/macOS:"
+echo "   docker compose run --rm imagine 4 - 10 inference ./benchmark_results ./tif_images ./inference_output"
+echo
+echo "   # Windows:"
+echo "   docker compose run --rm imagine 4 - 10 inference C:\\benchmark_results C:\\tif_images C:\\inference_output"
 echo
 echo "2. Legacy Docker usage for image-level inference:"
 echo "   # Place your .tif images in a folder and run:"

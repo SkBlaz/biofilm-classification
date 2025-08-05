@@ -12,11 +12,10 @@ if [ $# -lt 3 ]; then
   echo ""
   echo "Usage:"
   echo ""
-  echo "For inference (recommended):"
-  echo "=> # Linux/macOS: IMAGINE_MODELS=/path/to/models IMAGINE_IMAGES=/path/to/images IMAGINE_RESULTS=/path/to/output docker compose run --rm imagine-inference"
-  echo "=> # Windows: docker compose run --rm -e IMAGINE_MODELS=/path/to/models -e IMAGINE_IMAGES=/path/to/images -e IMAGINE_RESULTS=/path/to/output imagine-inference"
+  echo "For inference:"
+  echo "=> docker compose run --rm imagine 4 - 10 inference /path/to/models /path/to/images /path/to/output"
   echo ""
-  echo "For other tasks (legacy interface):"
+  echo "For other tasks:"
   echo -e "=> docker run \t-v ./your/images:/imagine/images"
   echo -e "\t\t-v ./your/results:/imagine/results "
   echo -e "\t\t--rm"
@@ -27,18 +26,27 @@ if [ $# -lt 3 ]; then
   echo -e "\t\t<task (generate_features | learning_benchmark | data_visualization | inference)>"
   echo
   echo "If you are running the script directly:"
-  echo "=> run_analysis.sh <image folder> <nb parallel jobs (4)> <dataset name (datafile.tsv) | -> <top features to visualize (10)> <results folder (./your/results)> <task>"
+  echo "=> run_analysis.sh <nb parallel jobs (4)> <dataset name (datafile.tsv) | -> <top features to visualize (10)> <task> [models_folder] [images_folder] [results_folder]"
   exit
 else
-  # Legacy interface
-  INPUT_IMAGE_FOLDER="/imagine/images"
   INPUT_PARALLELISM="$1"
   INPUT_DATASETNAME="$2"
   INPUT_NB_VISUALIZATION_FEATURES="$3"
   LEARNING_TASK="$4"
-  OUTPUT_RESULTS_FOLDER='/imagine/results'
   
-  # Handle image-only inference case for legacy interface
+  # Check if this is inference with CLI folder arguments
+  if [ "$LEARNING_TASK" = "inference" ] && [ $# -ge 7 ]; then
+    # New inference interface with CLI arguments
+    MODELS_FOLDER="$5"
+    INPUT_IMAGE_FOLDER="$6"
+    OUTPUT_RESULTS_FOLDER="$7"
+  else
+    # Legacy interface for other tasks
+    INPUT_IMAGE_FOLDER="/imagine/images"
+    OUTPUT_RESULTS_FOLDER='/imagine/results'
+  fi
+  
+  # Handle image-only inference case
   if [ "$INPUT_DATASETNAME" = "-" ]; then
     INPUT_DATASETNAME="generated_features.tsv"
   fi
@@ -97,11 +105,10 @@ if [ $LEARNING_TASK = "reduce_layers" ]; then
 fi 
 
 if [ $LEARNING_TASK = "inference" ]; then
-  # Check if models are available in /imagine/models (new interface)
-  if [ -d "/imagine/models" ] && [ "$(ls -A /imagine/models 2>/dev/null)" ]; then
-    # New inference interface - use models from mounted models folder
-    MODELS_FOLDER="/imagine/models"
-    echo "Using inference interface:"
+  # Check if we have CLI arguments for the new interface
+  if [ -n "$MODELS_FOLDER" ]; then
+    # New inference interface with CLI arguments
+    echo "Using inference interface with CLI arguments:"
     echo "Models folder: $MODELS_FOLDER"
     echo "Images folder: $INPUT_IMAGE_FOLDER"
     echo "Output folder: $OUTPUT_RESULTS_FOLDER"
@@ -160,7 +167,7 @@ if [ $LEARNING_TASK = "inference" ]; then
     
     if [ ! -d "$MODELS_DIR" ]; then
       echo "Error: Models directory not found at $MODELS_DIR"
-      echo "Please run learning_benchmark task first to train and save models, or use the new inference interface with IMAGINE_MODELS environment variable."
+      echo "Please run learning_benchmark task first to train and save models, or use the new inference interface with CLI arguments."
       exit 1
     fi
     

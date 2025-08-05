@@ -106,32 +106,32 @@ docker compose run --rm imagine 4 datafile.tsv 10 generate_features
 The results of this task will be in the folder, that is mapped to the `/imagine/results` within the container (`/c/my_folder/test_results` in this case).
 
 ### Task: Inference
-Inference allows you to use trained models from benchmark results to classify new .tif images. This task requires specifying three folders through environment variables:
+Inference allows you to use trained models from benchmark results to classify new .tif images. This task follows the same parameter pattern as other tasks but requires three additional folder paths:
 
-- **IMAGINE_MODELS**: Path to folder containing trained models (results from learning_benchmark task)
-- **IMAGINE_IMAGES**: Path to folder containing .tif images to classify  
-- **IMAGINE_RESULTS**: Path to output folder where predictions will be saved
-
-Usage (cross-platform):
 ```sh
-# Linux/macOS/Unix
-IMAGINE_MODELS=/path/to/benchmark/results IMAGINE_IMAGES=/path/to/tif/images IMAGINE_RESULTS=/path/to/output docker compose run --rm imagine-inference
-
-# Windows Command Prompt
-set IMAGINE_MODELS=C:\path\to\benchmark\results && set IMAGINE_IMAGES=C:\path\to\tif\images && set IMAGINE_RESULTS=C:\path\to\output && docker compose run --rm imagine-inference
-
-# Windows PowerShell
-$env:IMAGINE_MODELS="C:\path\to\benchmark\results"; $env:IMAGINE_IMAGES="C:\path\to\tif\images"; $env:IMAGINE_RESULTS="C:\path\to\output"; docker compose run --rm imagine-inference
-
-# Alternative (all platforms) using Docker Compose environment variables
-docker compose run --rm -e IMAGINE_MODELS=/path/to/benchmark/results -e IMAGINE_IMAGES=/path/to/tif/images -e IMAGINE_RESULTS=/path/to/output imagine-inference
+docker compose run --rm imagine 4 - 10 inference /path/to/models /path/to/images /path/to/output
 ```
 
-This follows the same 4-parameter pattern as other tasks:
-- Number of parallel threads: 4 (default)
-- Dataset name: `-` (auto-generated from images)
-- Top features: 10 (not used for inference)
-- Task: inference
+**Parameters:**
+- `4` - Number of parallel threads
+- `-` - Dataset name (auto-generated from images)  
+- `10` - Top features (not used for inference)
+- `inference` - Task name
+- `/path/to/models` - Path to folder containing trained models (results from learning_benchmark task)
+- `/path/to/images` - Path to folder containing .tif images to classify
+- `/path/to/output` - Path to output folder where predictions will be saved
+
+**Examples:**
+```sh
+# Linux/macOS
+docker compose run --rm imagine 4 - 10 inference ./benchmark_results ./tif_images ./inference_output
+
+# Windows Command Prompt  
+docker compose run --rm imagine 4 - 10 inference C:\benchmark_results C:\tif_images C:\inference_output
+
+# Windows PowerShell
+docker compose run --rm imagine 4 - 10 inference C:\benchmark_results C:\tif_images C:\inference_output
+```
 
 **Output**: The results folder will contain:
 - `predictions.tsv` - Main results with 3 columns: tif_filename, model_name, prediction

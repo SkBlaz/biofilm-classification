@@ -7,11 +7,11 @@ echo "=== Testing New Inference Interface ==="
 
 # Test 1: Check help output with no parameters
 echo "Test 1: Help output"
-bash src/run_analysis.sh 2>&1 | grep -q "docker compose run --rm imagine inference" && echo "✓ Help shows new interface" || echo "✗ Help missing new interface"
+bash src/run_analysis.sh 2>&1 | grep -q "docker compose run --rm imagine" && echo "✓ Help shows new interface" || echo "✗ Help missing new interface"
 
 # Test 2: Check parameter parsing for new interface  
 echo "Test 2: Parameter parsing for new interface"
-bash src/run_analysis.sh inference /test/models /test/images /test/output 2>&1 | grep -q "Using new inference interface" && echo "✓ New interface detected" || echo "✗ New interface not detected"
+bash src/run_analysis.sh 4 - 10 inference /test/models /test/images /test/output 2>&1 | grep -q "Using inference interface with CLI arguments" && echo "✓ New interface detected" || echo "✗ New interface not detected"
 
 # Test 3: Check legacy interface still works
 echo "Test 3: Legacy interface compatibility"
