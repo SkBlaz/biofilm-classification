@@ -17,6 +17,8 @@ from sklearn import tree
 from sklearn.model_selection import GridSearchCV
 
 import shutil
+import joblib
+import json
 
 import warnings
 from sklearn.exceptions import DataConversionWarning
@@ -252,6 +254,122 @@ def name_manipulator_date(value: str):
     return (value[:8], re.search(r"st--([^-_]+)-", value).group(1))
 
 
+def save_best_models(outputs, X, ys, path_to_data, filter_mode="all"):
+    """
+    Save the best performing models for each algorithm type.
+    """
+    results_dir = "/".join(path_to_data.split("/")[:-1])
+    models_dir = os.path.join(results_dir, "models")
+    os.makedirs(models_dir, exist_ok=True)
+    
+    # Convert outputs to DataFrame for analysis
+    dfx = pd.DataFrame(outputs)
+    dfx.columns = ['tag', 'model', 'upsampling', 'n_components', 'fold', 'accuracy', 'test_set', 'thr_features']
+    dfx['accuracy'] = dfx['accuracy'].astype(float)
+    
+    # Find best performing configuration for each model type
+    best_models = dfx.groupby('model')['accuracy'].max().to_dict()
+    
+    logger.info(f"Training and saving best models to {models_dir}")
+    
+    # Re-train best models on full dataset
+    all_cols = X.columns
+    thr_indices = []
+    for enx, x in enumerate(all_cols):
+        if "Threshold" in x:
+            thr_indices.append(enx)
+    thr_indices = np.array(thr_indices)
+    
+    X_vals = X.values
+    y_vals = pd.Categorical(ys.values).codes
+    catmap = dict(zip(y_vals, ys.values))
+    
+    models = {
+        'dummy': DummyClassifier(),
+        'decisiontree': tree.DecisionTreeClassifier(),
+        'logistic': LogisticRegression(),
+        'rf': RandomForestClassifier(),
+        'xgb': XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective='binary:logistic'),
+        'gridsearch': GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM),
+    }
+    
+    saved_models = {}
+    
+    for model_name, model in models.items():
+        if model_name in best_models:
+            # Get best configuration for this model
+            best_config = dfx[dfx['model'] == model_name].loc[dfx['accuracy'].idxmax()]
+            n_components = best_config['n_components']
+            thr_features = best_config['thr_features']
+            
+            logger.info(f"Training best {model_name} with {n_components} components, thr_features={thr_features}")
+            
+            # Prepare data with same preprocessing as best configuration
+            X_train = X_vals.copy()
+            
+            if not thr_features and n_components == "all":
+                X_train = X_train[:, thr_indices]
+            
+            svd = None
+            if n_components != "all":
+                n_components = int(n_components)
+                svd = TruncatedSVD(n_components=n_components, n_iter=15, random_state=42)
+                X_train = svd.fit_transform(X_train)
+            
+            # Train model on full dataset
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    model.fit(X_train, y_vals)
+                
+                # Save model and metadata
+                model_info = {
+                    'model_name': model_name,
+                    'model_type': str(type(model).__name__),
+                    'n_components': n_components,
+                    'thr_features': thr_features,
+                    'best_accuracy': float(best_config['accuracy']),
+                    'feature_names': list(X.columns),
+                    'class_mapping': catmap,
+                    'filter_mode': filter_mode,
+                    'threshold_indices': thr_indices.tolist() if thr_indices.size > 0 else []
+                }
+                
+                # Save model
+                model_path = os.path.join(models_dir, f"{model_name}_{filter_mode}.joblib")
+                joblib.dump(model, model_path)
+                
+                # Save SVD transformer if used
+                if svd is not None:
+                    svd_path = os.path.join(models_dir, f"{model_name}_{filter_mode}_svd.joblib")
+                    joblib.dump(svd, svd_path)
+                    model_info['svd_path'] = f"{model_name}_{filter_mode}_svd.joblib"
+                
+                # Save metadata
+                metadata_path = os.path.join(models_dir, f"{model_name}_{filter_mode}_metadata.json")
+                with open(metadata_path, 'w') as f:
+                    json.dump(model_info, f, indent=2)
+                
+                saved_models[model_name] = {
+                    'model_path': model_path,
+                    'metadata_path': metadata_path,
+                    'accuracy': float(best_config['accuracy'])
+                }
+                
+                logger.info(f"Saved {model_name} model (accuracy: {best_config['accuracy']:.4f}) to {model_path}")
+                
+            except Exception as e:
+                logger.warning(f"Failed to save model {model_name}: {e}")
+    
+    # Save overall model summary
+    summary_path = os.path.join(models_dir, f"models_summary_{filter_mode}.json")
+    with open(summary_path, 'w') as f:
+        json.dump(saved_models, f, indent=2)
+    
+    logger.info(f"Saved {len(saved_models)} models to {models_dir}")
+    return saved_models
+
+
 def do_classification_simple(X, ys, path_to_data, filter_mode="all"):
 
     all_cols = X.columns
@@ -374,6 +492,9 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all"):
     dfx.to_csv(fout, sep="\t")
 
     logger.info(f"Wrote classification outputs to {fout}")
+    
+    # Save best models for inference
+    save_best_models(outputs, X, ys, path_to_data, filter_mode)
 
 
 def do_classification_rfe(xs, y, path_to_data, tagname="all"):

@@ -20,7 +20,7 @@ if [ $# -lt 4 ]; then
   echo -e "\t\t<nb parallel jobs (4)>"
   echo -e "\t\t<dataset name (datafile.tsv)>"
   echo -e "\t\t<top features to visualize (10)>"
-  echo -e "\t\t<task (generate_features | learning_benchmark | data_visualization)>"
+  echo -e "\t\t<task (generate_features | learning_benchmark | data_visualization | inference)>"
   echo
   echo
   echo "If you are running the script directly:"
@@ -84,4 +84,28 @@ if [ $LEARNING_TASK = "reduce_layers" ]; then
   for IMAGE in $INPUT_IMAGE_FOLDER/*.tif; do
     bash remove_layers.sh $IMAGE $NUM_LAYERS
   done
+fi 
+
+if [ $LEARNING_TASK = "inference" ]; then
+  # Run inference using trained models
+  MODELS_DIR="${OUTPUT_RESULTS_FOLDER}/models"
+  INFERENCE_OUTPUT_DIR="${OUTPUT_RESULTS_FOLDER}/inference_results"
+  
+  if [ ! -d "$MODELS_DIR" ]; then
+    echo "Error: Models directory not found at $MODELS_DIR"
+    echo "Please run learning_benchmark task first to train and save models."
+    exit 1
+  fi
+  
+  if [ ! -f "$RESULTS_CREATE_DF" ]; then
+    echo "Error: Dataset file not found at $RESULTS_CREATE_DF"
+    echo "Please ensure the dataset file exists or run generate_features task first."
+    exit 1
+  fi
+  
+  echo "Running inference using models from $MODELS_DIR"
+  echo "Dataset: $RESULTS_CREATE_DF"
+  echo "Output: $INFERENCE_OUTPUT_DIR"
+  
+  python inference.py --data "$RESULTS_CREATE_DF" --models_dir "$MODELS_DIR" --output_dir "$INFERENCE_OUTPUT_DIR"
 fi 

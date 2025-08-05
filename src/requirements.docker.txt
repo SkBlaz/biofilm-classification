@@ -11,3 +11,4 @@ xgboost
 scikit-image
 tpot
 autogluon
+joblib
