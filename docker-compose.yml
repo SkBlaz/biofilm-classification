@@ -47,10 +47,10 @@ services:
         source: '${IMAGINE_RESULTS}'
         target: /imagine/results
     command: 
+      - '4'
+      - '-'
+      - '10'
       - inference
-      - /imagine/models
-      - /imagine/images
-      - /imagine/results
 
   imagine-test-generate-features:
     <<: *base-test-config

@@ -7,22 +7,13 @@
 
 ########################################################################################################################
 
-# Check for inference task with new interface
-if [ "$1" = "inference" ] && [ $# -eq 4 ]; then
-  # New inference interface: inference <models_folder> <images_folder> <output_folder>
-  LEARNING_TASK="inference"
-  MODELS_FOLDER="$2"
-  INPUT_IMAGE_FOLDER="$3"
-  OUTPUT_RESULTS_FOLDER="$4"
-  INPUT_PARALLELISM="4"  # Default parallelism for inference
-elif [ $# -lt 3 ]; then
+if [ $# -lt 3 ]; then
   echo "Not enough input parameters"
   echo ""
   echo "Usage:"
   echo ""
   echo "For inference (recommended):"
-  echo "=> docker compose run --rm imagine inference <models_folder> <images_folder> <output_folder>"
-  echo "   Example: docker compose run --rm imagine inference ./models ./my_images ./results"
+  echo "=> IMAGINE_MODELS=/path/to/models IMAGINE_IMAGES=/path/to/images IMAGINE_RESULTS=/path/to/output docker compose run --rm imagine-inference"
   echo ""
   echo "For other tasks (legacy interface):"
   echo -e "=> docker run \t-v ./your/images:/imagine/images"
@@ -105,10 +96,11 @@ if [ $LEARNING_TASK = "reduce_layers" ]; then
 fi 
 
 if [ $LEARNING_TASK = "inference" ]; then
-  # Check if using new interface
-  if [ -n "$MODELS_FOLDER" ]; then
-    # New inference interface
-    echo "Using new inference interface:"
+  # Check if models are available in /imagine/models (new interface)
+  if [ -d "/imagine/models" ] && [ "$(ls -A /imagine/models 2>/dev/null)" ]; then
+    # New inference interface - use models from mounted models folder
+    MODELS_FOLDER="/imagine/models"
+    echo "Using inference interface:"
     echo "Models folder: $MODELS_FOLDER"
     echo "Images folder: $INPUT_IMAGE_FOLDER"
     echo "Output folder: $OUTPUT_RESULTS_FOLDER"
@@ -161,13 +153,13 @@ if [ $LEARNING_TASK = "inference" ]; then
     rm -rf "${TEMP_FEATURE_DIR}" "${TEMP_RAW_DIR}" "${TEMP_ANALYSIS_DIR}" "${TEMP_DATASET}"
     
   else
-    # Legacy inference interface
+    # Legacy inference interface  
     MODELS_DIR="${OUTPUT_RESULTS_FOLDER}/models"
     INFERENCE_OUTPUT_DIR="${OUTPUT_RESULTS_FOLDER}/inference_results"
     
     if [ ! -d "$MODELS_DIR" ]; then
       echo "Error: Models directory not found at $MODELS_DIR"
-      echo "Please run learning_benchmark task first to train and save models."
+      echo "Please run learning_benchmark task first to train and save models, or use the new inference interface with IMAGINE_MODELS environment variable."
       exit 1
     fi
     

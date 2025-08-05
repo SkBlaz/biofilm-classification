@@ -105,6 +105,39 @@ docker compose run --rm imagine 4 datafile.tsv 10 generate_features
 
 The results of this task will be in the folder, that is mapped to the `/imagine/results` within the container (`/c/my_folder/test_results` in this case).
 
+### Task: Inference
+Inference allows you to use trained models from benchmark results to classify new .tif images. This task requires specifying three folders through environment variables:
+
+- **IMAGINE_MODELS**: Path to folder containing trained models (results from learning_benchmark task)
+- **IMAGINE_IMAGES**: Path to folder containing .tif images to classify  
+- **IMAGINE_RESULTS**: Path to output folder where predictions will be saved
+
+Usage:
+```sh
+export IMAGINE_MODELS=/path/to/benchmark/results
+export IMAGINE_IMAGES=/path/to/tif/images  
+export IMAGINE_RESULTS=/path/to/output
+docker compose run --rm imagine-inference
+```
+
+This follows the same 4-parameter pattern as other tasks:
+- Number of parallel threads: 4 (default)
+- Dataset name: `-` (auto-generated from images)
+- Top features: 10 (not used for inference)
+- Task: inference
+
+**Output**: The results folder will contain:
+- `predictions.tsv` - Main results with 3 columns: tif_filename, model_name, prediction
+- `predictions_legacy.tsv` - Backward compatible wide format
+- `inference_summary.json` - Summary of the inference run
+
+The system automatically:
+1. Generates features from .tif images
+2. Loads all trained models from the specified models folder  
+3. Runs predictions with each model
+4. Maps results back to original .tif filenames
+5. Outputs structured predictions in TSV format
+
 ### Task: Learning benchmark
 Learning benchmark contains the gist of this software - a collection of machine learning algorithms that attampt to approximate the strain based on thousands of generated features. Current implementation is fully automated; by running the command below, you can simulate how well the algorithm learns to associate labels with feature space. The run includes the currently selected tree-based ensembles, as well as simple baselines (majority) that should be indicative of how well a naive approach would perform.
 
@@ -166,54 +199,6 @@ docker compose run --rm imagine 4 data.tsv 50 data_visualization
 ```
 
 This will produce a folder called `tmp` in the results folder. The folder contains all visualizations of top n features, grouped by strains.
-
-## Task: Inference (NEW Simplified Interface)
-
-Starting with the latest version, we provide a simplified inference interface that is more intuitive and focused specifically on the inference use case. This interface allows you to specify exactly which resources to use:
-
-**New Inference Interface:**
-```sh
-docker compose run --rm imagine-inference
-```
-
-This uses environment variables to specify:
-- `IMAGINE_MODELS`: Path to the models folder 
-- `IMAGINE_IMAGES`: Path to the images folder containing .tif files
-- `IMAGINE_RESULTS`: Path to the output folder
-
-**Example:**
-```sh
-# Set environment variables
-export IMAGINE_MODELS=/path/to/trained/models
-export IMAGINE_IMAGES=/path/to/tif/images  
-export IMAGINE_RESULTS=/path/to/output
-
-# Run inference
-docker compose run --rm imagine-inference
-```
-
-**Output Format:**
-The new interface creates a `predictions.tsv` file with three columns:
-1. `tif_filename` - Name of the input .tif file
-2. `model_name` - Name of the model that generated the prediction
-3. `prediction` - The predicted class/label
-
-This format makes it easy to see which model predicted what for each specific image file.
-
-**What it does:**
-1. Loads trained models from the specified models folder
-2. Generates features from .tif images in the images folder
-3. Runs inference using all available models
-4. Outputs predictions in a clear tif-filename → model-name → prediction format
-
-**Prerequisites:**
-- Trained models must exist in the models folder (from previous `learning_benchmark` runs)
-- .tif image files must exist in the images folder
-- Output folder must be writable
-
-## Task: Inference (Legacy Interface)
-
-The inference task allows you to use previously trained models to generate predictions on new data. This task supports two modes:
 
 1. **Image-level inference** (NEW!): Automatically generates features from raw .tif images and runs inference
 2. **Feature-level inference**: Uses pre-computed features from a dataset file
