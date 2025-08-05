@@ -163,3 +163,33 @@ docker compose run --rm imagine 4 data.tsv 50 data_visualization
 ```
 
 This will produce a folder called `tmp` in the results folder. The folder contains all visualizations of top n features, grouped by strains.
+
+## Task: Inference
+
+The inference task allows you to use previously trained models to generate predictions on new data. This task requires that you have already run the `learning_benchmark` task to train and save models.
+
+```sh
+docker compose run --rm imagine 4 data.tsv 10 inference
+```
+
+**Prerequisites:**
+- Models must exist in the results folder (created by running `learning_benchmark`)
+- Dataset file must exist (created by running `generate_features` or provided manually)
+
+**What it does:**
+- Loads trained models from the `models/` directory in your results folder
+- Applies the same preprocessing pipeline used during training
+- Generates predictions for all samples in the dataset
+- Outputs results to `inference_results/` directory
+
+**Output files:**
+- `predictions.tsv` - Contains predictions from all models alongside true labels (if available)
+- `probabilities/` - Directory containing prediction probabilities for each model
+- `inference_summary.json` - Summary of the inference run including model performance metrics
+
+**Example workflow:**
+1. Run feature generation: `docker compose run --rm imagine 4 data.tsv 10 generate_features`
+2. Train models: `docker compose run --rm imagine 4 data.tsv 10 learning_benchmark`
+3. Generate predictions: `docker compose run --rm imagine 4 data.tsv 10 inference`
+
+If you have new unlabeled data for prediction, simply replace the dataset file with your new data (ensure it has the same feature columns) and run the inference task.

@@ -330,7 +330,7 @@ def save_best_models(outputs, X, ys, path_to_data, filter_mode="all"):
                     'thr_features': thr_features,
                     'best_accuracy': float(best_config['accuracy']),
                     'feature_names': list(X.columns),
-                    'class_mapping': catmap,
+                    'class_mapping': {str(k): v for k, v in catmap.items()},  # Convert keys to strings
                     'filter_mode': filter_mode,
                     'threshold_indices': thr_indices.tolist() if thr_indices.size > 0 else []
                 }
