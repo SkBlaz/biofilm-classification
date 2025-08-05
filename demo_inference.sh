@@ -29,17 +29,24 @@ echo
 
 echo "=== Usage Examples ==="
 echo
-echo "1. Docker usage for image-level inference (NEW!):"
+echo "1. New inference interface (cross-platform):"
+echo "   # Linux/macOS:"
+echo "   IMAGINE_MODELS=/path/to/models IMAGINE_IMAGES=/path/to/images IMAGINE_RESULTS=/path/to/output docker compose run --rm imagine-inference"
+echo
+echo "   # Windows or cross-platform alternative:"
+echo "   docker compose run --rm -e IMAGINE_MODELS=/path/to/models -e IMAGINE_IMAGES=/path/to/images -e IMAGINE_RESULTS=/path/to/output imagine-inference"
+echo
+echo "2. Legacy Docker usage for image-level inference:"
 echo "   # Place your .tif images in a folder and run:"
 echo "   docker compose run --rm imagine 4 - 10 inference"
 echo "   # Use '-' as dataset name for pure image inference"
 echo
-echo "2. Docker usage for feature-level inference:"
+echo "3. Legacy Docker usage for feature-level inference:"
 echo "   # If you already have computed features:"
 echo "   docker compose run --rm imagine 4 datafile.tsv 10 inference"
 echo "   # Specify the actual TSV filename for feature-based inference"
 echo
-echo "3. Direct usage:"
+echo "4. Direct usage:"
 echo "   python3 src/inference.py --data /path/to/data.tsv \\"
 echo "                           --models_dir /path/to/models \\"
 echo "                           --output_dir /path/to/results"

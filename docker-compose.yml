@@ -36,15 +36,15 @@ services:
       dockerfile: Dockerfile
     volumes:
       - type: bind
-        source: '${IMAGINE_MODELS}'
+        source: '${IMAGINE_MODELS:-./examples/test_models}'
         target: /imagine/models
         read_only: true
       - type: bind
-        source: '${IMAGINE_IMAGES}'
+        source: '${IMAGINE_IMAGES:-./examples/test_images}'
         target: /imagine/images  
         read_only: true
       - type: bind
-        source: '${IMAGINE_RESULTS}'
+        source: '${IMAGINE_RESULTS:-./examples/test_images_results}'
         target: /imagine/results
     command: 
       - '4'

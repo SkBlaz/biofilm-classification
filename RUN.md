@@ -112,12 +112,19 @@ Inference allows you to use trained models from benchmark results to classify ne
 - **IMAGINE_IMAGES**: Path to folder containing .tif images to classify  
 - **IMAGINE_RESULTS**: Path to output folder where predictions will be saved
 
-Usage:
+Usage (cross-platform):
 ```sh
-export IMAGINE_MODELS=/path/to/benchmark/results
-export IMAGINE_IMAGES=/path/to/tif/images  
-export IMAGINE_RESULTS=/path/to/output
-docker compose run --rm imagine-inference
+# Linux/macOS/Unix
+IMAGINE_MODELS=/path/to/benchmark/results IMAGINE_IMAGES=/path/to/tif/images IMAGINE_RESULTS=/path/to/output docker compose run --rm imagine-inference
+
+# Windows Command Prompt
+set IMAGINE_MODELS=C:\path\to\benchmark\results && set IMAGINE_IMAGES=C:\path\to\tif\images && set IMAGINE_RESULTS=C:\path\to\output && docker compose run --rm imagine-inference
+
+# Windows PowerShell
+$env:IMAGINE_MODELS="C:\path\to\benchmark\results"; $env:IMAGINE_IMAGES="C:\path\to\tif\images"; $env:IMAGINE_RESULTS="C:\path\to\output"; docker compose run --rm imagine-inference
+
+# Alternative (all platforms) using Docker Compose environment variables
+docker compose run --rm -e IMAGINE_MODELS=/path/to/benchmark/results -e IMAGINE_IMAGES=/path/to/tif/images -e IMAGINE_RESULTS=/path/to/output imagine-inference
 ```
 
 This follows the same 4-parameter pattern as other tasks:
