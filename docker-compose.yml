@@ -29,6 +29,29 @@ services:
         source: '${IMAGINE_RESULTS}'
         target: /imagine/results
 
+  imagine-inference:
+    <<: *base
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - type: bind
+        source: '${IMAGINE_MODELS}'
+        target: /imagine/models
+        read_only: true
+      - type: bind
+        source: '${IMAGINE_IMAGES}'
+        target: /imagine/images  
+        read_only: true
+      - type: bind
+        source: '${IMAGINE_RESULTS}'
+        target: /imagine/results
+    command: 
+      - inference
+      - /imagine/models
+      - /imagine/images
+      - /imagine/results
+
   imagine-test-generate-features:
     <<: *base-test-config
     command:

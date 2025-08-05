@@ -44,7 +44,7 @@ def preprocess_features(X, model_metadata):
     return X_processed
 
 
-def make_predictions(data_path, models_dir, output_dir, model_names=None):
+def make_predictions(data_path, models_dir, output_dir, model_names=None, images_folder=None):
     """
     Load trained models and make predictions on new data.
     
@@ -53,6 +53,7 @@ def make_predictions(data_path, models_dir, output_dir, model_names=None):
         models_dir: Directory containing saved models
         output_dir: Directory to save prediction results
         model_names: List of specific model names to use (optional)
+        images_folder: Path to folder containing original .tif images (for mapping filenames)
     """
     logger.info(f"Starting inference on {data_path}")
     logger.info(f"Using models from {models_dir}")
@@ -161,17 +162,67 @@ def make_predictions(data_path, models_dir, output_dir, model_names=None):
     if not all_predictions:
         raise ValueError("No models were able to make predictions")
     
-    # Create results DataFrame
+    # Map sample indices to TIF filenames if images_folder is provided
+    sample_to_tif = {}
+    if images_folder and os.path.exists(images_folder):
+        # Get list of TIF files sorted to ensure consistent mapping
+        tif_files = sorted([f for f in os.listdir(images_folder) if f.endswith('.tif')])
+        logger.info(f"Found {len(tif_files)} TIF files in images folder")
+        
+        # Create mapping from sample index to TIF filename
+        # The sample indices in the dataframe should correspond to the TIF files processed
+        sample_indices = list(data.index)
+        
+        for i, sample_idx in enumerate(sample_indices):
+            if i < len(tif_files):
+                # Use basename without extension to match with sample index pattern  
+                tif_basename = os.path.splitext(tif_files[i])[0]
+                # Try to match by sample index name first, fallback to order-based mapping
+                if str(sample_idx) in tif_basename or tif_basename in str(sample_idx):
+                    sample_to_tif[sample_idx] = tif_files[i]
+                else:
+                    # Fallback: map by order
+                    sample_to_tif[sample_idx] = tif_files[i]
+            else:
+                sample_to_tif[sample_idx] = f"sample_{sample_idx}.tif"
+                
+        logger.info(f"Mapped {len(sample_to_tif)} samples to TIF files")
+    else:
+        # Use sample indices as filenames when no images folder provided
+        for sample_idx in data.index:
+            sample_to_tif[sample_idx] = f"{sample_idx}.tif"
+    
+    # Create results in the requested format: tif_filename, model_name, prediction
+    predictions_list = []
+    for sample_idx in data.index:
+        tif_filename = sample_to_tif[sample_idx]
+        for model_name in all_predictions.keys():
+            prediction = all_predictions[model_name][data.index.get_loc(sample_idx)]
+            predictions_list.append({
+                'tif_filename': tif_filename,
+                'model_name': model_name,
+                'prediction': prediction
+            })
+    
+    # Create the final predictions DataFrame
+    predictions_df = pd.DataFrame(predictions_list)
+    
+    # Save predictions in the requested format
+    predictions_path = os.path.join(output_dir, 'predictions.tsv')
+    predictions_df.to_csv(predictions_path, sep='\t', index=False)
+    logger.info(f"Saved predictions to {predictions_path}")
+    
+    # Also create the legacy format for backward compatibility
     results_df = pd.DataFrame(all_predictions, index=data.index)
     
     # Add true labels if available
     if has_labels:
         results_df.insert(0, 'true_label', y_true)
     
-    # Save predictions
-    predictions_path = os.path.join(output_dir, 'predictions.tsv')
-    results_df.to_csv(predictions_path, sep='\t')
-    logger.info(f"Saved predictions to {predictions_path}")
+    # Save legacy format
+    legacy_predictions_path = os.path.join(output_dir, 'predictions_legacy.tsv')
+    results_df.to_csv(legacy_predictions_path, sep='\t')
+    logger.info(f"Saved legacy format predictions to {legacy_predictions_path}")
     
     # Save probabilities if available
     if all_probabilities:
@@ -212,7 +263,7 @@ def make_predictions(data_path, models_dir, output_dir, model_names=None):
         json.dump(summary, f, indent=2)
     
     logger.info(f"Inference completed. Results saved to {output_dir}")
-    return results_df
+    return predictions_df
 
 
 def main():
@@ -240,6 +291,10 @@ def main():
         nargs="*",
         help="Specific model names to use (if not specified, uses all available models)"
     )
+    parser.add_argument(
+        "--images_folder",
+        help="Path to folder containing original .tif images (for mapping filenames)"
+    )
     
     args = parser.parse_args()
     
@@ -253,7 +308,8 @@ def main():
         data_path=args.data,
         models_dir=args.models_dir,
         output_dir=args.output_dir,
-        model_names=args.models
+        model_names=args.models,
+        images_folder=args.images_folder
     )
 
 

@@ -167,7 +167,51 @@ docker compose run --rm imagine 4 data.tsv 50 data_visualization
 
 This will produce a folder called `tmp` in the results folder. The folder contains all visualizations of top n features, grouped by strains.
 
-## Task: Inference
+## Task: Inference (NEW Simplified Interface)
+
+Starting with the latest version, we provide a simplified inference interface that is more intuitive and focused specifically on the inference use case. This interface allows you to specify exactly which resources to use:
+
+**New Inference Interface:**
+```sh
+docker compose run --rm imagine-inference
+```
+
+This uses environment variables to specify:
+- `IMAGINE_MODELS`: Path to the models folder 
+- `IMAGINE_IMAGES`: Path to the images folder containing .tif files
+- `IMAGINE_RESULTS`: Path to the output folder
+
+**Example:**
+```sh
+# Set environment variables
+export IMAGINE_MODELS=/path/to/trained/models
+export IMAGINE_IMAGES=/path/to/tif/images  
+export IMAGINE_RESULTS=/path/to/output
+
+# Run inference
+docker compose run --rm imagine-inference
+```
+
+**Output Format:**
+The new interface creates a `predictions.tsv` file with three columns:
+1. `tif_filename` - Name of the input .tif file
+2. `model_name` - Name of the model that generated the prediction
+3. `prediction` - The predicted class/label
+
+This format makes it easy to see which model predicted what for each specific image file.
+
+**What it does:**
+1. Loads trained models from the specified models folder
+2. Generates features from .tif images in the images folder
+3. Runs inference using all available models
+4. Outputs predictions in a clear tif-filename → model-name → prediction format
+
+**Prerequisites:**
+- Trained models must exist in the models folder (from previous `learning_benchmark` runs)
+- .tif image files must exist in the images folder
+- Output folder must be writable
+
+## Task: Inference (Legacy Interface)
 
 The inference task allows you to use previously trained models to generate predictions on new data. This task supports two modes:
 
