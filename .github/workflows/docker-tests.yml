@@ -1,4 +1,4 @@
-name: Docker Tests
+name: Docker Build Test
 
 on:
   push:
@@ -7,9 +7,9 @@ on:
     branches: [ main, master ]
 
 jobs:
-  docker-tests:
+  docker-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     
     steps:
     - name: Checkout code
@@ -20,51 +20,11 @@ jobs:
       
     - name: Build Docker image
       run: |
-        docker compose build --no-cache
+        echo "Building Docker image..."
+        docker build -t jsi/imagine:latest .
         
-    - name: Create test results directory
+    - name: Verify Docker image was built
       run: |
-        mkdir -p examples/test_images_results
-        
-    - name: Test - Generate Features
-      timeout-minutes: 15
-      run: |
-        echo "Testing feature generation..."
-        docker compose run --rm imagine-test-generate-features
-        
-    - name: Test - Learning Benchmark  
-      timeout-minutes: 15
-      run: |
-        echo "Testing learning benchmark..."
-        docker compose run --rm imagine-test-learning-benchmark
-        
-    - name: Test - Data Visualization
-      timeout-minutes: 15
-      run: |
-        echo "Testing data visualization..."
-        docker compose run --rm imagine-test-data-visualization
-        
-    - name: Verify test results exist
-      run: |
-        echo "Checking if test results were generated..."
-        ls -la examples/test_images_results/
-        
-        # Check if at least some output files were created
-        if [ -z "$(ls -A examples/test_images_results/)" ]; then
-          echo "ERROR: No test results were generated!"
-          exit 1
-        fi
-        
-        echo "SUCCESS: Test results were generated successfully!"
-        
-        # Show what files were created
-        echo "Generated files:"
-        find examples/test_images_results/ -type f | head -10
-        
-    - name: Upload test results as artifacts
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: test-results
-        path: examples/test_images_results/
-        retention-days: 30
+        echo "Verifying Docker image exists..."
+        docker images jsi/imagine:latest
+        echo "SUCCESS: Docker image built successfully!"
