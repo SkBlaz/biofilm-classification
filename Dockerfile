@@ -9,7 +9,7 @@ RUN apt-get install -y imagemagick
 # requirements
 COPY src/requirements.docker.txt .
 
-RUN pip install --no-cache-dir -r requirements.docker.txt
+RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org -r requirements.docker.txt
 
 # processing and ranking
 COPY src/create_final_df_from_results.py src/feature_generator.py src/create_joint_df.py src/analysis.py src/run_analysis.sh src/feature_ranking_lite.py ./

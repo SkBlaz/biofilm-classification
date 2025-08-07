@@ -5,3 +5,5 @@ Welcome to Imagine Classifier Suite (ICS), a Python-based software for efficient
 1. [Running the software](RUN.md)
 
 2. [Approach overview](APPROACH.md)
+
+3. [Continuous Integration](.github/CI.md)
