@@ -69,8 +69,9 @@ def generate_features_for_inference(images_dir, output_dir):
     logger.info(f"Found {len(tif_files)} .tif files to process")
     
     # Generate features for each image
+    script_dir = os.path.dirname(os.path.abspath(__file__))
     for tif_file in tif_files:
-        cmd = f"python feature_generator.py --outfolder {temp_feature_dir} --file {tif_file}"
+        cmd = f"python {os.path.join(script_dir, 'feature_generator.py')} --outfolder {temp_feature_dir} --file {tif_file}"
         logger.info(f"Generating features for {tif_file}")
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         if result.returncode != 0:
@@ -79,7 +80,7 @@ def generate_features_for_inference(images_dir, output_dir):
     
     # Create joint dataset
     logger.info("Creating joint dataset from generated features")
-    result = subprocess.run(f"python create_joint_df.py {temp_feature_dir} {temp_raw_dir}", 
+    result = subprocess.run(f"python {os.path.join(script_dir, 'create_joint_df.py')} {temp_feature_dir} {temp_raw_dir}", 
                           shell=True, capture_output=True, text=True)
     if result.returncode != 0:
         logger.error(f"Joint dataset creation failed: {result.stderr}")
@@ -87,7 +88,7 @@ def generate_features_for_inference(images_dir, output_dir):
     
     # Compute aggregated features  
     logger.info("Computing aggregated features")
-    result = subprocess.run(f"python analysis.py {temp_raw_dir} {temp_analysis_dir}",
+    result = subprocess.run(f"python {os.path.join(script_dir, 'analysis.py')} {temp_raw_dir} {temp_analysis_dir}",
                           shell=True, capture_output=True, text=True)
     if result.returncode != 0:
         logger.error(f"Feature analysis failed: {result.stderr}")
@@ -96,7 +97,7 @@ def generate_features_for_inference(images_dir, output_dir):
     # Create final dataset
     dataset_file = os.path.join(output_dir, "inference_data.tsv")
     logger.info("Creating final dataset")
-    result = subprocess.run(f"python create_final_df_from_results.py {temp_analysis_dir} {dataset_file}",
+    result = subprocess.run(f"python {os.path.join(script_dir, 'create_final_df_from_results.py')} {temp_analysis_dir} {dataset_file}",
                           shell=True, capture_output=True, text=True)
     if result.returncode != 0:
         logger.error(f"Final dataset creation failed: {result.stderr}")

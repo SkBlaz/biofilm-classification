@@ -8,3 +8,4 @@ numba
 plotly
 xgboost
 scikit-image
+joblib
