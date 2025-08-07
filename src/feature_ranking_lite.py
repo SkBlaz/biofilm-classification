@@ -3,6 +3,8 @@ import gc
 import re
 import numpy as np
 import argparse
+import pickle
+import joblib
 
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
@@ -252,6 +254,54 @@ def name_manipulator_date(value: str):
     return (value[:8], re.search(r"st--([^-_]+)-", value).group(1))
 
 
+def save_best_models(X, y, output_dir, feature_names=None):
+    """Train and save the best performing models for inference."""
+    models_dir = os.path.join(output_dir, "models")
+    os.makedirs(models_dir, exist_ok=True)
+    
+    # Define models to train and save
+    models_to_save = {
+        'rf': RandomForestClassifier(n_estimators=100, random_state=42),
+        'xgb': XGBClassifier(n_estimators=100, max_depth=3, learning_rate=0.1, random_state=42, objective='multi:softprob'),
+        'logistic': LogisticRegression(random_state=42, max_iter=1000),
+        'decisiontree': tree.DecisionTreeClassifier(random_state=42),
+    }
+    
+    logger.info(f"Training and saving models to {models_dir}")
+    
+    for model_name, model in models_to_save.items():
+        try:
+            # Train the model on full dataset
+            model.fit(X, y)
+            
+            # Save feature names if available
+            if feature_names is not None and hasattr(model, 'feature_names_in_'):
+                model.feature_names_in_ = feature_names
+            
+            # Save the model
+            model_file = os.path.join(models_dir, f"{model_name}.joblib")
+            joblib.dump(model, model_file)
+            logger.info(f"Saved model: {model_file}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to save model {model_name}: {e}")
+    
+    # Also save a metadata file with information about the models
+    metadata = {
+        'feature_count': X.shape[1],
+        'sample_count': X.shape[0],
+        'models': list(models_to_save.keys()),
+        'feature_names': feature_names.tolist() if feature_names is not None else None
+    }
+    
+    metadata_file = os.path.join(models_dir, "model_metadata.pkl")
+    with open(metadata_file, 'wb') as f:
+        pickle.dump(metadata, f)
+    
+    logger.info(f"Saved model metadata to: {metadata_file}")
+    return models_dir
+
+
 def do_classification_simple(X, ys, path_to_data, filter_mode="all"):
 
     all_cols = X.columns
@@ -478,6 +528,10 @@ if __name__ == "__main__":
 
         do_classification_simple(xs_no_counts, y, file, "no_counts_features")
         do_classification_rfe(xs, y, file)
+        
+        # Save trained models for inference
+        output_dir = "/".join(file.split("/")[:-1])
+        save_best_models(xs.values, pd.Categorical(y.values).codes, output_dir, feature_names=xs.columns.values)
 
 # Ref run
 # conda activate imagine; python feature_ranking_lite.py --files ../results_30_12_2023_2/data.tsv --fout ../benchmark

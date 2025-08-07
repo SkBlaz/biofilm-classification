@@ -20,8 +20,10 @@ if [ $# -lt 4 ]; then
   echo -e "\t\t<nb parallel jobs (4)>"
   echo -e "\t\t<dataset name (datafile.tsv)>"
   echo -e "\t\t<top features to visualize (10)>"
-  echo -e "\t\t<task (generate_features | learning_benchmark | data_visualization)>"
+  echo -e "\t\t<task (generate_features | learning_benchmark | data_visualization | inference)>"
   echo
+  echo "For inference mode:"
+  echo -e "=> docker compose run --rm imagine 4 - 10 inference /path/to/models /path/to/images /path/to/output"
   echo
   echo "If you are running the script directly:"
   echo "=> run_analysis.sh <image folder> <nb parallel jobs (4)> <dataset name (datafile.tsv)> <top features to visualize (10)> <results folder (./your/results)> <task>"
@@ -34,6 +36,13 @@ INPUT_DATASETNAME="$2"
 INPUT_NB_VISUALIZATION_FEATURES="$3"
 LEARNING_TASK="$4"
 OUTPUT_RESULTS_FOLDER='/imagine/results'
+
+# Handle inference mode parameters differently
+if [ "$LEARNING_TASK" = "inference" ]; then
+  MODELS_PATH="$5"
+  INFERENCE_IMAGES_PATH="$6" 
+  INFERENCE_OUTPUT_PATH="$7"
+fi
 
 RESULTS_CREATE_DF="${OUTPUT_RESULTS_FOLDER}/${INPUT_DATASETNAME}"
 RESULTS_RANKING_FILE="${OUTPUT_RESULTS_FOLDER}/rankings.tsv"
@@ -84,4 +93,25 @@ if [ $LEARNING_TASK = "reduce_layers" ]; then
   for IMAGE in $INPUT_IMAGE_FOLDER/*.tif; do
     bash remove_layers.sh $IMAGE $NUM_LAYERS
   done
+fi 
+
+if [ $LEARNING_TASK = "inference" ]; then
+  # Run inference mode with pre-trained models
+  # Parameters for inference:
+  # $5: models directory 
+  # $6: images directory
+  # $7: output directory
+  
+  if [ $# -lt 7 ]; then
+    echo "Inference mode requires additional parameters:"
+    echo "Usage: $0 <parallelism> <ignored> <ignored> inference <models_dir> <images_dir> <output_dir>"
+    exit 1
+  fi
+  
+  echo "Running inference mode"
+  echo "Models directory: $MODELS_PATH"  
+  echo "Images directory: $INFERENCE_IMAGES_PATH"
+  echo "Output directory: $INFERENCE_OUTPUT_PATH"
+  
+  python inference.py "$MODELS_PATH" "$INFERENCE_IMAGES_PATH" "$INFERENCE_OUTPUT_PATH"
 fi 

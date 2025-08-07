@@ -163,3 +163,36 @@ docker compose run --rm imagine 4 data.tsv 50 data_visualization
 ```
 
 This will produce a folder called `tmp` in the results folder. The folder contains all visualizations of top n features, grouped by strains.
+
+## Task: Inference
+
+To run inference on new .tif images using pre-trained models, first ensure you have trained models available (generated during the learning_benchmark task). The models are saved in a `models` directory within your results folder.
+
+The inference task takes the following parameters:
+- the number of parallel threads to use: 4 (currently ignored)
+- placeholder parameter: - (can be any value) 
+- placeholder parameter: 10 (can be any value)
+- the task: inference
+- path to directory containing trained models (e.g., /imagine/models)
+- path to directory containing .tif images for inference (e.g., /imagine/images)
+- path to output directory for predictions (e.g., /imagine/results)
+
+```sh
+docker compose run --rm imagine 4 - 10 inference /imagine/models /imagine/images /imagine/results
+```
+
+**Note**: For inference to work properly, you need to:
+1. First run the complete training pipeline (generate_features + learning_benchmark) to create trained models
+2. Mount your models directory, new images, and desired output directory using Docker volumes
+3. The models directory should contain .joblib or .pkl model files generated during training
+
+The inference will:
+- Automatically generate features for the input .tif images
+- Load the pre-trained models
+- Make predictions on the new images  
+- Save predictions and probabilities to the output directory
+
+Example with custom volumes:
+```sh
+IMAGINE_IMAGES=./new_images IMAGINE_RESULTS=./inference_results docker compose run --rm imagine 4 - 10 inference ./trained_models /imagine/images /imagine/results
+```
