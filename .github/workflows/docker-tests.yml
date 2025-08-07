@@ -1,4 +1,4 @@
-name: Docker Build Test
+name: Docker Build and Test
 
 on:
   push:
@@ -7,9 +7,9 @@ on:
     branches: [ main, master ]
 
 jobs:
-  docker-build:
+  docker-build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     
     steps:
     - name: Checkout code
@@ -21,10 +21,54 @@ jobs:
     - name: Build Docker image
       run: |
         echo "Building Docker image..."
-        docker build -t jsi/imagine:latest .
+        docker compose build --no-cache
         
     - name: Verify Docker image was built
       run: |
         echo "Verifying Docker image exists..."
         docker images jsi/imagine:latest
         echo "SUCCESS: Docker image built successfully!"
+
+    - name: Create test results directory
+      run: |
+        mkdir -p examples/test_images_results
+        
+    - name: Run feature generation test
+      timeout-minutes: 15
+      run: |
+        echo "Running feature generation test..."
+        docker compose run --rm imagine-test-generate-features
+        echo "SUCCESS: Feature generation test completed!"
+        
+    - name: Run learning benchmark test
+      timeout-minutes: 15
+      run: |
+        echo "Running learning benchmark test..."
+        docker compose run --rm imagine-test-learning-benchmark
+        echo "SUCCESS: Learning benchmark test completed!"
+        
+    - name: Run data visualization test
+      timeout-minutes: 15
+      run: |
+        echo "Running data visualization test..."
+        docker compose run --rm imagine-test-data-visualization
+        echo "SUCCESS: Data visualization test completed!"
+        
+    - name: Verify test results were generated
+      run: |
+        echo "Checking if test results were generated..."
+        if [ -d "examples/test_images_results" ] && [ "$(ls -A examples/test_images_results)" ]; then
+          echo "SUCCESS: Test results directory is not empty"
+          ls -la examples/test_images_results/
+        else
+          echo "WARNING: Test results directory is empty or doesn't exist"
+          exit 1
+        fi
+        
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results
+        path: examples/test_images_results/
+        retention-days: 30
