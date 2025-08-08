@@ -58,6 +58,59 @@ def load_models(models_dir):
     return models, metadata
 
 
+def format_predictions(models, metadata, X):
+    """Format predictions from multiple models into a single DataFrame."""
+    results_list = []
+    
+    for sample_name in X.index:
+        result = {'sample_name': sample_name}
+        
+        for model_name, model in models.items():
+            try:
+                meta = metadata[model_name]
+                
+                # Get single sample
+                sample_data = X.loc[[sample_name]]
+                
+                # Align features 
+                feature_names = meta.get('feature_names', [])
+                if feature_names:
+                    missing_features = set(feature_names) - set(sample_data.columns)
+                    if missing_features:
+                        logger.warning(f"Missing features for {model_name}: {missing_features}")
+                        for feat in missing_features:
+                            sample_data[feat] = 0
+                    
+                    sample_data = sample_data[feature_names]
+                
+                # Make prediction
+                prediction = model.predict(sample_data)[0]
+                
+                # Get confidence (max probability)
+                confidence = 0.0
+                if hasattr(model, 'predict_proba'):
+                    probabilities = model.predict_proba(sample_data)[0]
+                    confidence = max(probabilities)
+                
+                # Convert prediction back to original label if mapping available
+                if 'target_mapping' in meta:
+                    target_mapping = meta['target_mapping']
+                    code_to_label = {v: k for k, v in target_mapping.items()}
+                    prediction = code_to_label.get(prediction, prediction)
+                
+                result[f'{model_name}_prediction'] = prediction
+                result[f'{model_name}_confidence'] = confidence
+                
+            except Exception as e:
+                logger.error(f"Error predicting with {model_name} for {sample_name}: {e}")
+                result[f'{model_name}_prediction'] = 'ERROR'
+                result[f'{model_name}_confidence'] = 0.0
+        
+        results_list.append(result)
+    
+    return pd.DataFrame(results_list)
+
+
 def generate_features_for_images(images_dir, temp_dir):
     """Generate features for all .tif images in the given directory."""
     logger.info(f"Generating features for images in {images_dir}")
@@ -71,6 +124,14 @@ def generate_features_for_images(images_dir, temp_dir):
     os.makedirs(raw_dir, exist_ok=True)
     os.makedirs(analysis_dir, exist_ok=True)
     
+    # Determine working directory (Docker vs local)
+    if os.path.exists("/opt/imagine"):
+        src_dir = "/opt/imagine"
+    else:
+        # Assume we're running locally
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        src_dir = current_dir
+    
     # Find all .tif files
     tif_files = glob.glob(os.path.join(images_dir, "*.tif"))
     if not tif_files:
@@ -82,11 +143,11 @@ def generate_features_for_images(images_dir, temp_dir):
     for tif_file in tif_files:
         try:
             cmd = [
-                "python", "feature_generator.py",
+                "python", os.path.join(src_dir, "feature_generator.py"),
                 "--outfolder", feature_generator_dir,
                 "--file", tif_file
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, cwd="/opt/imagine")
+            result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 logger.error(f"Feature generation failed for {tif_file}: {result.stderr}")
                 continue
@@ -97,8 +158,8 @@ def generate_features_for_images(images_dir, temp_dir):
     
     # Create joint dataframe from individual feature files
     try:
-        cmd = ["python", "create_joint_df.py", feature_generator_dir, raw_dir]
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd="/opt/imagine")
+        cmd = ["python", os.path.join(src_dir, "create_joint_df.py"), feature_generator_dir, raw_dir]
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             logger.error(f"Joint dataframe creation failed: {result.stderr}")
             raise RuntimeError("Failed to create joint dataframe")
@@ -108,8 +169,8 @@ def generate_features_for_images(images_dir, temp_dir):
     
     # Compute aggregated features
     try:
-        cmd = ["python", "analysis.py", raw_dir, analysis_dir]
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd="/opt/imagine") 
+        cmd = ["python", os.path.join(src_dir, "analysis.py"), raw_dir, analysis_dir]
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             logger.error(f"Analysis failed: {result.stderr}")
             raise RuntimeError("Failed to compute aggregated features")
