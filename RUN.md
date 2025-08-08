@@ -103,7 +103,7 @@ docker compose run --rm imagine 4 datafile.tsv 10 generate_features
 The results of this task will be in the folder, that is mapped to the `/imagine/results` within the container (`/c/my_folder/test_results` in this case).
 
 ### Task: Learning benchmark
-Learning benchmark contains the gist of this software - a collection of machine learning algorithms that attampt to approximate the strain based on thousands of generated features. Current implementation is fully automated; by running the command below, you can simulate how well the algorithm learns to associate labels with feature space. The run includes the currently selected tree-based ensembles, as well as simple baselines (majority) that should be indicative of how well a naive approach would perform.
+Learning benchmark contains the gist of this software - a collection of machine learning algorithms that attempt to approximate the strain based on thousands of generated features. Current implementation is fully automated; by running the command below, you can simulate how well the algorithm learns to associate labels with feature space. The run includes the currently selected tree-based ensembles, as well as simple baselines (majority) that should be indicative of how well a naive approach would perform.
 
 This task has the following parameters:
 - ...
@@ -117,6 +117,15 @@ docker compose run --rm imagine 4 datafile.tsv 10 learning_benchmark
 (i.e., we just replace "generate_features" with "learning_benchmark")
 
 The process will start from the working folder (`/imagine/results`) and conduct the basic machine learning benchmark.
+
+### Task: Learning benchmark with model saving
+This is identical to the learning benchmark task above, but additionally saves the trained models for later use in inference. Use this task when you plan to apply the trained models to new data.
+
+```sh
+docker compose run --rm imagine 4 datafile.tsv 10 learning_benchmark_save_models
+```
+
+The trained models will be saved in the `models/` subdirectory of your results folder.
 
 ## How results look like/interpretation
 
@@ -185,9 +194,9 @@ docker compose run --rm imagine 4 - 10 inference /path/to/models /path/to/images
 # IMAGINE_IMAGES=./my_training_images
 # IMAGINE_RESULTS=./my_training_results
 
-# Generate features and train models
+# Generate features and train models with model saving enabled
 docker compose run --rm imagine 4 datafile.tsv 10 generate_features
-docker compose run --rm imagine 4 datafile.tsv 10 learning_benchmark
+docker compose run --rm imagine 4 datafile.tsv 10 learning_benchmark_save_models
 ```
 
 2. Then use the trained models for inference on new images:

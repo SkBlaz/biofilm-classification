@@ -20,7 +20,7 @@ if [ $# -lt 4 ]; then
   echo -e "\t\t<nb parallel jobs (4)>"
   echo -e "\t\t<dataset name (datafile.tsv)>"
   echo -e "\t\t<top features to visualize (10)>"
-  echo -e "\t\t<task (generate_features | learning_benchmark | data_visualization | inference)>"
+  echo -e "\t\t<task (generate_features | learning_benchmark | learning_benchmark_save_models | data_visualization | inference)>"
   echo
   echo
   echo "For inference task:"
@@ -89,6 +89,11 @@ if [ $LEARNING_TASK = "generate_features" ]; then
 fi
 
 if [ $LEARNING_TASK = "learning_benchmark" ]; then
+	# calculating feature rankings + intermediary frames etc.
+	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}"
+fi
+
+if [ $LEARNING_TASK = "learning_benchmark_save_models" ]; then
 	# calculating feature rankings + intermediary frames etc. + save models for inference
 	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" --save_models
 fi
