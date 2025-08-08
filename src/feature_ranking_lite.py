@@ -3,6 +3,7 @@ import gc
 import re
 import numpy as np
 import argparse
+import joblib
 
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
@@ -252,7 +253,7 @@ def name_manipulator_date(value: str):
     return (value[:8], re.search(r"st--([^-_]+)-", value).group(1))
 
 
-def do_classification_simple(X, ys, path_to_data, filter_mode="all"):
+def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models=False):
 
     all_cols = X.columns
     thr_indices = []
@@ -354,6 +355,35 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all"):
                                 y_hat = np.ones(len(x_test))
 
                             acc = accuracy_score(y_test, y_hat)
+                        
+                        # Save models if requested - only for the best performing models on first fold
+                        if save_models and i == 0 and repetition == 0 and n_components == "all" and not thr_features:
+                            models_dir = "/".join(path_to_data.split("/")[:-1]) + "/models"
+                            os.makedirs(models_dir, exist_ok=True)
+                            
+                            # Save the trained model
+                            model_path = os.path.join(models_dir, f"{model_name}_model.joblib")
+                            if isinstance(model, str):  # Skip string representations from autogluon
+                                logger.info(f"Skipping model save for {model_name} (string representation)")
+                            else:
+                                joblib.dump(model, model_path)
+                                logger.info(f"Saved model {model_name} to {model_path}")
+                                
+                                # Save feature names and other metadata
+                                metadata = {
+                                    'feature_names': list(all_cols),
+                                    'target_mapping': catmap,
+                                    'n_components': n_components,
+                                    'thr_features': thr_features,
+                                    'thr_indices': thr_indices.tolist() if len(thr_indices) > 0 else [],
+                                    'filter_mode': filter_mode,
+                                    'model_name': model_name,
+                                    'accuracy': acc
+                                }
+                                metadata_path = os.path.join(models_dir, f"{model_name}_metadata.joblib") 
+                                joblib.dump(metadata, metadata_path)
+                                logger.info(f"Saved metadata for {model_name} to {metadata_path}")
+                        
                         test_map = ",".join([catmap[x] for x in y_test])
                         output = [
                             "RESULT",
@@ -439,6 +469,12 @@ if __name__ == "__main__":
         help="Number of concurrent threads for parallel approaches",
     )
 
+    parser.add_argument(
+        "--save_models",
+        action="store_true",
+        help="Save trained models for inference (default: False)",
+    )
+
 
     try:
         arguments = parser.parse_args()
@@ -447,6 +483,7 @@ if __name__ == "__main__":
         exit(999)
 
     PARALLELISM = int(arguments.parallelism)
+    save_models = arguments.save_models
 
     files = [
         base_file[:base_file.rfind(".")] + appendix + ".tsv"
@@ -471,12 +508,12 @@ if __name__ == "__main__":
 
         assert "date" not in xs.columns
         
-        do_classification_simple(xs, y, file)
+        do_classification_simple(xs, y, file, save_models=save_models)
         
         xs_cols = [x for x in xs.columns.tolist() if "counts" not in x]
         xs_no_counts = xs[xs_cols]
 
-        do_classification_simple(xs_no_counts, y, file, "no_counts_features")
+        do_classification_simple(xs_no_counts, y, file, "no_counts_features", save_models=save_models)
         do_classification_rfe(xs, y, file)
 
 # Ref run

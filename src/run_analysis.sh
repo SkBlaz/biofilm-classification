@@ -20,7 +20,11 @@ if [ $# -lt 4 ]; then
   echo -e "\t\t<nb parallel jobs (4)>"
   echo -e "\t\t<dataset name (datafile.tsv)>"
   echo -e "\t\t<top features to visualize (10)>"
-  echo -e "\t\t<task (generate_features | learning_benchmark | data_visualization)>"
+  echo -e "\t\t<task (generate_features | learning_benchmark | data_visualization | inference)>"
+  echo
+  echo
+  echo "For inference task:"
+  echo -e "=> docker compose run --rm imagine 4 - 10 inference <models_path> <images_path> <output_path>"
   echo
   echo
   echo "If you are running the script directly:"
@@ -34,6 +38,22 @@ INPUT_DATASETNAME="$2"
 INPUT_NB_VISUALIZATION_FEATURES="$3"
 LEARNING_TASK="$4"
 OUTPUT_RESULTS_FOLDER='/imagine/results'
+
+# Handle special case for inference task
+if [ "$LEARNING_TASK" = "inference" ]; then
+	if [ $# -lt 7 ]; then
+		echo "Inference task requires additional parameters:"
+		echo "=> docker compose run --rm imagine 4 - 10 inference <models_path> <images_path> <output_path>"
+		exit 1
+	fi
+	MODELS_PATH="$5"
+	IMAGES_PATH="$6"
+	INFERENCE_OUTPUT_PATH="$7"
+	echo "Inference mode parameters:"
+	echo "Models path: $MODELS_PATH"
+	echo "Images path: $IMAGES_PATH"
+	echo "Output path: $INFERENCE_OUTPUT_PATH"
+fi
 
 RESULTS_CREATE_DF="${OUTPUT_RESULTS_FOLDER}/${INPUT_DATASETNAME}"
 RESULTS_RANKING_FILE="${OUTPUT_RESULTS_FOLDER}/rankings.tsv"
@@ -69,8 +89,8 @@ if [ $LEARNING_TASK = "generate_features" ]; then
 fi
 
 if [ $LEARNING_TASK = "learning_benchmark" ]; then
-	# calculating feature rankings + intermediary frames etc.
-	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" 
+	# calculating feature rankings + intermediary frames etc. + save models for inference
+	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" --save_models
 fi
 
 if [ $LEARNING_TASK = "data_visualization" ]; then
@@ -84,4 +104,14 @@ if [ $LEARNING_TASK = "reduce_layers" ]; then
   for IMAGE in $INPUT_IMAGE_FOLDER/*.tif; do
     bash remove_layers.sh $IMAGE $NUM_LAYERS
   done
+fi
+
+if [ $LEARNING_TASK = "inference" ]; then
+	# run inference on new images using pre-trained models
+	echo "Running inference..."
+	echo "Models: $MODELS_PATH"
+	echo "Images: $IMAGES_PATH" 
+	echo "Output: $INFERENCE_OUTPUT_PATH"
+	
+	python inference.py "$MODELS_PATH" "$IMAGES_PATH" "$INFERENCE_OUTPUT_PATH"
 fi 

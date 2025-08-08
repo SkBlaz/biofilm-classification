@@ -163,3 +163,42 @@ docker compose run --rm imagine 4 data.tsv 50 data_visualization
 ```
 
 This will produce a folder called `tmp` in the results folder. The folder contains all visualizations of top n features, grouped by strains.
+
+## Task: Inference
+
+To run inference on new images using pre-trained models, use the `inference` task. This requires that models have been previously trained using the `learning_benchmark` task, which automatically saves trained models.
+
+The inference task takes three additional parameters:
+- Path to the directory containing trained models
+- Path to the directory containing .tif images for inference
+- Path to the output directory where predictions will be saved
+
+```sh
+docker compose run --rm imagine 4 - 10 inference /path/to/models /path/to/images /path/to/output
+```
+
+### Example workflow:
+
+1. First, train models on your data:
+```sh
+# Set paths in .env file or use --env-file
+# IMAGINE_IMAGES=./my_training_images
+# IMAGINE_RESULTS=./my_training_results
+
+# Generate features and train models
+docker compose run --rm imagine 4 datafile.tsv 10 generate_features
+docker compose run --rm imagine 4 datafile.tsv 10 learning_benchmark
+```
+
+2. Then use the trained models for inference on new images:
+```sh
+# Run inference using the saved models
+docker compose run --rm imagine 4 - 10 inference ./my_training_results/models ./new_images ./inference_results
+```
+
+The inference results will include:
+- `{model_name}_predictions.tsv`: Predicted classes for each image
+- `{model_name}_probabilities.tsv`: Prediction probabilities (if available) 
+- `inference_summary.tsv`: Summary of predictions from all models
+
+**Note**: The inference mode automatically handles feature extraction from .tif images using the same pipeline as training, ensuring consistency between training and inference.
