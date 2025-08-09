@@ -208,6 +208,13 @@ def run_inference(models, metadata, features_file, output_dir):
     try:
         data = pd.read_csv(features_file, sep="\t", index_col=0)
         logger.info(f"Loaded features with shape: {data.shape}")
+        logger.info(f"Columns: {list(data.columns)}")
+        
+        # Remove label column if it exists
+        if 'label' in data.columns:
+            logger.info("Removing label column from features")
+            data = data.drop('label', axis=1)
+            logger.info(f"Features shape after removing label: {data.shape}")
     except Exception as e:
         logger.error(f"Failed to load features file: {e}")
         raise
@@ -239,33 +246,61 @@ def run_inference(models, metadata, features_file, output_dir):
                         
                 if extra_features:
                     logger.info(f"Dropping extra features for {model_name}: {len(extra_features)} features")
+                    logger.info(f"Extra features being dropped: {list(extra_features)}")
                     X = X.drop(columns=list(extra_features))
                 
                 # Reorder columns to match training
                 X = X[training_features]
+                logger.info(f"Final feature shape for {model_name}: {X.shape}")
             
             # Convert to numpy array
             X_values = X.values
+            logger.info(f"X_values shape before preprocessing: {X_values.shape}")
             
             # Apply same preprocessing as during training
-            if meta.get('thr_features', False) and 'thr_indices' in meta:
-                thr_indices = np.array(meta['thr_indices'])
-                if len(thr_indices) > 0:
-                    X_values = X_values[:, thr_indices]
+            # Note: Feature thresholding should have been applied during training before SVD
+            # The thr_indices refer to the original feature space, but we need to apply SVD first
+            # since the saved SVD transformer was fitted on the full feature set
             
             # Apply dimensionality reduction if used during training
             if 'svd_transformer' in meta and meta['svd_transformer'] is not None:
                 svd_transformer = meta['svd_transformer']
                 logger.info(f"Applying saved SVD transformation for {model_name}")
                 X_values = svd_transformer.transform(X_values)
+                
+                # After SVD, apply feature thresholding if it was used
+                if meta.get('thr_features', False) and 'thr_indices' in meta:
+                    thr_indices = np.array(meta['thr_indices'])
+                    if len(thr_indices) > 0:
+                        # thr_indices should be applied to the SVD-transformed features
+                        logger.info(f"Applying feature thresholding after SVD for {model_name}: keeping {len(thr_indices)} out of {X_values.shape[1]} components")
+                        if max(thr_indices) < X_values.shape[1]:
+                            X_values = X_values[:, thr_indices]
+                        else:
+                            logger.warning(f"thr_indices {thr_indices} out of range for SVD components {X_values.shape[1]}, skipping feature thresholding")
+                            
             elif meta.get('n_components') != 'all':
                 n_components = meta.get('n_components', 'all')
                 logger.warning(f"Model {model_name} used dimensionality reduction (n_components={n_components})")
                 logger.warning("Cannot apply same SVD transformation without the fitted transformer")
                 logger.warning("Predictions may be less accurate")
                 # This will likely cause the prediction to fail, but we'll try anyway
+                
+                # In this case, apply feature thresholding to original features
+                if meta.get('thr_features', False) and 'thr_indices' in meta:
+                    thr_indices = np.array(meta['thr_indices'])
+                    if len(thr_indices) > 0 and max(thr_indices) < X_values.shape[1]:
+                        logger.info(f"Applying feature thresholding to original features for {model_name}")
+                        X_values = X_values[:, thr_indices]
+                        
             else:
                 logger.info(f"No dimensionality reduction applied for {model_name}")
+                # Apply feature thresholding to original features if no SVD
+                if meta.get('thr_features', False) and 'thr_indices' in meta:
+                    thr_indices = np.array(meta['thr_indices'])
+                    if len(thr_indices) > 0 and max(thr_indices) < X_values.shape[1]:
+                        logger.info(f"Applying feature thresholding to original features for {model_name}")
+                        X_values = X_values[:, thr_indices]
             
             # Make predictions
             try:

@@ -92,3 +92,16 @@ services:
       - '-'
       - '10'
       - inference
+
+  imagine-test-inference-fast:
+    <<: *base-test-config
+    volumes:
+      - type: bind
+        source: test_inference_fast.py
+        target: /opt/imagine/test_inference_fast.py
+        read_only: true
+      - type: bind
+        source: examples/test_images_results
+        target: /imagine/results
+    entrypoint: python
+    command: test_inference_fast.py
