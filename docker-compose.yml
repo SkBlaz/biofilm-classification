@@ -28,6 +28,16 @@ services:
       - type: bind
         source: '${IMAGINE_RESULTS}'
         target: /imagine/results
+      - type: bind
+        source: '${IMAGINE_INFERENCE_INPUTS:-.}'
+        target: /imagine/inference_inputs
+        read_only: true
+      - type: bind
+        source: '${IMAGINE_INFERENCE_OUTPUTS:-.}'
+        target: /imagine/inference_outputs
+    environment:
+      - IMAGINE_INFERENCE_INPUTS=/imagine/inference_inputs
+      - IMAGINE_INFERENCE_OUTPUTS=/imagine/inference_outputs
 
   imagine-test-generate-features:
     <<: *base-test-config
@@ -71,3 +81,14 @@ services:
       - '/imagine/results/models'
       - '/imagine/images'
       - '/imagine/results/inference_output'
+
+  imagine-test-inference-env:
+    <<: *base-test-config
+    environment:
+      - IMAGINE_INFERENCE_INPUTS=/imagine/images
+      - IMAGINE_INFERENCE_OUTPUTS=/imagine/results/inference_output_env
+    command:
+      - '4'
+      - '-'
+      - '10'
+      - inference

@@ -23,7 +23,11 @@ if [ $# -lt 4 ]; then
   echo -e "\t\t<task (generate_features | learning_benchmark | learning_benchmark_save_models | data_visualization | inference)>"
   echo
   echo
-  echo "For inference task:"
+  echo "For inference task (environment variable mode):"
+  echo "Set IMAGINE_INFERENCE_INPUTS and IMAGINE_INFERENCE_OUTPUTS in .env file"
+  echo -e "=> docker compose run --rm imagine 4 - 10 inference"
+  echo
+  echo "For inference task (parameter mode):"
   echo -e "=> docker compose run --rm imagine 4 - 10 inference <models_path> <images_path> <output_path>"
   echo
   echo
@@ -41,18 +45,37 @@ OUTPUT_RESULTS_FOLDER='/imagine/results'
 
 # Handle special case for inference task
 if [ "$LEARNING_TASK" = "inference" ]; then
-	if [ $# -lt 7 ]; then
-		echo "Inference task requires additional parameters:"
-		echo "=> docker compose run --rm imagine 4 - 10 inference <models_path> <images_path> <output_path>"
-		exit 1
+	# Use environment variables if available, otherwise require parameters
+	if [ -n "$IMAGINE_INFERENCE_INPUTS" ] && [ -n "$IMAGINE_INFERENCE_OUTPUTS" ]; then
+		# Environment variable mode
+		MODELS_PATH="$OUTPUT_RESULTS_FOLDER/models"
+		IMAGES_PATH="$IMAGINE_INFERENCE_INPUTS"
+		INFERENCE_OUTPUT_PATH="$IMAGINE_INFERENCE_OUTPUTS"
+		echo "Using environment variables for inference:"
+		echo "Models path: $MODELS_PATH (from IMAGINE_RESULTS/models)"
+		echo "Images path: $IMAGES_PATH (from IMAGINE_INFERENCE_INPUTS)"
+		echo "Output path: $INFERENCE_OUTPUT_PATH (from IMAGINE_INFERENCE_OUTPUTS)"
+	else
+		# Parameter mode (backward compatibility)
+		if [ $# -lt 7 ]; then
+			echo "Inference task requires either environment variables or additional parameters:"
+			echo ""
+			echo "Environment variable mode:"
+			echo "Set IMAGINE_INFERENCE_INPUTS and IMAGINE_INFERENCE_OUTPUTS in .env file"
+			echo "=> docker compose run --rm imagine 4 - 10 inference"
+			echo ""
+			echo "Parameter mode:"
+			echo "=> docker compose run --rm imagine 4 - 10 inference <models_path> <images_path> <output_path>"
+			exit 1
+		fi
+		MODELS_PATH="$5"
+		IMAGES_PATH="$6"
+		INFERENCE_OUTPUT_PATH="$7"
+		echo "Using parameters for inference:"
+		echo "Models path: $MODELS_PATH"
+		echo "Images path: $IMAGES_PATH"
+		echo "Output path: $INFERENCE_OUTPUT_PATH"
 	fi
-	MODELS_PATH="$5"
-	IMAGES_PATH="$6"
-	INFERENCE_OUTPUT_PATH="$7"
-	echo "Inference mode parameters:"
-	echo "Models path: $MODELS_PATH"
-	echo "Images path: $IMAGES_PATH"
-	echo "Output path: $INFERENCE_OUTPUT_PATH"
 fi
 
 RESULTS_CREATE_DF="${OUTPUT_RESULTS_FOLDER}/${INPUT_DATASETNAME}"

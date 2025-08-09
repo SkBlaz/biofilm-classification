@@ -68,17 +68,23 @@ To test the complete inference pipeline including model saving and inference on 
 # 4. Run learning benchmark with model saving (required for inference)
 docker compose run --rm imagine-test-learning-benchmark-save-models
 
-# 5. Run inference using the saved models on the same test images
+# 5. Run inference using the saved models on the same test images (parameter mode)
 docker compose run --rm imagine-test-inference
+
+# 6. Run inference using environment variables (environment variable mode)
+docker compose run --rm imagine-test-inference-env
 ```
 
 ### Expected results after inference tests:
 - `./examples/test_images_results/models/` - Directory containing saved trained models:
   - `*_model.joblib` - Trained model files
   - `*_metadata.joblib` - Model metadata files with feature names and target mappings
-- `./examples/test_images_results/inference_output/` - Directory containing inference results:
-  - `inference_predictions.tsv` - Predictions for each input image with confidence scores
-  - Individual model prediction files if available
+- `./examples/test_images_results/inference_output/` - Directory containing inference results (parameter mode):
+  - `*_predictions.tsv` - Predictions for each input image with confidence scores
+  - `*_probabilities.tsv` - Prediction probabilities if available
+  - `inference_summary.tsv` - Summary of predictions from all models
+- `./examples/test_images_results/inference_output_env/` - Directory containing environment variable inference results:
+  - Same structure as above but from environment variable mode test
 
 ### Verification commands:
 You can verify the tests completed successfully by checking the generated files:
@@ -91,8 +97,11 @@ ls -la examples/test_images_results/visualizations/
 # Check that models were saved (after step 4)
 ls -la examples/test_images_results/models/
 
-# Check that inference results exist (after step 5)  
+# Check that inference results exist (after step 5 - parameter mode)  
 ls -la examples/test_images_results/inference_output/
+
+# Check that environment variable inference results exist (after step 6)
+ls -la examples/test_images_results/inference_output_env/
 ```
 
 **Success criteria**: All commands should complete without errors, and the expected directories and files should be created with non-zero file sizes.
@@ -224,12 +233,36 @@ This will produce a folder called `tmp` in the results folder. The folder contai
 
 ## Task: Inference
 
-To run inference on new images using pre-trained models, use the `inference` task. This requires that models have been previously trained using the `learning_benchmark` task, which automatically saves trained models.
+To run inference on new images using pre-trained models, use the `inference` task. This requires that models have been previously trained using the `learning_benchmark_save_models` task.
 
-The inference task takes three additional parameters:
-- Path to the directory containing trained models
-- Path to the directory containing .tif images for inference
-- Path to the output directory where predictions will be saved
+### Environment Variable Mode (Recommended)
+
+For easier configuration and better integration with Docker Compose workflows, you can use environment variables to control inference paths. Create or update your `.env` file:
+
+```env
+# Main workflow paths
+IMAGINE_IMAGES=./training_images
+IMAGINE_RESULTS=./training_results
+
+# Inference-specific paths
+IMAGINE_INFERENCE_INPUTS=./new_images_to_classify
+IMAGINE_INFERENCE_OUTPUTS=./inference_results
+```
+
+Then run inference using the environment variables:
+
+```sh
+docker compose run --rm imagine 4 - 10 inference
+```
+
+The inference task will use:
+- Models from `${IMAGINE_RESULTS}/models` (where training models are stored)
+- Input images from `${IMAGINE_INFERENCE_INPUTS}`
+- Output results to `${IMAGINE_INFERENCE_OUTPUTS}`
+
+### Parameter Mode (Backward Compatible)
+
+You can also specify paths directly as parameters:
 
 ```sh
 docker compose run --rm imagine 4 - 10 inference /path/to/models /path/to/images /path/to/output
@@ -239,7 +272,7 @@ docker compose run --rm imagine 4 - 10 inference /path/to/models /path/to/images
 
 1. First, train models on your data:
 ```sh
-# Set paths in .env file or use --env-file
+# Set paths in .env file
 # IMAGINE_IMAGES=./my_training_images
 # IMAGINE_RESULTS=./my_training_results
 
@@ -250,7 +283,14 @@ docker compose run --rm imagine 4 datafile.tsv 10 learning_benchmark_save_models
 
 2. Then use the trained models for inference on new images:
 ```sh
-# Run inference using the saved models
+# Update .env file for inference
+# IMAGINE_INFERENCE_INPUTS=./new_images_to_classify
+# IMAGINE_INFERENCE_OUTPUTS=./inference_results
+
+# Run inference using environment variables
+docker compose run --rm imagine 4 - 10 inference
+
+# Or use direct parameters (backward compatible)
 docker compose run --rm imagine 4 - 10 inference ./my_training_results/models ./new_images ./inference_results
 ```
 

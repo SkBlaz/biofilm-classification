@@ -90,6 +90,24 @@ jobs:
           exit 1
         fi
         
+    - name: Run inference test with environment variables
+      timeout-minutes: 15
+      run: |
+        echo "Running inference test with environment variables..."
+        docker compose run --rm imagine-test-inference-env
+        echo "SUCCESS: Inference test with environment variables completed!"
+        
+    - name: Verify environment variable inference results were generated
+      run: |
+        echo "Checking if environment variable inference results were generated..."
+        if [ -d "examples/test_images_results/inference_output_env" ] && [ "$(ls -A examples/test_images_results/inference_output_env)" ]; then
+          echo "SUCCESS: Environment variable inference results directory contains files"
+          ls -la examples/test_images_results/inference_output_env/
+        else
+          echo "ERROR: Environment variable inference results directory is empty or doesn't exist"
+          exit 1
+        fi
+        
     - name: Verify test results were generated
       run: |
         echo "Checking if test results were generated..."
