@@ -321,12 +321,13 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                         x_train = x_train[:, thr_indices]
                         x_test = x_test[:, thr_indices]                
 
+                    svd_transformer = None
                     if desc_components != "all" or "TabPFN" in str(model):
-                        svd = TruncatedSVD(n_components=n_components,
+                        svd_transformer = TruncatedSVD(n_components=n_components,
                                             n_iter=15,
                                             random_state=42).fit(x_train)
-                        x_train = svd.transform(x_train)
-                        x_test = svd.transform(x_test)
+                        x_train = svd_transformer.transform(x_train)
+                        x_test = svd_transformer.transform(x_test)
                     else:
                         n_components = x_train.shape[1]
 
@@ -402,7 +403,8 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                                     'thr_indices': thr_indices.tolist() if len(thr_indices) > 0 else [],
                                     'filter_mode': filter_mode,
                                     'model_name': model_name,
-                                    'accuracy': acc
+                                    'accuracy': acc,
+                                    'svd_transformer': svd_transformer  # Save fitted SVD transformer
                                 }
                                 metadata_path = os.path.join(models_dir, f"{model_name}_metadata.joblib") 
                                 joblib.dump(metadata, metadata_path)

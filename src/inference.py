@@ -254,11 +254,18 @@ def run_inference(models, metadata, features_file, output_dir):
                     X_values = X_values[:, thr_indices]
             
             # Apply dimensionality reduction if used during training
-            n_components = meta.get('n_components', 'all')
-            if n_components != 'all':
+            if 'svd_transformer' in meta and meta['svd_transformer'] is not None:
+                svd_transformer = meta['svd_transformer']
+                logger.info(f"Applying saved SVD transformation for {model_name}")
+                X_values = svd_transformer.transform(X_values)
+            elif meta.get('n_components') != 'all':
+                n_components = meta.get('n_components', 'all')
                 logger.warning(f"Model {model_name} used dimensionality reduction (n_components={n_components})")
                 logger.warning("Cannot apply same SVD transformation without the fitted transformer")
                 logger.warning("Predictions may be less accurate")
+                # This will likely cause the prediction to fail, but we'll try anyway
+            else:
+                logger.info(f"No dimensionality reduction applied for {model_name}")
             
             # Make predictions
             try:

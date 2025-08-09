@@ -1,0 +1,20 @@
+feature	RandomForest(n=200, p=1.0)
+label	0.09102204328334983
+BioVolume-SUMMARYCustomAlgos.tsv_mean.txt	0.08099375498872985
+maxNormalized-SUMMARYCustomAlgos.tsv_mean.txt	0.07549937499686243
+RoughnessThreshold-SUMMARYCustomAlgos.tsv_mean.txt	0.06562817417088775
+max-SUMMARYCustomAlgos.tsv_mean.txt	0.06176319492902409
+ThicknessThreshold-SUMMARYCustomAlgos.tsv_mean.txt	0.061189606038852276
+diff-SUMMARYCustomAlgos.tsv_mean.txt	0.059674956534253025
+stdNormalized-SUMMARYCustomAlgos.tsv_mean.txt	0.05803430238103605
+minNormalized-SUMMARYCustomAlgos.tsv_mean.txt	0.057711593264357076
+eigenLocal-SUMMARYCustomAlgos.tsv_mean.txt	0.05474169883717623
+mean-SUMMARYCustomAlgos.tsv_mean.txt	0.05307857971174555
+std-SUMMARYCustomAlgos.tsv_mean.txt	0.051014103149781546
+eigenLocalNormalized-SUMMARYCustomAlgos.tsv_mean.txt	0.048942640274298566
+SubstratumCoverage-SUMMARYCustomAlgos.tsv_mean.txt	0.04871987309173239
+meanNormalized-SUMMARYCustomAlgos.tsv_mean.txt	0.04657670637570136
+diffNormalized-SUMMARYCustomAlgos.tsv_mean.txt	0.04472077336398944
+Homogenity-SUMMARYCustomAlgos.tsv_mean.txt	0.0406886246082226
+MicrocoloniesAggregates-SUMMARYCustomAlgos.tsv_mean.txt	0.0
+min-SUMMARYCustomAlgos.tsv_mean.txt	0.0
