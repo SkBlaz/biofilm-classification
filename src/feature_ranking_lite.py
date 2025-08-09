@@ -26,14 +26,14 @@ warnings.simplefilter(action='ignore', category=DataConversionWarning)
 
 try:
     from tpot import TPOTClassifier
-    TPOT_AVAILABLE = True
+    TPOT_AVAILABLE = False
 except:
     TPOT_AVAILABLE = False
     TPOTClassifier = None
 
 try:
     from autogluon.tabular import TabularPredictor
-    AUTOGLUON_AVAILABLE = True
+    AUTOGLUON_AVAILABLE = False
 except:
     AUTOGLUON_AVAILABLE = False
     TabularPredictor = None
@@ -278,12 +278,12 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
     upsampling = 1
 
     models = {
-        'dummy': DummyClassifier(),
-        'decisiontree': tree.DecisionTreeClassifier(),
-        'logistic': LogisticRegression(),
+#        'dummy': DummyClassifier(),
+#        'decisiontree': tree.DecisionTreeClassifier(),
+#        'logistic': LogisticRegression(),
         'rf': RandomForestClassifier(),
-        'xgb': XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective='binary:logistic'),
-        'gridsearch': GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM),
+        #'xgb': XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective='binary:logistic'),
+        #'gridsearch': GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM),
         #'tpot': TPOTClassifier(generations=5, population_size=20, cv=5, random_state=42, verbosity=2, n_jobs=PARALLELISM, memory='auto'),
     }
     
