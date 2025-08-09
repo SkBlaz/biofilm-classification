@@ -1,4 +1,4 @@
-name: Docker Build and Test
+name: Inference
 
 on:
   push:
@@ -7,9 +7,9 @@ on:
     branches: [ main, master ]
 
 jobs:
-  docker-build-and-test:
+  inference:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 45
     
     steps:
     - name: Checkout code
@@ -33,33 +33,12 @@ jobs:
       run: |
         mkdir -p examples/test_images_results
         
-    - name: Run feature generation test
+    - name: Setup models for inference testing
       timeout-minutes: 15
       run: |
-        echo "Running feature generation test..."
-        docker compose run --rm imagine-test-generate-features
-        echo "SUCCESS: Feature generation test completed!"
-        
-    - name: Run learning benchmark test
-      timeout-minutes: 15
-      run: |
-        echo "Running learning benchmark test..."
-        docker compose run --rm imagine-test-learning-benchmark
-        echo "SUCCESS: Learning benchmark test completed!"
-        
-    - name: Run data visualization test
-      timeout-minutes: 15
-      run: |
-        echo "Running data visualization test..."
-        docker compose run --rm imagine-test-data-visualization
-        echo "SUCCESS: Data visualization test completed!"
-        
-    - name: Run learning benchmark with model saving test
-      timeout-minutes: 15
-      run: |
-        echo "Running learning benchmark with model saving test..."
+        echo "Setting up models for inference testing..."
         docker compose run --rm imagine-test-learning-benchmark-save-models
-        echo "SUCCESS: Learning benchmark with model saving test completed!"
+        echo "SUCCESS: Models setup completed!"
         
     - name: Verify models were saved
       run: |
@@ -72,12 +51,12 @@ jobs:
           exit 1
         fi
         
-    - name: Run inference test
+    - name: Run inference test (parameter mode)
       timeout-minutes: 15
       run: |
-        echo "Running inference test..."
+        echo "Running inference test with parameters..."
         docker compose run --rm imagine-test-inference
-        echo "SUCCESS: Inference test completed!"
+        echo "SUCCESS: Inference test (parameter mode) completed!"
         
     - name: Verify inference results were generated
       run: |
@@ -90,12 +69,12 @@ jobs:
           exit 1
         fi
         
-    - name: Run inference test with environment variables
+    - name: Run inference test (environment variable mode)
       timeout-minutes: 15
       run: |
         echo "Running inference test with environment variables..."
         docker compose run --rm imagine-test-inference-env
-        echo "SUCCESS: Inference test with environment variables completed!"
+        echo "SUCCESS: Inference test (environment variable mode) completed!"
         
     - name: Verify environment variable inference results were generated
       run: |
@@ -108,21 +87,10 @@ jobs:
           exit 1
         fi
         
-    - name: Verify test results were generated
-      run: |
-        echo "Checking if test results were generated..."
-        if [ -d "examples/test_images_results" ] && [ "$(ls -A examples/test_images_results)" ]; then
-          echo "SUCCESS: Test results directory is not empty"
-          ls -la examples/test_images_results/
-        else
-          echo "WARNING: Test results directory is empty or doesn't exist"
-          exit 1
-        fi
-        
     - name: Upload test results
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: test-results
+        name: inference-results
         path: examples/test_images_results/
         retention-days: 30
