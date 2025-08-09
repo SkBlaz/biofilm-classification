@@ -52,3 +52,22 @@ services:
       - datafile.tsv
       - '15'
       - data_visualization
+
+  imagine-test-learning-benchmark-save-models:
+    <<: *base-test-config
+    command:
+      - '4'
+      - datafile.tsv
+      - '15'
+      - learning_benchmark_save_models
+
+  imagine-test-inference:
+    <<: *base-test-config
+    command:
+      - '4'
+      - '-'
+      - '10'
+      - inference
+      - '/imagine/results/models'
+      - '/imagine/images'
+      - '/imagine/results/inference_output'

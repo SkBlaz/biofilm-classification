@@ -9,7 +9,7 @@ on:
 jobs:
   docker-build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     
     steps:
     - name: Checkout code
@@ -53,6 +53,42 @@ jobs:
         echo "Running data visualization test..."
         docker compose run --rm imagine-test-data-visualization
         echo "SUCCESS: Data visualization test completed!"
+        
+    - name: Run learning benchmark with model saving test
+      timeout-minutes: 15
+      run: |
+        echo "Running learning benchmark with model saving test..."
+        docker compose run --rm imagine-test-learning-benchmark-save-models
+        echo "SUCCESS: Learning benchmark with model saving test completed!"
+        
+    - name: Verify models were saved
+      run: |
+        echo "Checking if models were saved..."
+        if [ -d "examples/test_images_results/models" ] && [ "$(ls -A examples/test_images_results/models)" ]; then
+          echo "SUCCESS: Models directory contains files"
+          ls -la examples/test_images_results/models/
+        else
+          echo "ERROR: Models directory is empty or doesn't exist"
+          exit 1
+        fi
+        
+    - name: Run inference test
+      timeout-minutes: 15
+      run: |
+        echo "Running inference test..."
+        docker compose run --rm imagine-test-inference
+        echo "SUCCESS: Inference test completed!"
+        
+    - name: Verify inference results were generated
+      run: |
+        echo "Checking if inference results were generated..."
+        if [ -d "examples/test_images_results/inference_output" ] && [ "$(ls -A examples/test_images_results/inference_output)" ]; then
+          echo "SUCCESS: Inference results directory contains files"
+          ls -la examples/test_images_results/inference_output/
+        else
+          echo "ERROR: Inference results directory is empty or doesn't exist"
+          exit 1
+        fi
         
     - name: Verify test results were generated
       run: |

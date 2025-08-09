@@ -40,13 +40,62 @@ docker compose build --no-cache
 ## Testing if everything works
 For testing purposes, commands below use predefined paths to data. The paths are specified in `docker-compose.yml` - do not change them.
 Run the following commands one after another and wait for each of them to finish. The testing data is available in `./examples/test_images` folder. 
+
+### Basic functionality tests
 All commands should run and produce results (in folder `./examples/test_images_results`) without errors:
 
 ```sh
-1. docker compose run --rm imagine-test-generate-features
-2. docker compose run --rm imagine-test-learning-benchmark
-3. docker compose run --rm imagine-test-data-visualization
+# 1. Generate features from test images
+docker compose run --rm imagine-test-generate-features
+
+# 2. Run learning benchmark (classification without model saving)
+docker compose run --rm imagine-test-learning-benchmark
+
+# 3. Generate data visualizations
+docker compose run --rm imagine-test-data-visualization
 ```
+
+### Expected results after basic tests:
+- `./examples/test_images_results/data.tsv` - Final dataset with extracted features
+- `./examples/test_images_results/rankings.tsv` - Feature importance rankings  
+- `./examples/test_images_results/classification.tsv` - Classification results
+- `./examples/test_images_results/visualizations/` - Generated visualization plots
+
+### New inference functionality tests
+To test the complete inference pipeline including model saving and inference on new data:
+
+```sh
+# 4. Run learning benchmark with model saving (required for inference)
+docker compose run --rm imagine-test-learning-benchmark-save-models
+
+# 5. Run inference using the saved models on the same test images
+docker compose run --rm imagine-test-inference
+```
+
+### Expected results after inference tests:
+- `./examples/test_images_results/models/` - Directory containing saved trained models:
+  - `*_model.joblib` - Trained model files
+  - `*_metadata.joblib` - Model metadata files with feature names and target mappings
+- `./examples/test_images_results/inference_output/` - Directory containing inference results:
+  - `inference_predictions.tsv` - Predictions for each input image with confidence scores
+  - Individual model prediction files if available
+
+### Verification commands:
+You can verify the tests completed successfully by checking the generated files:
+
+```sh
+# Check that basic results exist
+ls -la examples/test_images_results/
+ls -la examples/test_images_results/visualizations/
+
+# Check that models were saved (after step 4)
+ls -la examples/test_images_results/models/
+
+# Check that inference results exist (after step 5)  
+ls -la examples/test_images_results/inference_output/
+```
+
+**Success criteria**: All commands should complete without errors, and the expected directories and files should be created with non-zero file sizes.
 
 
 ## Mounting volumes of data into the containers
