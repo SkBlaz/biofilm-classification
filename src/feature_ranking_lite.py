@@ -26,9 +26,20 @@ warnings.simplefilter(action='ignore', category=DataConversionWarning)
 
 try:
     from tpot import TPOTClassifier
-    from autogluon.tabular import TabularPredictor
+    TPOT_AVAILABLE = True
 except:
-    print("Skipping tpot and autogluon, uncomment to enable (takes a lot of time")
+    TPOT_AVAILABLE = False
+    TPOTClassifier = None
+
+try:
+    from autogluon.tabular import TabularPredictor
+    AUTOGLUON_AVAILABLE = True
+except:
+    AUTOGLUON_AVAILABLE = False
+    TabularPredictor = None
+
+if not TPOT_AVAILABLE or not AUTOGLUON_AVAILABLE:
+    print("Skipping tpot and autogluon, uncomment to enable (takes a lot of time)")
 
 
 parameters = {
@@ -274,8 +285,11 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
         'xgb': XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective='binary:logistic'),
         'gridsearch': GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM),
         #'tpot': TPOTClassifier(generations=5, population_size=20, cv=5, random_state=42, verbosity=2, n_jobs=PARALLELISM, memory='auto'),
-        'autogluon': TabularPredictor(label="label"),
     }
+    
+    # Add autogluon model only if available
+    if AUTOGLUON_AVAILABLE:
+        models['autogluon'] = TabularPredictor(label="label")
     
     outputs = []
     partial_dir = "/".join(path_to_data.split("/")[:-1]) + f"/partial/"
@@ -322,7 +336,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
 
                         logger.info(f"Running {n_components} {' '.join(str(model).split())}, fold: {i}, filter mode: {filter_mode}")
 
-                        if "TabularPredictor" in str(model):
+                        if "TabularPredictor" in str(model) and AUTOGLUON_AVAILABLE:
                             #if desc_components == "all":
                             #    continue
                             x_train_ag = pd.DataFrame(x_train)
@@ -344,6 +358,10 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                             del model
                             model = mname
                             gc.collect()
+                        elif "TabularPredictor" in str(model) and not AUTOGLUON_AVAILABLE:
+                            # Skip autogluon if not available
+                            logger.warning(f"Skipping {model_name} - autogluon not available")
+                            continue
                         else:
                             try:
                                 with warnings.catch_warnings():

@@ -127,8 +127,11 @@ def generate_features_for_images(images_dir, temp_dir):
     # Determine working directory (Docker vs local)
     if os.path.exists("/opt/imagine"):
         src_dir = "/opt/imagine"
+    elif os.path.exists(os.path.join(os.path.dirname(__file__), "..", "src")):
+        # Running locally, check if we're in the src directory or project root
+        src_dir = os.path.dirname(os.path.abspath(__file__))
     else:
-        # Assume we're running locally
+        # Assume we're running locally from project root
         current_dir = os.path.dirname(os.path.abspath(__file__))
         src_dir = current_dir
     
@@ -181,8 +184,8 @@ def generate_features_for_images(images_dir, temp_dir):
     # Create final dataframe
     data_file = os.path.join(temp_dir, "inference_data.tsv")
     try:
-        cmd = ["python", "create_final_df_from_results.py", analysis_dir, data_file]
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd="/opt/imagine")
+        cmd = ["python", os.path.join(src_dir, "create_final_df_from_results.py"), analysis_dir, data_file]
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             logger.error(f"Final dataframe creation failed: {result.stderr}")
             raise RuntimeError("Failed to create final dataframe")
