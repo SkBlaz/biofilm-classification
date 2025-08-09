@@ -1,5 +1,11 @@
-# Test results
+# Test results and artifacts
 examples/test_images_results/
+models/
+*.tsv
+!datafile.tsv
+inference_inputs/
+inference_outputs/
+src/ranking_results/
 
 # Python
 __pycache__/
