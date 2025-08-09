@@ -89,16 +89,34 @@ if [ $LEARNING_TASK = "generate_features" ]; then
 fi
 
 if [ $LEARNING_TASK = "learning_benchmark" ]; then
+	# Check if datafile exists in working directory but not in results directory
+	if [ ! -f "${RESULTS_CREATE_DF}" ] && [ -f "${INPUT_DATASETNAME}" ]; then
+		echo "Copying ${INPUT_DATASETNAME} from working directory to ${RESULTS_CREATE_DF}"
+		mkdir -p "${OUTPUT_RESULTS_FOLDER}"
+		cp "${INPUT_DATASETNAME}" "${RESULTS_CREATE_DF}"
+	fi
 	# calculating feature rankings + intermediary frames etc.
 	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}"
 fi
 
 if [ $LEARNING_TASK = "learning_benchmark_save_models" ]; then
+	# Check if datafile exists in working directory but not in results directory
+	if [ ! -f "${RESULTS_CREATE_DF}" ] && [ -f "${INPUT_DATASETNAME}" ]; then
+		echo "Copying ${INPUT_DATASETNAME} from working directory to ${RESULTS_CREATE_DF}"
+		mkdir -p "${OUTPUT_RESULTS_FOLDER}"
+		cp "${INPUT_DATASETNAME}" "${RESULTS_CREATE_DF}"
+	fi
 	# calculating feature rankings + intermediary frames etc. + save models for inference
 	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" --save_models
 fi
 
 if [ $LEARNING_TASK = "data_visualization" ]; then
+	# Check if datafile exists in working directory but not in results directory
+	if [ ! -f "${RESULTS_CREATE_DF}" ] && [ -f "${INPUT_DATASETNAME}" ]; then
+		echo "Copying ${INPUT_DATASETNAME} from working directory to ${RESULTS_CREATE_DF}"
+		mkdir -p "${OUTPUT_RESULTS_FOLDER}"
+		cp "${INPUT_DATASETNAME}" "${RESULTS_CREATE_DF}"
+	fi
 	# visualizations
 	python ./visualizations/pipeline_visualizations.py --data "${RESULTS_CREATE_DF}" --rankings "${RESULTS_RANKING_FILE}" --fout "${RESULTS_FOLDER_VISUALIZATIONS}" --nbfeatures "${INPUT_NB_VISUALIZATION_FEATURES}"
 fi

@@ -299,6 +299,12 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
     for repetition in range(3):
         for n_components in [16, 32, 64, 128, 256, 512, "all"]:
             desc_components = n_components
+            
+            # Skip if n_components exceeds available features
+            if n_components != "all" and n_components > X.shape[1]:
+                logger.info(f"Skipping n_components={n_components} as it exceeds available features ({X.shape[1]})")
+                continue
+                
             for thr_features in [True, False]:
                 skf = StratifiedKFold(n_splits=3)
                 

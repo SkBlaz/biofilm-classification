@@ -20,4 +20,7 @@ COPY src/visualizations/pipeline_visualizations.py src/visualizations/visualize.
 # util
 COPY src/remove_layers.sh ./
 
+# test data for CI
+COPY datafile.tsv ./
+
 ENTRYPOINT [ "bash", "run_analysis.sh" ]
