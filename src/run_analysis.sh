@@ -21,6 +21,7 @@ if [ $# -lt 4 ]; then
   echo -e "\t\t<dataset name (datafile.tsv)>"
   echo -e "\t\t<top features to visualize (10)>"
   echo -e "\t\t<task (generate_features | learning_benchmark | learning_benchmark_save_models | data_visualization | inference)>"
+  echo -e "\t\t[--all_learners (optional: enable all ML algorithms)]"
   echo
   echo
   echo "For inference task (environment variable mode):"
@@ -43,6 +44,16 @@ INPUT_NB_VISUALIZATION_FEATURES="$3"
 LEARNING_TASK="$4"
 OUTPUT_RESULTS_FOLDER='/imagine/results'
 
+# Check for optional --all_learners flag in any position after the required parameters
+ALL_LEARNERS_FLAG=""
+for arg in "$@"; do
+    if [ "$arg" = "--all_learners" ]; then
+        ALL_LEARNERS_FLAG="--all_learners"
+        echo "All learners flag enabled - will use all machine learning algorithms"
+        break
+    fi
+done
+
 # Handle special case for inference task
 if [ "$LEARNING_TASK" = "inference" ]; then
 	# Use environment variables if available, otherwise require parameters
@@ -57,7 +68,15 @@ if [ "$LEARNING_TASK" = "inference" ]; then
 		echo "Output path: $INFERENCE_OUTPUT_PATH (from IMAGINE_INFERENCE_OUTPUTS)"
 	else
 		# Parameter mode (backward compatibility)
-		if [ $# -lt 7 ]; then
+		# Filter out --all_learners flag from inference parameters
+		INFERENCE_PARAMS=()
+		for arg in "$@"; do
+			if [ "$arg" != "--all_learners" ]; then
+				INFERENCE_PARAMS+=("$arg")
+			fi
+		done
+		
+		if [ ${#INFERENCE_PARAMS[@]} -lt 7 ]; then
 			echo "Inference task requires either environment variables or additional parameters:"
 			echo ""
 			echo "Environment variable mode:"
@@ -66,11 +85,12 @@ if [ "$LEARNING_TASK" = "inference" ]; then
 			echo ""
 			echo "Parameter mode:"
 			echo "=> docker compose run --rm imagine 4 - 10 inference <models_path> <images_path> <output_path>"
+			echo "=> docker compose run --rm imagine 4 - 10 inference <models_path> <images_path> <output_path> --all_learners"
 			exit 1
 		fi
-		MODELS_PATH="$5"
-		IMAGES_PATH="$6"
-		INFERENCE_OUTPUT_PATH="$7"
+		MODELS_PATH="${INFERENCE_PARAMS[4]}"
+		IMAGES_PATH="${INFERENCE_PARAMS[5]}"  
+		INFERENCE_OUTPUT_PATH="${INFERENCE_PARAMS[6]}"
 		echo "Using parameters for inference:"
 		echo "Models path: $MODELS_PATH"
 		echo "Images path: $IMAGES_PATH"
@@ -119,7 +139,7 @@ if [ $LEARNING_TASK = "learning_benchmark" ]; then
 		cp "${INPUT_DATASETNAME}" "${RESULTS_CREATE_DF}"
 	fi
 	# calculating feature rankings + intermediary frames etc.
-	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}"
+	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" ${ALL_LEARNERS_FLAG}
 fi
 
 if [ $LEARNING_TASK = "learning_benchmark_save_models" ]; then
@@ -130,7 +150,7 @@ if [ $LEARNING_TASK = "learning_benchmark_save_models" ]; then
 		cp "${INPUT_DATASETNAME}" "${RESULTS_CREATE_DF}"
 	fi
 	# calculating feature rankings + intermediary frames etc. + save models for inference
-	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" --save_models
+	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" --save_models ${ALL_LEARNERS_FLAG}
 fi
 
 if [ $LEARNING_TASK = "data_visualization" ]; then
