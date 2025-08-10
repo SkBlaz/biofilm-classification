@@ -253,9 +253,31 @@ def run_inference(models, metadata, features_file, output_dir):
                 X = X[training_features]
                 logger.info(f"Final feature shape for {model_name}: {X.shape}")
             
+            # Handle NaN and infinity values before converting to numpy array (same as during training)
+            # Following the same pattern as in feature_ranking_lite.py
+            for col in X.columns:
+                if X[col].dtype in ['float64', 'float32', 'int64', 'int32']:
+                    # Replace inf with max + 3.14, then NaN with -666 (same as training)
+                    max_val = X[col].replace([np.inf, -np.inf], np.nan).max()
+                    if pd.isna(max_val):  # All values are NaN or inf
+                        X[col] = X[col].replace([np.inf, -np.inf], np.nan).fillna(-666)
+                    else:
+                        X[col] = X[col].replace([np.inf, -np.inf], [max_val + 3.14, -666]).fillna(-666)
+                else:
+                    # For non-numeric columns, replace NaN with "missing"
+                    X[col] = X[col].fillna("missing")
+            
             # Convert to numpy array
             X_values = X.values
             logger.info(f"X_values shape before preprocessing: {X_values.shape}")
+            
+            # Final check for any remaining NaN or infinity values
+            if np.isnan(X_values).any() or np.isinf(X_values).any():
+                nan_count = np.isnan(X_values).sum()
+                inf_count = np.isinf(X_values).sum()
+                if nan_count > 0 or inf_count > 0:
+                    logger.warning(f"Found {nan_count} NaN values and {inf_count} infinity values after preprocessing - cleaning up")
+                    X_values = np.nan_to_num(X_values, nan=-666.0, posinf=1000.0, neginf=-1000.0)
             
             # Apply same preprocessing as during training
             # Note: Feature thresholding should have been applied during training before SVD
