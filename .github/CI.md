@@ -4,13 +4,20 @@ This repository includes automated CI testing for Docker images using GitHub Act
 
 ## CI Workflow
 
-The CI workflow (`.github/workflows/docker-tests.yml`) automatically runs on:
+The CI workflows automatically run on:
 - Pushes to `main` or `master` branches
 - Pull requests targeting `main` or `master` branches
 
 ## Tests Performed
 
-The CI pipeline performs the following tests:
+The CI pipeline includes the following workflows:
+
+1. **Feature Generation** (`.github/workflows/feature-generation.yml`): Builds Docker image and runs feature generation tests
+2. **Inference** (`.github/workflows/inference.yml`): Tests inference functionality with both fast and full modes
+3. **Learning Benchmark** (`.github/workflows/learning-benchmark.yml`): Runs learning benchmark tests and model saving
+4. **Data Visualization** (`.github/workflows/visualization.yml`): Tests data visualization components
+
+Each workflow performs:
 
 1. **Docker Image Build**: Builds the Docker image defined in `Dockerfile`
 2. **Feature Generation Test**: Runs `docker compose run --rm imagine-test-generate-features`
