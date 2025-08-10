@@ -299,4 +299,24 @@ The inference results will include:
 - `{model_name}_probabilities.tsv`: Prediction probabilities (if available) 
 - `inference_summary.tsv`: Summary of predictions from all models
 
+### Explainability Features
+
+The inference pipeline now supports generating SHAP-based explanations to understand which features contributed most to each prediction. This is useful for understanding model behavior and building trust in predictions.
+
+To enable explainability, add the `--explanations` flag when running inference:
+
+```sh
+# Enable SHAP explanations (environment variable mode)
+docker compose run --rm imagine 4 - 10 inference --explanations
+
+# Enable SHAP explanations (parameter mode)
+docker compose run --rm imagine 4 - 10 inference /path/to/models /path/to/images /path/to/output --explanations
+```
+
+When explainability is enabled, additional files will be generated in an `explanations/` subdirectory:
+- `{model_name}_shap_explanations.tsv`: SHAP values for individual samples showing feature contributions
+- `{model_name}_feature_importance.tsv`: Overall feature importance rankings based on mean absolute SHAP values
+
+**Note**: Generating explanations requires the SHAP library and adds computational overhead. The feature uses SHAP's PermutationExplainer for model-agnostic explanations that work with any trained model type.
+
 **Note**: The inference mode automatically handles feature extraction from .tif images using the same pipeline as training, ensuring consistency between training and inference.
