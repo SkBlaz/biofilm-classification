@@ -264,7 +264,7 @@ def name_manipulator_date(value: str):
     return (value[:8], re.search(r"st--([^-_]+)-", value).group(1))
 
 
-def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models=False):
+def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models=False, all_learners=False):
 
     all_cols = X.columns
     thr_indices = []
@@ -277,15 +277,25 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
     catmap = dict(zip(y, ys.values))
     upsampling = 1
 
-    models = {
-#        'dummy': DummyClassifier(),
-#        'decisiontree': tree.DecisionTreeClassifier(),
-#        'logistic': LogisticRegression(),
-        'rf': RandomForestClassifier(),
-        #'xgb': XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective='binary:logistic'),
-        #'gridsearch': GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM),
-        #'tpot': TPOTClassifier(generations=5, population_size=20, cv=5, random_state=42, verbosity=2, n_jobs=PARALLELISM, memory='auto'),
-    }
+    if all_learners:
+        models = {
+            'dummy': DummyClassifier(),
+            'decisiontree': tree.DecisionTreeClassifier(),
+            'logistic': LogisticRegression(),
+            'rf': RandomForestClassifier(),
+            'xgb': XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective='binary:logistic'),
+            'gridsearch': GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM),
+            #'tpot': TPOTClassifier(generations=5, population_size=20, cv=5, random_state=42, verbosity=2, n_jobs=PARALLELISM, memory='auto'),
+        }
+        
+        # Add TPOT only if available
+        if TPOT_AVAILABLE:
+            models['tpot'] = TPOTClassifier(generations=5, population_size=20, cv=5, random_state=42, verbosity=2, n_jobs=PARALLELISM, memory='auto')
+    else:
+        # Default behavior: only RandomForest (fast)
+        models = {
+            'rf': RandomForestClassifier(),
+        }
     
     # Add autogluon model only if available
     if AUTOGLUON_AVAILABLE:
@@ -321,16 +331,6 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                         x_train = x_train[:, thr_indices]
                         x_test = x_test[:, thr_indices]                
 
-                    svd_transformer = None
-                    if desc_components != "all" or "TabPFN" in str(model):
-                        svd_transformer = TruncatedSVD(n_components=n_components,
-                                            n_iter=15,
-                                            random_state=42).fit(x_train)
-                        x_train = svd_transformer.transform(x_train)
-                        x_test = svd_transformer.transform(x_test)
-                    else:
-                        n_components = x_train.shape[1]
-
                     for model_name, model in models.items():
                         partial_path = partial_dir + f"{filter_mode}_partial_{repetition}_n{desc_components}_thr{thr_features}_{model_name}_fold{i}.tsv"
                         
@@ -343,11 +343,25 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
 
                         logger.info(f"Running {n_components} {' '.join(str(model).split())}, fold: {i}, filter mode: {filter_mode}")
 
+                        # Prepare data with SVD if needed
+                        x_train_model = x_train.copy()
+                        x_test_model = x_test.copy()
+                        svd_transformer = None
+                        
+                        if desc_components != "all" or "TabPFN" in str(model):
+                            svd_transformer = TruncatedSVD(n_components=n_components,
+                                                n_iter=15,
+                                                random_state=42).fit(x_train_model)
+                            x_train_model = svd_transformer.transform(x_train_model)
+                            x_test_model = svd_transformer.transform(x_test_model)
+                        else:
+                            n_components = x_train_model.shape[1]
+
                         if "TabularPredictor" in str(model) and AUTOGLUON_AVAILABLE:
                             #if desc_components == "all":
                             #    continue
-                            x_train_ag = pd.DataFrame(x_train)
-                            x_test_ag = pd.DataFrame(x_test)
+                            x_train_ag = pd.DataFrame(x_train_model)
+                            x_test_ag = pd.DataFrame(x_test_model)
                             y_train_ag = pd.DataFrame(y_train)
                             y_test_ag = pd.DataFrame(y_test)
                             y_train_ag.columns = ['label']
@@ -373,11 +387,11 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                             try:
                                 with warnings.catch_warnings():
                                     warnings.simplefilter("ignore")
-                                    model.fit(x_train, y_train)
-                                    y_hat = model.predict(x_test)
+                                    model.fit(x_train_model, y_train)
+                                    y_hat = model.predict(x_test_model)
                             except Exception as e:
                                 logger.warning(f"Repetition {repetition} with {desc_components} components (THR: {thr_features}) model {model_name} fold {i} raised {e} (filter mode {filter_mode})")
-                                y_hat = np.ones(len(x_test))
+                                y_hat = np.ones(len(x_test_model))
 
                             acc = accuracy_score(y_test, y_hat)
                         
@@ -501,6 +515,12 @@ if __name__ == "__main__":
         help="Save trained models for inference (default: False)",
     )
 
+    parser.add_argument(
+        "--all_learners",
+        action="store_true", 
+        help="Enable all machine learning algorithms (default: False, only RandomForest)",
+    )
+
 
     try:
         arguments = parser.parse_args()
@@ -510,6 +530,7 @@ if __name__ == "__main__":
 
     PARALLELISM = int(arguments.parallelism)
     save_models = arguments.save_models
+    all_learners = arguments.all_learners
 
     files = [
         base_file[:base_file.rfind(".")] + appendix + ".tsv"
@@ -534,12 +555,12 @@ if __name__ == "__main__":
 
         assert "date" not in xs.columns
         
-        do_classification_simple(xs, y, file, save_models=save_models)
+        do_classification_simple(xs, y, file, save_models=save_models, all_learners=all_learners)
         
         xs_cols = [x for x in xs.columns.tolist() if "counts" not in x]
         xs_no_counts = xs[xs_cols]
 
-        do_classification_simple(xs_no_counts, y, file, "no_counts_features", save_models=save_models)
+        do_classification_simple(xs_no_counts, y, file, "no_counts_features", save_models=save_models, all_learners=all_learners)
         do_classification_rfe(xs, y, file)
 
 # Ref run
