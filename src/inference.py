@@ -16,6 +16,13 @@ import logging
 import subprocess
 from pathlib import Path
 
+try:
+    import shap
+    SHAP_AVAILABLE = True
+except ImportError:
+    SHAP_AVAILABLE = False
+    shap = None
+
 logging.basicConfig(format="%(asctime)s - %(message)s",
                     datefmt="%d-%b-%y %H:%M:%S")
 logging.getLogger(__name__).setLevel(logging.INFO)
@@ -200,7 +207,94 @@ def generate_features_for_images(images_dir, temp_dir):
     return data_file
 
 
-def run_inference(models, metadata, features_file, output_dir):
+def generate_shap_explanations(model, model_name, X_values, X_features, sample_names, output_dir, metadata):
+    """Generate SHAP explanations for model predictions."""
+    if not SHAP_AVAILABLE:
+        logger.warning("SHAP not available - skipping explanations for %s", model_name)
+        return
+    
+    try:
+        logger.info(f"Generating SHAP explanations for {model_name}")
+        
+        # Create a wrapper function for the model that handles the preprocessing pipeline
+        def model_wrapper(X_input):
+            """Wrapper function that applies the same preprocessing as during training."""
+            X_processed = X_input.copy()
+            
+            # Apply same preprocessing as in run_inference
+            thr_features = metadata.get('thr_features', False)
+            n_components = metadata.get('n_components', 'all')
+            
+            # Apply feature thresholding BEFORE SVD if conditions match training
+            if not thr_features and n_components == "all" and 'thr_indices' in metadata:
+                thr_indices = np.array(metadata['thr_indices'])
+                if len(thr_indices) > 0 and max(thr_indices) < X_processed.shape[1]:
+                    X_processed = X_processed[:, thr_indices]
+            
+            # Apply dimensionality reduction if used during training
+            if 'svd_transformer' in metadata and metadata['svd_transformer'] is not None:
+                svd_transformer = metadata['svd_transformer']
+                X_processed = svd_transformer.transform(X_processed)
+            
+            return model.predict_proba(X_processed) if hasattr(model, 'predict_proba') else model.predict(X_processed)
+        
+        # Use a subset for SHAP explanations to avoid memory issues
+        n_background = min(100, len(X_values))  # Use up to 100 samples for background
+        n_explain = min(20, len(X_values))  # Explain up to 20 samples
+        
+        # Create background dataset for SHAP
+        background_indices = np.random.choice(len(X_values), size=n_background, replace=False)
+        background_data = X_values[background_indices]
+        
+        # Choose samples to explain
+        explain_indices = np.random.choice(len(X_values), size=n_explain, replace=False)
+        explain_data = X_values[explain_indices]
+        explain_names = [sample_names[i] for i in explain_indices]
+        
+        # Use Permutation explainer for model-agnostic explanations
+        explainer = shap.PermutationExplainer(model_wrapper, background_data)
+        shap_values = explainer(explain_data)
+        
+        # Save SHAP explanations
+        explanations_dir = os.path.join(output_dir, "explanations")
+        os.makedirs(explanations_dir, exist_ok=True)
+        
+        # Save summary values
+        if hasattr(shap_values, 'values'):
+            # For multi-class classification, take mean across classes
+            if len(shap_values.values.shape) == 3:
+                mean_shap_values = np.mean(np.abs(shap_values.values), axis=2)
+            else:
+                mean_shap_values = np.abs(shap_values.values)
+            
+            # Create explanations DataFrame
+            explanations_df = pd.DataFrame(
+                mean_shap_values,
+                columns=[f'feature_{i}' for i in range(mean_shap_values.shape[1])],
+                index=explain_names
+            )
+            
+            # If we have feature names, use them
+            if X_features is not None and len(X_features) == mean_shap_values.shape[1]:
+                explanations_df.columns = X_features
+            
+            # Save individual explanations
+            explanations_file = os.path.join(explanations_dir, f"{model_name}_shap_explanations.tsv")
+            explanations_df.to_csv(explanations_file, sep="\t")
+            logger.info(f"Saved SHAP explanations for {model_name} to {explanations_file}")
+            
+            # Save feature importance summary (mean absolute SHAP values)
+            feature_importance = explanations_df.abs().mean().sort_values(ascending=False)
+            importance_file = os.path.join(explanations_dir, f"{model_name}_feature_importance.tsv")
+            feature_importance.to_frame('importance').to_csv(importance_file, sep="\t")
+            logger.info(f"Saved feature importance for {model_name} to {importance_file}")
+        
+    except Exception as e:
+        logger.error(f"Failed to generate SHAP explanations for {model_name}: {e}")
+        logger.debug("SHAP error details:", exc_info=True)
+
+
+def run_inference(models, metadata, features_file, output_dir, enable_explanations=False):
     """Run inference on the prepared features using the loaded models."""
     logger.info(f"Running inference on {features_file}")
     
@@ -336,10 +430,24 @@ def run_inference(models, metadata, features_file, output_dir):
                 all_predictions[model_name] = {
                     'predictions': predictions,
                     'probabilities': probabilities,
-                    'sample_names': X.index.tolist()
+                    'sample_names': X.index.tolist(),
+                    'processed_features': X_values,
+                    'feature_names': X.columns.tolist() if hasattr(X, 'columns') else None
                 }
                 
                 logger.info(f"Successfully generated {len(predictions)} predictions with {model_name}")
+                
+                # Generate SHAP explanations if enabled
+                if enable_explanations:
+                    generate_shap_explanations(
+                        model, 
+                        model_name, 
+                        X_values, 
+                        X.columns.tolist() if hasattr(X, 'columns') else None,
+                        X.index.tolist(), 
+                        output_dir, 
+                        meta
+                    )
                 
             except Exception as e:
                 logger.error(f"Prediction failed with model {model_name}: {e}")
@@ -400,8 +508,15 @@ def main():
     parser.add_argument("output_dir", help="Directory to save inference results")
     parser.add_argument("--temp_dir", default="/tmp/inference", 
                        help="Temporary directory for feature generation")
+    parser.add_argument("--explanations", action="store_true",
+                       help="Generate SHAP explanations for predictions (requires SHAP)")
     
     args = parser.parse_args()
+    
+    # Check SHAP availability if explanations are requested
+    if args.explanations and not SHAP_AVAILABLE:
+        logger.error("SHAP explanations requested but SHAP is not installed. Install with: pip install shap")
+        sys.exit(1)
     
     # Validate input directories
     if not os.path.isdir(args.models_dir):
@@ -425,9 +540,14 @@ def main():
         
         # Run inference
         logger.info("Running inference...")
-        num_models = run_inference(models, metadata, features_file, args.output_dir)
+        if args.explanations:
+            logger.info("SHAP explanations enabled")
+        num_models = run_inference(models, metadata, features_file, args.output_dir, 
+                                 enable_explanations=args.explanations)
         
         logger.info(f"Inference completed successfully using {num_models} models")
+        if args.explanations:
+            logger.info("SHAP explanations saved to explanations/ subdirectory")
         
     except Exception as e:
         logger.error(f"Inference failed: {e}")
