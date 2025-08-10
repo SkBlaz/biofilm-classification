@@ -208,7 +208,7 @@ def run_inference(models, metadata, features_file, output_dir):
     try:
         data = pd.read_csv(features_file, sep="\t", index_col=0)
         logger.info(f"Loaded features with shape: {data.shape}")
-        logger.info(f"Columns: {list(data.columns)}")
+#        logger.info(f"Columns: {list(data.columns)}")
         
         # Remove label column if it exists
         if 'label' in data.columns:
