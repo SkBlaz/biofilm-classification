@@ -20,7 +20,15 @@ if [ $# -lt 4 ]; then
   echo -e "\t\t<nb parallel jobs (4)>"
   echo -e "\t\t<dataset name (datafile.tsv)>"
   echo -e "\t\t<top features to visualize (10)>"
-  echo -e "\t\t<task (generate_features | learning_benchmark | data_visualization)>"
+  echo -e "\t\t<task (generate_features | learning_benchmark | learning_benchmark_save_models | data_visualization | inference)>"
+  echo
+  echo
+  echo "For inference task (environment variable mode):"
+  echo "Set IMAGINE_INFERENCE_INPUTS and IMAGINE_INFERENCE_OUTPUTS in .env file"
+  echo -e "=> docker compose run --rm imagine 4 - 10 inference"
+  echo
+  echo "For inference task (parameter mode):"
+  echo -e "=> docker compose run --rm imagine 4 - 10 inference <models_path> <images_path> <output_path>"
   echo
   echo
   echo "If you are running the script directly:"
@@ -34,6 +42,41 @@ INPUT_DATASETNAME="$2"
 INPUT_NB_VISUALIZATION_FEATURES="$3"
 LEARNING_TASK="$4"
 OUTPUT_RESULTS_FOLDER='/imagine/results'
+
+# Handle special case for inference task
+if [ "$LEARNING_TASK" = "inference" ]; then
+	# Use environment variables if available, otherwise require parameters
+	if [ -n "$IMAGINE_INFERENCE_INPUTS" ] && [ -n "$IMAGINE_INFERENCE_OUTPUTS" ]; then
+		# Environment variable mode
+		MODELS_PATH="$OUTPUT_RESULTS_FOLDER/models"
+		IMAGES_PATH="$IMAGINE_INFERENCE_INPUTS"
+		INFERENCE_OUTPUT_PATH="$IMAGINE_INFERENCE_OUTPUTS"
+		echo "Using environment variables for inference:"
+		echo "Models path: $MODELS_PATH (from IMAGINE_RESULTS/models)"
+		echo "Images path: $IMAGES_PATH (from IMAGINE_INFERENCE_INPUTS)"
+		echo "Output path: $INFERENCE_OUTPUT_PATH (from IMAGINE_INFERENCE_OUTPUTS)"
+	else
+		# Parameter mode (backward compatibility)
+		if [ $# -lt 7 ]; then
+			echo "Inference task requires either environment variables or additional parameters:"
+			echo ""
+			echo "Environment variable mode:"
+			echo "Set IMAGINE_INFERENCE_INPUTS and IMAGINE_INFERENCE_OUTPUTS in .env file"
+			echo "=> docker compose run --rm imagine 4 - 10 inference"
+			echo ""
+			echo "Parameter mode:"
+			echo "=> docker compose run --rm imagine 4 - 10 inference <models_path> <images_path> <output_path>"
+			exit 1
+		fi
+		MODELS_PATH="$5"
+		IMAGES_PATH="$6"
+		INFERENCE_OUTPUT_PATH="$7"
+		echo "Using parameters for inference:"
+		echo "Models path: $MODELS_PATH"
+		echo "Images path: $IMAGES_PATH"
+		echo "Output path: $INFERENCE_OUTPUT_PATH"
+	fi
+fi
 
 RESULTS_CREATE_DF="${OUTPUT_RESULTS_FOLDER}/${INPUT_DATASETNAME}"
 RESULTS_RANKING_FILE="${OUTPUT_RESULTS_FOLDER}/rankings.tsv"
@@ -69,11 +112,34 @@ if [ $LEARNING_TASK = "generate_features" ]; then
 fi
 
 if [ $LEARNING_TASK = "learning_benchmark" ]; then
+	# Check if datafile exists in working directory but not in results directory
+	if [ ! -f "${RESULTS_CREATE_DF}" ] && [ -f "${INPUT_DATASETNAME}" ]; then
+		echo "Copying ${INPUT_DATASETNAME} from working directory to ${RESULTS_CREATE_DF}"
+		mkdir -p "${OUTPUT_RESULTS_FOLDER}"
+		cp "${INPUT_DATASETNAME}" "${RESULTS_CREATE_DF}"
+	fi
 	# calculating feature rankings + intermediary frames etc.
-	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" 
+	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}"
+fi
+
+if [ $LEARNING_TASK = "learning_benchmark_save_models" ]; then
+	# Check if datafile exists in working directory but not in results directory
+	if [ ! -f "${RESULTS_CREATE_DF}" ] && [ -f "${INPUT_DATASETNAME}" ]; then
+		echo "Copying ${INPUT_DATASETNAME} from working directory to ${RESULTS_CREATE_DF}"
+		mkdir -p "${OUTPUT_RESULTS_FOLDER}"
+		cp "${INPUT_DATASETNAME}" "${RESULTS_CREATE_DF}"
+	fi
+	# calculating feature rankings + intermediary frames etc. + save models for inference
+	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" --save_models
 fi
 
 if [ $LEARNING_TASK = "data_visualization" ]; then
+	# Check if datafile exists in working directory but not in results directory
+	if [ ! -f "${RESULTS_CREATE_DF}" ] && [ -f "${INPUT_DATASETNAME}" ]; then
+		echo "Copying ${INPUT_DATASETNAME} from working directory to ${RESULTS_CREATE_DF}"
+		mkdir -p "${OUTPUT_RESULTS_FOLDER}"
+		cp "${INPUT_DATASETNAME}" "${RESULTS_CREATE_DF}"
+	fi
 	# visualizations
 	python ./visualizations/pipeline_visualizations.py --data "${RESULTS_CREATE_DF}" --rankings "${RESULTS_RANKING_FILE}" --fout "${RESULTS_FOLDER_VISUALIZATIONS}" --nbfeatures "${INPUT_NB_VISUALIZATION_FEATURES}"
 fi
@@ -84,4 +150,14 @@ if [ $LEARNING_TASK = "reduce_layers" ]; then
   for IMAGE in $INPUT_IMAGE_FOLDER/*.tif; do
     bash remove_layers.sh $IMAGE $NUM_LAYERS
   done
+fi
+
+if [ $LEARNING_TASK = "inference" ]; then
+	# run inference on new images using pre-trained models
+	echo "Running inference..."
+	echo "Models: $MODELS_PATH"
+	echo "Images: $IMAGES_PATH" 
+	echo "Output: $INFERENCE_OUTPUT_PATH"
+	
+	python inference.py "$MODELS_PATH" "$IMAGES_PATH" "$INFERENCE_OUTPUT_PATH"
 fi 

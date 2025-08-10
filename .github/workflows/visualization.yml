@@ -1,4 +1,4 @@
-name: Docker Build and Test
+name: Data Visualization
 
 on:
   push:
@@ -7,9 +7,9 @@ on:
     branches: [ main, master ]
 
 jobs:
-  docker-build-and-test:
+  data-visualization:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     
     steps:
     - name: Checkout code
@@ -33,20 +33,6 @@ jobs:
       run: |
         mkdir -p examples/test_images_results
         
-    - name: Run feature generation test
-      timeout-minutes: 15
-      run: |
-        echo "Running feature generation test..."
-        docker compose run --rm imagine-test-generate-features
-        echo "SUCCESS: Feature generation test completed!"
-        
-    - name: Run learning benchmark test
-      timeout-minutes: 15
-      run: |
-        echo "Running learning benchmark test..."
-        docker compose run --rm imagine-test-learning-benchmark
-        echo "SUCCESS: Learning benchmark test completed!"
-        
     - name: Run data visualization test
       timeout-minutes: 15
       run: |
@@ -69,6 +55,6 @@ jobs:
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: test-results
+        name: data-visualization-results
         path: examples/test_images_results/
         retention-days: 30

@@ -40,13 +40,71 @@ docker compose build --no-cache
 ## Testing if everything works
 For testing purposes, commands below use predefined paths to data. The paths are specified in `docker-compose.yml` - do not change them.
 Run the following commands one after another and wait for each of them to finish. The testing data is available in `./examples/test_images` folder. 
+
+### Basic functionality tests
 All commands should run and produce results (in folder `./examples/test_images_results`) without errors:
 
 ```sh
-1. docker compose run --rm imagine-test-generate-features
-2. docker compose run --rm imagine-test-learning-benchmark
-3. docker compose run --rm imagine-test-data-visualization
+# 1. Generate features from test images
+docker compose run --rm imagine-test-generate-features
+
+# 2. Run learning benchmark (classification without model saving)
+docker compose run --rm imagine-test-learning-benchmark
+
+# 3. Generate data visualizations
+docker compose run --rm imagine-test-data-visualization
 ```
+
+### Expected results after basic tests:
+- `./examples/test_images_results/data.tsv` - Final dataset with extracted features
+- `./examples/test_images_results/rankings.tsv` - Feature importance rankings  
+- `./examples/test_images_results/classification.tsv` - Classification results
+- `./examples/test_images_results/visualizations/` - Generated visualization plots
+
+### New inference functionality tests
+To test the complete inference pipeline including model saving and inference on new data:
+
+```sh
+# 4. Run learning benchmark with model saving (required for inference)
+docker compose run --rm imagine-test-learning-benchmark-save-models
+
+# 5. Run inference using the saved models on the same test images (parameter mode)
+docker compose run --rm imagine-test-inference
+
+# 6. Run inference using environment variables (environment variable mode)
+docker compose run --rm imagine-test-inference-env
+```
+
+### Expected results after inference tests:
+- `./examples/test_images_results/models/` - Directory containing saved trained models:
+  - `*_model.joblib` - Trained model files
+  - `*_metadata.joblib` - Model metadata files with feature names and target mappings
+- `./examples/test_images_results/inference_output/` - Directory containing inference results (parameter mode):
+  - `*_predictions.tsv` - Predictions for each input image with confidence scores
+  - `*_probabilities.tsv` - Prediction probabilities if available
+  - `inference_summary.tsv` - Summary of predictions from all models
+- `./examples/test_images_results/inference_output_env/` - Directory containing environment variable inference results:
+  - Same structure as above but from environment variable mode test
+
+### Verification commands:
+You can verify the tests completed successfully by checking the generated files:
+
+```sh
+# Check that basic results exist
+ls -la examples/test_images_results/
+ls -la examples/test_images_results/visualizations/
+
+# Check that models were saved (after step 4)
+ls -la examples/test_images_results/models/
+
+# Check that inference results exist (after step 5 - parameter mode)  
+ls -la examples/test_images_results/inference_output/
+
+# Check that environment variable inference results exist (after step 6)
+ls -la examples/test_images_results/inference_output_env/
+```
+
+**Success criteria**: All commands should complete without errors, and the expected directories and files should be created with non-zero file sizes.
 
 
 ## Mounting volumes of data into the containers
@@ -103,7 +161,7 @@ docker compose run --rm imagine 4 datafile.tsv 10 generate_features
 The results of this task will be in the folder, that is mapped to the `/imagine/results` within the container (`/c/my_folder/test_results` in this case).
 
 ### Task: Learning benchmark
-Learning benchmark contains the gist of this software - a collection of machine learning algorithms that attampt to approximate the strain based on thousands of generated features. Current implementation is fully automated; by running the command below, you can simulate how well the algorithm learns to associate labels with feature space. The run includes the currently selected tree-based ensembles, as well as simple baselines (majority) that should be indicative of how well a naive approach would perform.
+Learning benchmark contains the gist of this software - a collection of machine learning algorithms that attempt to approximate the strain based on thousands of generated features. Current implementation is fully automated; by running the command below, you can simulate how well the algorithm learns to associate labels with feature space. The run includes the currently selected tree-based ensembles, as well as simple baselines (majority) that should be indicative of how well a naive approach would perform.
 
 This task has the following parameters:
 - ...
@@ -117,6 +175,15 @@ docker compose run --rm imagine 4 datafile.tsv 10 learning_benchmark
 (i.e., we just replace "generate_features" with "learning_benchmark")
 
 The process will start from the working folder (`/imagine/results`) and conduct the basic machine learning benchmark.
+
+### Task: Learning benchmark with model saving
+This is identical to the learning benchmark task above, but additionally saves the trained models for later use in inference. Use this task when you plan to apply the trained models to new data.
+
+```sh
+docker compose run --rm imagine 4 datafile.tsv 10 learning_benchmark_save_models
+```
+
+The trained models will be saved in the `models/` subdirectory of your results folder.
 
 ## How results look like/interpretation
 
@@ -163,3 +230,73 @@ docker compose run --rm imagine 4 data.tsv 50 data_visualization
 ```
 
 This will produce a folder called `tmp` in the results folder. The folder contains all visualizations of top n features, grouped by strains.
+
+## Task: Inference
+
+To run inference on new images using pre-trained models, use the `inference` task. This requires that models have been previously trained using the `learning_benchmark_save_models` task.
+
+### Environment Variable Mode (Recommended)
+
+For easier configuration and better integration with Docker Compose workflows, you can use environment variables to control inference paths. Create or update your `.env` file:
+
+```env
+# Main workflow paths
+IMAGINE_IMAGES=./training_images
+IMAGINE_RESULTS=./training_results
+
+# Inference-specific paths
+IMAGINE_INFERENCE_INPUTS=./new_images_to_classify
+IMAGINE_INFERENCE_OUTPUTS=./inference_results
+```
+
+Then run inference using the environment variables:
+
+```sh
+docker compose run --rm imagine 4 - 10 inference
+```
+
+The inference task will use:
+- Models from `${IMAGINE_RESULTS}/models` (where training models are stored)
+- Input images from `${IMAGINE_INFERENCE_INPUTS}`
+- Output results to `${IMAGINE_INFERENCE_OUTPUTS}`
+
+### Parameter Mode (Backward Compatible)
+
+You can also specify paths directly as parameters:
+
+```sh
+docker compose run --rm imagine 4 - 10 inference /path/to/models /path/to/images /path/to/output
+```
+
+### Example workflow:
+
+1. First, train models on your data:
+```sh
+# Set paths in .env file
+# IMAGINE_IMAGES=./my_training_images
+# IMAGINE_RESULTS=./my_training_results
+
+# Generate features and train models with model saving enabled
+docker compose run --rm imagine 4 datafile.tsv 10 generate_features
+docker compose run --rm imagine 4 datafile.tsv 10 learning_benchmark_save_models
+```
+
+2. Then use the trained models for inference on new images:
+```sh
+# Update .env file for inference
+# IMAGINE_INFERENCE_INPUTS=./new_images_to_classify
+# IMAGINE_INFERENCE_OUTPUTS=./inference_results
+
+# Run inference using environment variables
+docker compose run --rm imagine 4 - 10 inference
+
+# Or use direct parameters (backward compatible)
+docker compose run --rm imagine 4 - 10 inference ./my_training_results/models ./new_images ./inference_results
+```
+
+The inference results will include:
+- `{model_name}_predictions.tsv`: Predicted classes for each image
+- `{model_name}_probabilities.tsv`: Prediction probabilities (if available) 
+- `inference_summary.tsv`: Summary of predictions from all models
+
+**Note**: The inference mode automatically handles feature extraction from .tif images using the same pipeline as training, ensuring consistency between training and inference.

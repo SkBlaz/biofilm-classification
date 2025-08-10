@@ -1,0 +1,60 @@
+name: Feature Generation
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  feature-generation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Build Docker image
+      run: |
+        echo "Building Docker image..."
+        docker compose build --no-cache
+        
+    - name: Verify Docker image was built
+      run: |
+        echo "Verifying Docker image exists..."
+        docker images jsi/imagine:latest
+        echo "SUCCESS: Docker image built successfully!"
+
+    - name: Create test results directory
+      run: |
+        mkdir -p examples/test_images_results
+        
+    - name: Run feature generation test
+      timeout-minutes: 15
+      run: |
+        echo "Running feature generation test..."
+        docker compose run --rm imagine-test-generate-features
+        echo "SUCCESS: Feature generation test completed!"
+        
+    - name: Verify test results were generated
+      run: |
+        echo "Checking if test results were generated..."
+        if [ -d "examples/test_images_results" ] && [ "$(ls -A examples/test_images_results)" ]; then
+          echo "SUCCESS: Test results directory is not empty"
+          ls -la examples/test_images_results/
+        else
+          echo "WARNING: Test results directory is empty or doesn't exist"
+          exit 1
+        fi
+        
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: feature-generation-results
+        path: examples/test_images_results/
+        retention-days: 30

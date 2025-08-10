@@ -1,0 +1,67 @@
+name: Learning Benchmark
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  learning-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Build Docker image
+      run: |
+        echo "Building Docker image..."
+        docker compose build --no-cache
+        
+    - name: Verify Docker image was built
+      run: |
+        echo "Verifying Docker image exists..."
+        docker images jsi/imagine:latest
+        echo "SUCCESS: Docker image built successfully!"
+
+    - name: Create test results directory
+      run: |
+        mkdir -p examples/test_images_results
+        
+    - name: Run learning benchmark test
+      timeout-minutes: 15
+      run: |
+        echo "Running learning benchmark test..."
+        docker compose run --rm imagine-test-learning-benchmark
+        echo "SUCCESS: Learning benchmark test completed!"
+        
+    - name: Run learning benchmark with model saving test
+      timeout-minutes: 15
+      run: |
+        echo "Running learning benchmark with model saving test..."
+        docker compose run --rm imagine-test-learning-benchmark-save-models
+        echo "SUCCESS: Learning benchmark with model saving test completed!"
+        
+    - name: Verify models were saved
+      run: |
+        echo "Checking if models were saved..."
+        if [ -d "examples/test_images_results/models" ] && [ "$(ls -A examples/test_images_results/models)" ]; then
+          echo "SUCCESS: Models directory contains files"
+          ls -la examples/test_images_results/models/
+        else
+          echo "ERROR: Models directory is empty or doesn't exist"
+          exit 1
+        fi
+        
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: learning-benchmark-results
+        path: examples/test_images_results/
+        retention-days: 30

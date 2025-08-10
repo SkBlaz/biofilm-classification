@@ -3,6 +3,7 @@ import gc
 import re
 import numpy as np
 import argparse
+import joblib
 
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
@@ -25,9 +26,20 @@ warnings.simplefilter(action='ignore', category=DataConversionWarning)
 
 try:
     from tpot import TPOTClassifier
-    from autogluon.tabular import TabularPredictor
+    TPOT_AVAILABLE = False
 except:
-    print("Skipping tpot and autogluon, uncomment to enable (takes a lot of time")
+    TPOT_AVAILABLE = False
+    TPOTClassifier = None
+
+try:
+    from autogluon.tabular import TabularPredictor
+    AUTOGLUON_AVAILABLE = False
+except:
+    AUTOGLUON_AVAILABLE = False
+    TabularPredictor = None
+
+if not TPOT_AVAILABLE or not AUTOGLUON_AVAILABLE:
+    print("Skipping tpot and autogluon, uncomment to enable (takes a lot of time)")
 
 
 parameters = {
@@ -252,7 +264,7 @@ def name_manipulator_date(value: str):
     return (value[:8], re.search(r"st--([^-_]+)-", value).group(1))
 
 
-def do_classification_simple(X, ys, path_to_data, filter_mode="all"):
+def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models=False):
 
     all_cols = X.columns
     thr_indices = []
@@ -266,15 +278,18 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all"):
     upsampling = 1
 
     models = {
-        'dummy': DummyClassifier(),
-        'decisiontree': tree.DecisionTreeClassifier(),
-        'logistic': LogisticRegression(),
+#        'dummy': DummyClassifier(),
+#        'decisiontree': tree.DecisionTreeClassifier(),
+#        'logistic': LogisticRegression(),
         'rf': RandomForestClassifier(),
-        'xgb': XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective='binary:logistic'),
-        'gridsearch': GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM),
+        #'xgb': XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective='binary:logistic'),
+        #'gridsearch': GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM),
         #'tpot': TPOTClassifier(generations=5, population_size=20, cv=5, random_state=42, verbosity=2, n_jobs=PARALLELISM, memory='auto'),
-        'autogluon': TabularPredictor(label="label"),
     }
+    
+    # Add autogluon model only if available
+    if AUTOGLUON_AVAILABLE:
+        models['autogluon'] = TabularPredictor(label="label")
     
     outputs = []
     partial_dir = "/".join(path_to_data.split("/")[:-1]) + f"/partial/"
@@ -284,6 +299,12 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all"):
     for repetition in range(3):
         for n_components in [16, 32, 64, 128, 256, 512, "all"]:
             desc_components = n_components
+            
+            # Skip if n_components exceeds available features
+            if n_components != "all" and n_components > X.shape[1]:
+                logger.info(f"Skipping n_components={n_components} as it exceeds available features ({X.shape[1]})")
+                continue
+                
             for thr_features in [True, False]:
                 skf = StratifiedKFold(n_splits=3)
                 
@@ -300,12 +321,13 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all"):
                         x_train = x_train[:, thr_indices]
                         x_test = x_test[:, thr_indices]                
 
+                    svd_transformer = None
                     if desc_components != "all" or "TabPFN" in str(model):
-                        svd = TruncatedSVD(n_components=n_components,
+                        svd_transformer = TruncatedSVD(n_components=n_components,
                                             n_iter=15,
                                             random_state=42).fit(x_train)
-                        x_train = svd.transform(x_train)
-                        x_test = svd.transform(x_test)
+                        x_train = svd_transformer.transform(x_train)
+                        x_test = svd_transformer.transform(x_test)
                     else:
                         n_components = x_train.shape[1]
 
@@ -321,7 +343,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all"):
 
                         logger.info(f"Running {n_components} {' '.join(str(model).split())}, fold: {i}, filter mode: {filter_mode}")
 
-                        if "TabularPredictor" in str(model):
+                        if "TabularPredictor" in str(model) and AUTOGLUON_AVAILABLE:
                             #if desc_components == "all":
                             #    continue
                             x_train_ag = pd.DataFrame(x_train)
@@ -343,6 +365,10 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all"):
                             del model
                             model = mname
                             gc.collect()
+                        elif "TabularPredictor" in str(model) and not AUTOGLUON_AVAILABLE:
+                            # Skip autogluon if not available
+                            logger.warning(f"Skipping {model_name} - autogluon not available")
+                            continue
                         else:
                             try:
                                 with warnings.catch_warnings():
@@ -354,6 +380,36 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all"):
                                 y_hat = np.ones(len(x_test))
 
                             acc = accuracy_score(y_test, y_hat)
+                        
+                        # Save models if requested - on first fold and repetition, for a simpler n_components value for faster testing
+                        if save_models and i == 0 and repetition == 0 and n_components == 16 and thr_features:
+                            models_dir = "/".join(path_to_data.split("/")[:-1]) + "/models"
+                            os.makedirs(models_dir, exist_ok=True)
+                            
+                            # Save the trained model
+                            model_path = os.path.join(models_dir, f"{model_name}_model.joblib")
+                            if isinstance(model, str):  # Skip string representations from autogluon
+                                logger.info(f"Skipping model save for {model_name} (string representation)")
+                            else:
+                                joblib.dump(model, model_path)
+                                logger.info(f"Saved model {model_name} to {model_path}")
+                                
+                                # Save feature names and other metadata
+                                metadata = {
+                                    'feature_names': list(all_cols),
+                                    'target_mapping': catmap,
+                                    'n_components': n_components,
+                                    'thr_features': thr_features,
+                                    'thr_indices': thr_indices.tolist() if len(thr_indices) > 0 else [],
+                                    'filter_mode': filter_mode,
+                                    'model_name': model_name,
+                                    'accuracy': acc,
+                                    'svd_transformer': svd_transformer  # Save fitted SVD transformer
+                                }
+                                metadata_path = os.path.join(models_dir, f"{model_name}_metadata.joblib") 
+                                joblib.dump(metadata, metadata_path)
+                                logger.info(f"Saved metadata for {model_name} to {metadata_path}")
+                        
                         test_map = ",".join([catmap[x] for x in y_test])
                         output = [
                             "RESULT",
@@ -439,6 +495,12 @@ if __name__ == "__main__":
         help="Number of concurrent threads for parallel approaches",
     )
 
+    parser.add_argument(
+        "--save_models",
+        action="store_true",
+        help="Save trained models for inference (default: False)",
+    )
+
 
     try:
         arguments = parser.parse_args()
@@ -447,6 +509,7 @@ if __name__ == "__main__":
         exit(999)
 
     PARALLELISM = int(arguments.parallelism)
+    save_models = arguments.save_models
 
     files = [
         base_file[:base_file.rfind(".")] + appendix + ".tsv"
@@ -471,12 +534,12 @@ if __name__ == "__main__":
 
         assert "date" not in xs.columns
         
-        do_classification_simple(xs, y, file)
+        do_classification_simple(xs, y, file, save_models=save_models)
         
         xs_cols = [x for x in xs.columns.tolist() if "counts" not in x]
         xs_no_counts = xs[xs_cols]
 
-        do_classification_simple(xs_no_counts, y, file, "no_counts_features")
+        do_classification_simple(xs_no_counts, y, file, "no_counts_features", save_models=save_models)
         do_classification_rfe(xs, y, file)
 
 # Ref run

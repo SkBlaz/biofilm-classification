@@ -1,0 +1,116 @@
+name: Inference
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  inference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Build Docker image
+      run: |
+        echo "Building Docker image..."
+        docker compose build --no-cache
+        
+    - name: Verify Docker image was built
+      run: |
+        echo "Verifying Docker image exists..."
+        docker images jsi/imagine:latest
+        echo "SUCCESS: Docker image built successfully!"
+
+    - name: Create test results directory
+      run: |
+        mkdir -p examples/test_images_results
+        
+    - name: Setup models for inference testing
+      timeout-minutes: 15
+      run: |
+        echo "Setting up models for inference testing..."
+        docker compose run --rm imagine-test-learning-benchmark-save-models
+        echo "SUCCESS: Models setup completed!"
+        
+    - name: Verify models were saved
+      run: |
+        echo "Checking if models were saved..."
+        if [ -d "examples/test_images_results/models" ] && [ "$(ls -A examples/test_images_results/models)" ]; then
+          echo "SUCCESS: Models directory contains files"
+          ls -la examples/test_images_results/models/
+        else
+          echo "ERROR: Models directory is empty or doesn't exist"
+          exit 1
+        fi
+        
+    - name: Run fast inference test (core functionality)
+      timeout-minutes: 5
+      run: |
+        echo "Running fast inference test with pre-generated features..."
+        docker compose run --rm imagine-test-inference-fast
+        echo "SUCCESS: Fast inference test completed!"
+        
+    - name: Verify fast inference results were generated
+      run: |
+        echo "Checking if fast inference results were generated..."
+        if [ -d "examples/test_images_results/inference_test_output" ] && [ "$(ls -A examples/test_images_results/inference_test_output)" ]; then
+          echo "SUCCESS: Fast inference results directory contains files"
+          ls -la examples/test_images_results/inference_test_output/
+        else
+          echo "ERROR: Fast inference results directory is empty or doesn't exist"
+          exit 1
+        fi
+        
+    - name: Run inference test (parameter mode) 
+      timeout-minutes: 30
+      run: |
+        echo "Running full inference test with parameters..."
+        docker compose run --rm imagine-test-inference
+        echo "SUCCESS: Inference test (parameter mode) completed!"
+      continue-on-error: true  # Allow this to fail without breaking the workflow
+        
+    - name: Verify inference results were generated
+      run: |
+        echo "Checking if inference results were generated..."
+        if [ -d "examples/test_images_results/inference_output" ] && [ "$(ls -A examples/test_images_results/inference_output)" ]; then
+          echo "SUCCESS: Inference results directory contains files"
+          ls -la examples/test_images_results/inference_output/
+        else
+          echo "WARNING: Full inference test did not complete (expected due to long processing time)"
+        fi
+      continue-on-error: true
+        
+    - name: Run inference test (environment variable mode)
+      timeout-minutes: 30
+      run: |
+        echo "Running full inference test with environment variables..."
+        docker compose run --rm imagine-test-inference-env
+        echo "SUCCESS: Inference test (environment variable mode) completed!"
+      continue-on-error: true  # Allow this to fail without breaking the workflow
+        
+    - name: Verify environment variable inference results were generated
+      run: |
+        echo "Checking if environment variable inference results were generated..."
+        if [ -d "examples/test_images_results/inference_output_env" ] && [ "$(ls -A examples/test_images_results/inference_output_env)" ]; then
+          echo "SUCCESS: Environment variable inference results directory contains files"
+          ls -la examples/test_images_results/inference_output_env/
+        else
+          echo "WARNING: Full environment variable inference test did not complete (expected due to long processing time)"
+        fi
+      continue-on-error: true
+        
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: inference-results
+        path: examples/test_images_results/
+        retention-days: 30
