@@ -20,7 +20,7 @@ if [ $# -lt 4 ]; then
   echo -e "\t\t<nb parallel jobs (4)>"
   echo -e "\t\t<dataset name (datafile.tsv)>"
   echo -e "\t\t<top features to visualize (10)>"
-  echo -e "\t\t<task (generate_features | learning_benchmark | learning_benchmark_save_models | data_visualization | inference)>"
+  echo -e "\t\t<task (generate_features | generate_features_lite | learning_benchmark | learning_benchmark_save_models | data_visualization | inference)>"
   echo -e "\t\t[--all_learners (optional: enable all ML algorithms)]"
   echo
   echo
@@ -120,6 +120,22 @@ if [ $LEARNING_TASK = "generate_features" ]; then
 	mkdir -p "${OUTPUT_RESULTS_FOLDER}"/{feature_generator,raw,analysis,visualizations}
 
 	ls "${INPUT_IMAGE_FOLDER}"/*.tif | awk -v res=$RESULTS_FOLDER_FEATURE_GENERATOR '{print "python feature_generator.py --outfolder " res " --file "$1}' | parallel --progress --verbose -j"${INPUT_PARALLELISM}"
+
+	# creating a dataset from images
+	python create_joint_df.py "${RESULTS_FOLDER_FEATURE_GENERATOR}" "${RESULTS_FOLDER_RAW}"
+
+	# Compute aggregated features
+	python analysis.py "${RESULTS_FOLDER_RAW}" "${RESULTS_FOLDER_ANALYSIS}"
+
+	# Create the final DF
+	python create_final_df_from_results.py "${RESULTS_FOLDER_ANALYSIS}" "${RESULTS_CREATE_DF}"
+fi
+
+if [ $LEARNING_TASK = "generate_features_lite" ]; then
+	rm -rvf "${OUTPUT_RESULTS_FOLDER}/*"
+	mkdir -p "${OUTPUT_RESULTS_FOLDER}"/{feature_generator,raw,analysis,visualizations}
+
+	ls "${INPUT_IMAGE_FOLDER}"/*.tif | awk -v res=$RESULTS_FOLDER_FEATURE_GENERATOR '{print "python feature_generator_lite.py --outfolder " res " --file "$1}' | parallel --progress --verbose -j"${INPUT_PARALLELISM}"
 
 	# creating a dataset from images
 	python create_joint_df.py "${RESULTS_FOLDER_FEATURE_GENERATOR}" "${RESULTS_FOLDER_RAW}"
