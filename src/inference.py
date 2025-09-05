@@ -95,8 +95,8 @@ def format_predictions(models, metadata, X):
                 # Convert prediction back to original label if mapping available
                 if 'target_mapping' in meta:
                     target_mapping = meta['target_mapping']
-                    code_to_label = {v: k for k, v in target_mapping.items()}
-                    prediction = code_to_label.get(prediction, prediction)
+                    # target_mapping is already code->label mapping
+                    prediction = target_mapping.get(prediction, prediction)
                 
                 result[f'{model_name}_prediction'] = prediction
                 result[f'{model_name}_confidence'] = confidence
@@ -328,9 +328,8 @@ def run_inference(models, metadata, features_file, output_dir):
                 # Convert predictions back to original labels if mapping available
                 if 'target_mapping' in meta:
                     target_mapping = meta['target_mapping'] 
-                    # Reverse the mapping (from codes to labels)
-                    code_to_label = {v: k for k, v in target_mapping.items()}
-                    predictions = [code_to_label.get(pred, pred) for pred in predictions]
+                    # target_mapping is already code->label mapping
+                    predictions = [target_mapping.get(pred, pred) for pred in predictions]
                 
                 # Store predictions
                 all_predictions[model_name] = {
