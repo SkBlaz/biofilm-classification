@@ -37,7 +37,7 @@ if __name__ == "__main__":
             for el in namespace_identifiers:
                 sample_name = sample_name.replace(el, "")
             sample_name = sample_name.replace(".txt", "")
-            sample_name = "--".join(sample_name.split("_")[:14])
+            sample_name = "--".join(sample_name.split("_"))
 
             df["sampleName"] = sample_name
             all_dfs[namespace].append(df.iloc[:100000])

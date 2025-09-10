@@ -364,8 +364,18 @@ def run_inference(models, metadata, features_file, output_dir):
         
         # Save probabilities if available
         if results['probabilities'] is not None:
+            # Get column names using target_mapping if available
+            meta = metadata.get(model_name, {})
+            column_names = None
+            if 'target_mapping' in meta:
+                # target_mapping is code->label mapping
+                target_mapping = meta['target_mapping']
+                num_classes = results['probabilities'].shape[1]
+                column_names = [target_mapping.get(i, f"class_{i}") for i in range(num_classes)]
+            
             prob_df = pd.DataFrame(results['probabilities'], 
-                                 index=results['sample_names'])
+                                 index=results['sample_names'],
+                                 columns=column_names)
             prob_file = os.path.join(output_dir, f"{model_name}_probabilities.tsv") 
             prob_df.to_csv(prob_file, sep="\t")
             logger.info(f"Saved probabilities for {model_name} to {prob_file}")
