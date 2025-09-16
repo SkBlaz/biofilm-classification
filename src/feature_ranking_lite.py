@@ -396,7 +396,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                             acc = accuracy_score(y_test, y_hat)
                         
                         # Save models if requested - on first fold and repetition, for a simpler n_components value for faster testing
-                        if save_models and i == 0 and repetition == 0 and n_components == 16 and thr_features:
+                        if save_models and i == 0 and repetition == 0 and n_components == 512 and thr_features:
                             models_dir = "/".join(path_to_data.split("/")[:-1]) + "/models"
                             os.makedirs(models_dir, exist_ok=True)
                             
