@@ -16,41 +16,37 @@ if __name__ == "__main__":
     for fname in tqdm.tqdm(glob.glob(f"{results_raw_folder}/*")):
         s3d = fname
         NAME = "SUMMARY" + fname.split("/")[-1].replace(".txt", "")
-        logging.info("Processing {fname} -- computing aggregates")
+        logging.info(f"Processing {fname} -- computing aggregates")
         try:
             for statistic in [
                 "median",
-                "min",
+                "min", 
                 "max",
                 "mean",
                 "q10",
-                "q25",
+                "q25", 
                 "q75",
                 "q90",
                 "std",
                 "var",
             ]:
                 dfx = pd.read_csv(s3d, sep="\t")
-                if statistic == "median":
-                    dfx2 = dfx.groupby(["sampleName"]).median().reset_index()
-                elif statistic == "min":
-                    dfx2 = dfx.groupby(["sampleName"]).min().reset_index()
-                elif statistic == "max":
-                    dfx2 = dfx.groupby(["sampleName"]).max().reset_index()
-                elif statistic == "mean":
-                    dfx2 = dfx.groupby(["sampleName"]).mean().reset_index()
-                elif statistic == "q10":
-                    dfx2 = dfx.groupby(["sampleName"]).quantile(0.10).reset_index()
-                elif statistic == "q25":
-                    dfx2 = dfx.groupby(["sampleName"]).quantile(0.25).reset_index()
-                elif statistic == "q75":
-                    dfx2 = dfx.groupby(["sampleName"]).quantile(0.75).reset_index()
-                elif statistic == "q90":
-                    dfx2 = dfx.groupby(["sampleName"]).quantile(0.90).reset_index()
-                elif statistic == "std":
-                    dfx2 = dfx.groupby(["sampleName"]).std().reset_index()
-                elif statistic == "var":
-                    dfx2 = dfx.groupby(["sampleName"]).var().reset_index()
+                
+                # Map statistic names to pandas methods
+                stat_methods = {
+                    "median": lambda df: df.groupby(["sampleName"]).median(),
+                    "min": lambda df: df.groupby(["sampleName"]).min(),
+                    "max": lambda df: df.groupby(["sampleName"]).max(),
+                    "mean": lambda df: df.groupby(["sampleName"]).mean(),
+                    "q10": lambda df: df.groupby(["sampleName"]).quantile(0.10),
+                    "q25": lambda df: df.groupby(["sampleName"]).quantile(0.25),
+                    "q75": lambda df: df.groupby(["sampleName"]).quantile(0.75),
+                    "q90": lambda df: df.groupby(["sampleName"]).quantile(0.90),
+                    "std": lambda df: df.groupby(["sampleName"]).std(),
+                    "var": lambda df: df.groupby(["sampleName"]).var(),
+                }
+                
+                dfx2 = stat_methods[statistic](dfx).reset_index()
 
                 outfile = f"{results_analysis_folder}/{NAME}_{statistic}.txt"
                 logging.info(f"writing {outfile}")

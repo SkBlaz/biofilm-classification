@@ -22,11 +22,8 @@ if __name__ == "__main__":
     feature_generator_folder = sys.argv[1]
     results_raw_folder = sys.argv[2]
 
-    # dpath = "../raw_dat_march_23/wetransfer_d_01022023_o_nj_p_d04_s_lm_st_394_gm_lb_gms_ns_sub_nc_t_24_ch_sy9_tret_1um_ista_pozicija-lsm_2023-03-10_1214"
     all_files = glob.glob(f"{feature_generator_folder}/*.txt")
-    #    namespace_identifiers = ["CustomAlgos"]
     namespace_identifiers = ["CustomAlgos", "DiffGlobal"]
-    #    namespace_identifiers = ["vol3D", "surf3D", "Area2DLayers", "histAll", "CustomAlgos"]
 
     all_dfs = defaultdict(list)
     for fname in tqdm.tqdm(all_files[:]):
