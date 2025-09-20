@@ -26,15 +26,15 @@ warnings.simplefilter(action='ignore', category=DataConversionWarning)
 
 try:
     from tpot import TPOTClassifier
-    TPOT_AVAILABLE = False
-except:
+    TPOT_AVAILABLE = True
+except ImportError:
     TPOT_AVAILABLE = False
     TPOTClassifier = None
 
 try:
     from autogluon.tabular import TabularPredictor
-    AUTOGLUON_AVAILABLE = False
-except:
+    AUTOGLUON_AVAILABLE = True
+except ImportError:
     AUTOGLUON_AVAILABLE = False
     TabularPredictor = None
 
@@ -45,8 +45,8 @@ if not TPOT_AVAILABLE or not AUTOGLUON_AVAILABLE:
 parameters = {
     'n_neighbors': list(range(3, 50, 2)),  # Test odd values for better balancing in ties
     'metric': ['minkowski', 'euclidean', 'manhattan', 'chebyshev', 'hamming', 'jaccard'],
-    'weights': ['uniform', 'distance'],   # Test both weighting strategies
-    'p': [1, 2, 3],                       # Minkowski distance with Manhattan (1), Euclidean (2), etc.
+    'weights': ['uniform', 'distance'],  # Test both weighting strategies
+    'p': [1, 2, 3],  # Minkowski distance with Manhattan (1), Euclidean (2), etc.
 }
 
 
@@ -89,6 +89,7 @@ class Ranking:
     """
     Superclass of feature ranking methods. Every subclass must implement compute_scores.
     """
+
     def __init__(self, name):
         self.name = name
         self.features: list[str] | None = None
@@ -108,8 +109,7 @@ class Ranking:
             self.scores[i] = sum(partial_scores[c]
                                  for c in feature_groups[c_original])
 
-    def compute_scores(self, xs: pd.DataFrame,
-                       y: pd.Series) -> dict[str, float]:
+    def compute_scores(self, xs: pd.DataFrame, y: pd.Series) -> dict[str, float]:
         """
         Actually computes the scores for input features ``xs`` and target values ``y``
 
@@ -126,6 +126,7 @@ class ForestRanking(Ranking):
     """
     Random forest feature ranking via bagging of 200 trees (by default).
     """
+
     def __init__(self, n_estimators=200, max_features=1.0):
         super().__init__(f"RandomForest(n={n_estimators}, p={max_features})")
         self.model = RandomForestClassifier(n_estimators=n_estimators,
@@ -154,7 +155,7 @@ def load_data(path_to_data: str):
 
     data = data.copy()
 
-    # Using haccs to get poss aggregated ..
+    # Using hack to get positions aggregated ..
     data['noPos'] = [
         "--".join([j for j in x.split("--") if "pos" not in j])
         for x in data.index.values.tolist()
@@ -167,7 +168,6 @@ def load_data(path_to_data: str):
     # data = data.groupby('noPos').agg(fil)
     data.to_csv(path_to_data + "intermediary_aggregated.tsv", sep="\t")
     return data.drop(['noPos'], axis=1)
-#    return data
 
 
 def compute_rankings(data: str,
@@ -200,7 +200,6 @@ def compute_rankings(data: str,
         logger.info(f"Loading ranking from {output_file}")
         scores_data = pd.read_csv(output_file, sep="\t")
         return x_data, y_data, scores_data
-    
     rf_model = ForestRanking()
     models = [rf_model]
 
@@ -285,18 +284,14 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
             'rf': RandomForestClassifier(),
             'xgb': XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective='binary:logistic'),
             'gridsearch': GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM),
-            #'tpot': TPOTClassifier(generations=5, population_size=20, cv=5, random_state=42, verbosity=2, n_jobs=PARALLELISM, memory='auto'),
         }
-        
         # Add TPOT only if available
         if TPOT_AVAILABLE:
             models['tpot'] = TPOTClassifier(generations=5, population_size=20, cv=5, random_state=42, verbosity=2, n_jobs=PARALLELISM, memory='auto')
     else:
-        # Default behavior: only RandomForest (fast)
         models = {
             'rf': RandomForestClassifier(),
         }
-    
     # Add autogluon model only if available
     if AUTOGLUON_AVAILABLE:
         models['autogluon'] = TabularPredictor(label="label")
@@ -305,23 +300,17 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
     partial_dir = "/".join(path_to_data.split("/")[:-1]) + f"/partial/"
     if not os.path.isdir(partial_dir):
         os.mkdir(partial_dir)
-        
     for repetition in range(3):
         for n_components in [16, 32, 64, 128, 256, 512, "all"]:
             desc_components = n_components
-            
             # Skip if n_components exceeds available features
             if n_components != "all" and n_components > X.shape[1]:
                 logger.info(f"Skipping n_components={n_components} as it exceeds available features ({X.shape[1]})")
                 continue
-                
             for thr_features in [True, False]:
                 skf = StratifiedKFold(n_splits=3)
                 
                 for i, (train_index, test_index) in enumerate(skf.split(X, y)):
-
-                    
-
                     x_train = X[train_index]
                     x_test = X[test_index]
                     y_train = y[train_index]
@@ -329,11 +318,10 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
 
                     if not thr_features and desc_components == "all":
                         x_train = x_train[:, thr_indices]
-                        x_test = x_test[:, thr_indices]                
+                        x_test = x_test[:, thr_indices]
 
                     for model_name, model in models.items():
                         partial_path = partial_dir + f"{filter_mode}_partial_{repetition}_n{desc_components}_thr{thr_features}_{model_name}_fold{i}.tsv"
-                        
                         if os.path.isfile(partial_path):
                             with open(partial_path) as f:
                                 output = f.read().strip().split('\t')
@@ -347,7 +335,6 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                         x_train_model = x_train.copy()
                         x_test_model = x_test.copy()
                         svd_transformer = None
-                        
                         if desc_components != "all" or "TabPFN" in str(model):
                             svd_transformer = TruncatedSVD(n_components=n_components,
                                                 n_iter=15,
@@ -358,8 +345,6 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                             n_components = x_train_model.shape[1]
 
                         if "TabularPredictor" in str(model) and AUTOGLUON_AVAILABLE:
-                            #if desc_components == "all":
-                            #    continue
                             x_train_ag = pd.DataFrame(x_train_model)
                             x_test_ag = pd.DataFrame(x_test_model)
                             y_train_ag = pd.DataFrame(y_train)
@@ -372,7 +357,6 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
 
                             model = TabularPredictor(label="label")
                             predictor = model.fit(train_data, ag_args_fit={'num_cpus': PARALLELISM}) if PARALLELISM != -1 else model.fit(train_data)
-                            #predictor = model.fit(train_data)
                             y_hat = predictor.predict(test_data)
                             acc = accuracy_score(y_test_ag, y_hat)
                             mname = str(model)
@@ -394,14 +378,12 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                                 y_hat = np.ones(len(x_test_model))
 
                             acc = accuracy_score(y_test, y_hat)
-                        
                         # Save models if requested - on first fold and repetition, for the best available n_components value
                         # Use 512 for large datasets, or 16 for small datasets (when 512 is not available)
                         best_n_components = 512 if X.shape[1] >= 512 else 16
                         if save_models and i == 0 and repetition == 0 and n_components == best_n_components and thr_features:
                             models_dir = "/".join(path_to_data.split("/")[:-1]) + "/models"
                             os.makedirs(models_dir, exist_ok=True)
-                            
                             # Save the trained model
                             model_path = os.path.join(models_dir, f"{model_name}_model.joblib")
                             if isinstance(model, str):  # Skip string representations from autogluon
@@ -409,7 +391,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                             else:
                                 joblib.dump(model, model_path)
                                 logger.info(f"Saved model {model_name} to {model_path}")
-                                
+
                                 # Save feature names and other metadata
                                 metadata = {
                                     'feature_names': list(all_cols),
@@ -422,10 +404,9 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                                     'accuracy': acc,
                                     'svd_transformer': svd_transformer  # Save fitted SVD transformer
                                 }
-                                metadata_path = os.path.join(models_dir, f"{model_name}_metadata.joblib") 
+                                metadata_path = os.path.join(models_dir, f"{model_name}_metadata.joblib")
                                 joblib.dump(metadata, metadata_path)
                                 logger.info(f"Saved metadata for {model_name} to {metadata_path}")
-                        
                         test_map = ",".join([catmap[x] for x in y_test])
                         output = [
                             "RESULT",
@@ -449,26 +430,23 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
 
 
 def do_classification_rfe(xs, y, path_to_data, tagname="all"):
-
     # Do feature ranking on everything (yeah, this is just an ablation)
     # Do learning with top n
     model = RandomForestClassifier()
     model.fit(xs, y)
     importances = np.array(model.feature_importances_)
     sorted_indices = np.argsort(importances)[::-1]
-        
+
     skf = StratifiedKFold(n_splits=3)
     X_init = xs.values
     y_init = pd.Categorical(y.values).codes
     out_df = []
     for j in range(1, len(sorted_indices), 20):
-
         X = X_init[:, sorted_indices[:j]]
         y = y_init
 
         accs = []
         for i, (train_index, test_index) in enumerate(skf.split(X, y)):
-
             fresh_model = RandomForestClassifier()
 
             x_train = X[train_index]
@@ -478,7 +456,7 @@ def do_classification_rfe(xs, y, path_to_data, tagname="all"):
             y_test = y[test_index]
 
             fresh_model.fit(x_train, y_train)
-            y_hat = fresh_model.predict(x_test)        
+            y_hat = fresh_model.predict(x_test)
             acc = accuracy_score(y_test, y_hat)
             accs.append(acc)
         mean_acc = np.mean(accs)
@@ -486,7 +464,7 @@ def do_classification_rfe(xs, y, path_to_data, tagname="all"):
         out_df.append({"top_n": j, "accuracy": mean_acc})
     dfx_out = pd.DataFrame(out_df)
     fout = "/".join(path_to_data.split("/")[:-1]) + f"/ablation_ranking_{tagname}.tsv"
-    dfx_out.to_csv(fout, sep="\t")    
+    dfx_out.to_csv(fout, sep="\t")
     print(dfx_out)
 
 if __name__ == "__main__":
@@ -519,7 +497,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--all_learners",
-        action="store_true", 
+        action="store_true",
         help="Enable all machine learning algorithms (default: False, only RandomForest)",
     )
 
@@ -544,21 +522,21 @@ if __name__ == "__main__":
         logger.info(f"Processing {file}")
         data = load_data(file)
         dates = []
-        
+
         for date in data.index.tolist():
             dates.append(date.split("--")[0])
-        
-        data = data.copy()    
+
+        data = data.copy()
         data['date'] = dates
         xs, y, _ = compute_rankings(data, file, skip=False, target_col="date")
         data = data.drop('date', axis=1)
-        
+
         xs, y, _ = compute_rankings(data, file, skip=False, target_col="label")
 
         assert "date" not in xs.columns
-        
+
         do_classification_simple(xs, y, file, save_models=save_models, all_learners=all_learners)
-        
+
         xs_cols = [x for x in xs.columns.tolist() if "counts" not in x]
         xs_no_counts = xs[xs_cols]
 
