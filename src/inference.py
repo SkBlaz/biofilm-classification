@@ -331,11 +331,12 @@ def run_inference(models, metadata, features_file, output_dir):
                     # target_mapping is already code->label mapping
                     predictions = [target_mapping.get(pred, pred) for pred in predictions]
                 
-                # Store predictions
+                # Store predictions and processed features
                 all_predictions[model_name] = {
                     'predictions': predictions,
                     'probabilities': probabilities,
-                    'sample_names': X.index.tolist()
+                    'sample_names': X.index.tolist(),
+                    'processed_features': X  # Store the processed features dataframe
                 }
                 
                 logger.info(f"Successfully generated {len(predictions)} predictions with {model_name}")
@@ -379,6 +380,13 @@ def run_inference(models, metadata, features_file, output_dir):
             prob_file = os.path.join(output_dir, f"{model_name}_probabilities.tsv") 
             prob_df.to_csv(prob_file, sep="\t")
             logger.info(f"Saved probabilities for {model_name} to {prob_file}")
+        
+        # Save processed features if available
+        if 'processed_features' in results:
+            features_df = results['processed_features']
+            features_file = os.path.join(output_dir, f"{model_name}_features.tsv")
+            features_df.to_csv(features_file, sep="\t")
+            logger.info(f"Saved processed features for {model_name} to {features_file}")
     
     # Create summary file
     summary_data = []
