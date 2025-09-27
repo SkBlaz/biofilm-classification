@@ -396,9 +396,9 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                             acc = accuracy_score(y_test, y_hat)
                         
                         # Save models if requested - on first fold and repetition, for the best available n_components value
-                        # Use 512 for large datasets, or 16 for small datasets (when 512 is not available)
-                        best_n_components = 512 if X.shape[1] >= 512 else 16
-                        if save_models and i == 0 and repetition == 0 and n_components == best_n_components and thr_features:
+                        # Use 'all' for full feature set, 512 for large datasets, or 16 for small datasets
+                        best_n_components_options = ["all", 512 if X.shape[1] >= 512 else 16]
+                        if save_models and i == 0 and repetition == 0 and n_components in best_n_components_options and thr_features:
                             models_dir = "/".join(path_to_data.split("/")[:-1]) + "/models"
                             os.makedirs(models_dir, exist_ok=True)
                             
