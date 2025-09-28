@@ -327,7 +327,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                     y_train = y[train_index]
                     y_test = y[test_index]
 
-                    if not thr_features and desc_components == "all":
+                    if not thr_features and desc_components == "all" and len(thr_indices) > 0:
                         x_train = x_train[:, thr_indices]
                         x_test = x_test[:, thr_indices]                
 
@@ -396,9 +396,9 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                             acc = accuracy_score(y_test, y_hat)
                         
                         # Save models if requested - on first fold and repetition, for the best available n_components value
-                        # Use 'all' for full feature set, 512 for large datasets, or 16 for small datasets
-                        best_n_components_options = ["all", 512 if X.shape[1] >= 512 else 16]
-                        if save_models and i == 0 and repetition == 0 and n_components in best_n_components_options and thr_features:
+                        # Prioritize 'all' features over dimensionality reduction to ensure inference uses all features
+                        best_n_components_options = ["all"]
+                        if save_models and i == 0 and repetition == 0 and desc_components in best_n_components_options and thr_features:
                             models_dir = "/".join(path_to_data.split("/")[:-1]) + "/models"
                             os.makedirs(models_dir, exist_ok=True)
                             
@@ -414,7 +414,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                                 metadata = {
                                     'feature_names': list(all_cols),
                                     'target_mapping': catmap,
-                                    'n_components': n_components,
+                                    'n_components': desc_components,  # Save original desc_components ("all") not converted value
                                     'thr_features': thr_features,
                                     'thr_indices': thr_indices.tolist() if len(thr_indices) > 0 else [],
                                     'filter_mode': filter_mode,
