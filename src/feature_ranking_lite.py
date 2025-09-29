@@ -8,9 +8,9 @@ import joblib
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.dummy import DummyClassifier
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, make_scorer, f1_score
 from sklearn.decomposition import TruncatedSVD
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, RandomizedSearchCV
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from xgboost import XGBClassifier
@@ -57,6 +57,52 @@ logger = logging.getLogger(__name__)
 np.random.seed(123)
 
 PARALLELISM = -1
+
+
+def get_tuned_random_forest(random_state=42, n_iter=50, cv_folds=5, n_jobs=-1, verbose=0):
+    """
+    Create a tuned RandomForest classifier using RandomizedSearchCV.
+    
+    Args:
+        random_state: Random state for reproducibility
+        n_iter: Number of parameter combinations to try
+        cv_folds: Number of CV folds for hyperparameter search
+        n_jobs: Number of parallel jobs
+        verbose: Verbosity level
+    
+    Returns:
+        RandomizedSearchCV object that will find best RF parameters
+    """
+    # Base model
+    rf = RandomForestClassifier(random_state=random_state, n_jobs=n_jobs)
+    
+    # Hyperparameter grid from the issue description
+    param_dist = {
+        "n_estimators": np.arange(100, 1001, 100),
+        "max_features": ["sqrt", "log2", None] + list(np.arange(0.1, 0.6, 0.1)),
+        "max_depth": [None] + list(np.arange(5, 31, 5)),
+        "min_samples_split": np.arange(2, 21, 2),
+        "min_samples_leaf": np.arange(1, 11, 1),
+        "bootstrap": [True, False],
+        "class_weight": [None, "balanced", "balanced_subsample"]
+    }
+    
+    # Cross-validation setup
+    cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
+    
+    # Randomized search with weighted F1 score
+    rf_random = RandomizedSearchCV(
+        estimator=rf,
+        param_distributions=param_dist,
+        n_iter=n_iter,
+        scoring=make_scorer(f1_score, average="weighted"),
+        cv=cv,
+        verbose=verbose,
+        random_state=random_state,
+        n_jobs=n_jobs
+    )
+    
+    return rf_random
 
 
 def get_out_dir(sub="ranking_results"):
@@ -124,12 +170,16 @@ class Ranking:
 
 class ForestRanking(Ranking):
     """
-    Random forest feature ranking via bagging of 200 trees (by default).
+    Random forest feature ranking via bagging of trees with improved hyperparameters.
     """
     def __init__(self, n_estimators=200, max_features=1.0):
         super().__init__(f"RandomForest(n={n_estimators}, p={max_features})")
+        # Use slightly improved hyperparameters while keeping it fast for feature ranking
         self.model = RandomForestClassifier(n_estimators=n_estimators,
                                             max_features=max_features,
+                                            max_depth=20,  # Limit depth to prevent overfitting
+                                            min_samples_split=5,  # Require more samples to split
+                                            min_samples_leaf=2,  # Require more samples in leaf
                                             random_state=1234)
 
     def compute_scores(self, xs: pd.DataFrame, y: pd.Series):
@@ -282,7 +332,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
             'dummy': DummyClassifier(),
             'decisiontree': tree.DecisionTreeClassifier(),
             'logistic': LogisticRegression(),
-            'rf': RandomForestClassifier(),
+            'rf': get_tuned_random_forest(random_state=42, n_iter=50, cv_folds=3, n_jobs=PARALLELISM, verbose=1),  # Use tuned RF
             'xgb': XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective='binary:logistic'),
             'gridsearch': GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM),
             #'tpot': TPOTClassifier(generations=5, population_size=20, cv=5, random_state=42, verbosity=2, n_jobs=PARALLELISM, memory='auto'),
@@ -292,9 +342,9 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
         if TPOT_AVAILABLE:
             models['tpot'] = TPOTClassifier(generations=5, population_size=20, cv=5, random_state=42, verbosity=2, n_jobs=PARALLELISM, memory='auto')
     else:
-        # Default behavior: only RandomForest (fast)
+        # Default behavior: only RandomForest (fast) - now with hyperparameter tuning
         models = {
-            'rf': RandomForestClassifier(),
+            'rf': get_tuned_random_forest(random_state=42, n_iter=50, cv_folds=3, n_jobs=PARALLELISM, verbose=1),
         }
     
     # Add autogluon model only if available
@@ -407,8 +457,21 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                             if isinstance(model, str):  # Skip string representations from autogluon
                                 logger.info(f"Skipping model save for {model_name} (string representation)")
                             else:
-                                joblib.dump(model, model_path)
-                                logger.info(f"Saved model {model_name} to {model_path}")
+                                # For RandomizedSearchCV, save the best estimator and log best parameters
+                                if hasattr(model, 'best_estimator_'):
+                                    joblib.dump(model.best_estimator_, model_path)
+                                    logger.info(f"Saved best RF model {model_name} to {model_path}")
+                                    logger.info(f"Best RF parameters for {model_name}: {model.best_params_}")
+                                    logger.info(f"Best CV score for {model_name}: {model.best_score_}")
+                                    
+                                    # Store best parameters in metadata
+                                    best_params = model.best_params_
+                                    best_score = model.best_score_
+                                else:
+                                    joblib.dump(model, model_path)
+                                    logger.info(f"Saved model {model_name} to {model_path}")
+                                    best_params = None
+                                    best_score = None
                                 
                                 # Save feature names and other metadata
                                 metadata = {
@@ -420,7 +483,9 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                                     'filter_mode': filter_mode,
                                     'model_name': model_name,
                                     'accuracy': acc,
-                                    'svd_transformer': svd_transformer  # Save fitted SVD transformer
+                                    'svd_transformer': svd_transformer,  # Save fitted SVD transformer
+                                    'best_rf_params': best_params,  # Save best hyperparameters for RF
+                                    'best_cv_score': best_score  # Save best CV score from hyperparameter search
                                 }
                                 metadata_path = os.path.join(models_dir, f"{model_name}_metadata.joblib") 
                                 joblib.dump(metadata, metadata_path)
@@ -451,8 +516,8 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
 def do_classification_rfe(xs, y, path_to_data, tagname="all"):
 
     # Do feature ranking on everything (yeah, this is just an ablation)
-    # Do learning with top n
-    model = RandomForestClassifier()
+    # Do learning with top n - Use basic RF for feature ranking (fast)
+    model = RandomForestClassifier(n_estimators=200, random_state=42)  # Simple RF for feature ranking
     model.fit(xs, y)
     importances = np.array(model.feature_importances_)
     sorted_indices = np.argsort(importances)[::-1]
@@ -469,7 +534,8 @@ def do_classification_rfe(xs, y, path_to_data, tagname="all"):
         accs = []
         for i, (train_index, test_index) in enumerate(skf.split(X, y)):
 
-            fresh_model = RandomForestClassifier()
+            # Use tuned RandomForest for evaluation (better performance)
+            fresh_model = get_tuned_random_forest(random_state=42, n_iter=30, cv_folds=3, n_jobs=1, verbose=0)
 
             x_train = X[train_index]
             y_train = y[train_index]
