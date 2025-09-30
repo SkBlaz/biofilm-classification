@@ -295,8 +295,13 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
     }
     
     # Create tuned RandomForest using RandomizedSearchCV
+    # Adapt CV folds based on dataset size to avoid issues with tiny datasets
+    n_samples = X.shape[0]
+    n_splits = min(5, max(2, n_samples // 2))  # Use 2-5 folds based on sample size
+    logger.info(f"Using {n_splits} CV folds for dataset with {n_samples} samples")
+    
     rf_base = RandomForestClassifier(random_state=42, n_jobs=-1)
-    cv_rf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    cv_rf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     tuned_rf = RandomizedSearchCV(
         estimator=rf_base,
         param_distributions=rf_param_dist,
@@ -534,13 +539,17 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                 elif model_name == 'logistic':
                     final_model = LogisticRegression()
                 elif model_name == 'rf':
-                    # Use tuned RandomForest for final model
+                    # Use tuned RandomForest for final model with adaptive CV folds
+                    n_samples_final = X_final.shape[0]
+                    n_splits_final = min(5, max(2, n_samples_final // 2))
+                    logger.info(f"Using {n_splits_final} CV folds for final model training with {n_samples_final} samples")
+                    
                     final_model = RandomizedSearchCV(
                         estimator=RandomForestClassifier(random_state=42, n_jobs=-1),
                         param_distributions=rf_param_dist,
                         n_iter=50,
                         scoring=make_scorer(f1_score, average="weighted"),
-                        cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=42),
+                        cv=StratifiedKFold(n_splits=n_splits_final, shuffle=True, random_state=42),
                         verbose=2,
                         random_state=42,
                         n_jobs=-1
