@@ -182,7 +182,13 @@ def compute_rankings(data: str,
     Saves the rankings into files (csv and pdf) to the output directory
     (see ``get_out_dir``).
     """
-    fout = "/".join(path_to_data.split("/")[:-1]) + f"/rankings_{target_col}.tsv"
+    # Handle case where path_to_data has no directory separator
+    path_parts = path_to_data.split("/")[:-1]
+    if path_parts:
+        base_dir = "/".join(path_parts)
+    else:
+        base_dir = "."  # Current directory if no path is specified
+    fout = base_dir + f"/rankings_{target_col}.tsv"
     logger.info(fout)
 
     if fout:
@@ -327,7 +333,13 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
         models['autogluon'] = TabularPredictor(label="label")
     
     outputs = []
-    partial_dir = "/".join(path_to_data.split("/")[:-1]) + f"/partial/"
+    # Handle case where path_to_data has no directory separator
+    path_parts = path_to_data.split("/")[:-1]
+    if path_parts:
+        base_dir = "/".join(path_parts)
+    else:
+        base_dir = "."  # Current directory if no path is specified
+    partial_dir = base_dir + f"/partial/"
     if not os.path.isdir(partial_dir):
         os.mkdir(partial_dir)
     
@@ -450,7 +462,13 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
         logger.info("All model evaluation complete, deleted partial results")
     dfx = pd.DataFrame(outputs)
     dfx.columns = ['tag', 'model', 'upsampling', 'n_components', 'fold', 'accuracy', 'test_set', 'thr_features']
-    fout = "/".join(path_to_data.split("/")[:-1]) + f"/classification_{filter_mode}.tsv"
+    # Handle case where path_to_data has no directory separator
+    path_parts = path_to_data.split("/")[:-1]
+    if path_parts:
+        base_dir = "/".join(path_parts)
+    else:
+        base_dir = "."  # Current directory if no path is specified
+    fout = base_dir + f"/classification_{filter_mode}.tsv"
     dfx = dfx.sort_values(by=['accuracy'])
     dfx.to_csv(fout, sep="\t")
 
@@ -489,7 +507,13 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                 'accuracy': best_config['accuracy']
             }
         
-        models_dir = "/".join(path_to_data.split("/")[:-1]) + "/models"
+        # Handle case where path_to_data has no directory separator
+        path_parts = path_to_data.split("/")[:-1]
+        if path_parts:
+            base_dir = "/".join(path_parts)
+        else:
+            base_dir = "."  # Current directory if no path is specified
+        models_dir = base_dir + "/models"
         os.makedirs(models_dir, exist_ok=True)
         
         # Train final models using best configurations on ALL data
@@ -630,7 +654,13 @@ def do_classification_rfe(xs, y, path_to_data, tagname="all"):
         logger.info(f"Testing top features: {j} out of {len(sorted_indices)} (acc: {mean_acc})")
         out_df.append({"top_n": j, "accuracy": mean_acc})
     dfx_out = pd.DataFrame(out_df)
-    fout = "/".join(path_to_data.split("/")[:-1]) + f"/ablation_ranking_{tagname}.tsv"
+    # Handle case where path_to_data has no directory separator
+    path_parts = path_to_data.split("/")[:-1]
+    if path_parts:
+        base_dir = "/".join(path_parts)
+    else:
+        base_dir = "."  # Current directory if no path is specified
+    fout = base_dir + f"/ablation_ranking_{tagname}.tsv"
     dfx_out.to_csv(fout, sep="\t")    
     print(dfx_out)
 
