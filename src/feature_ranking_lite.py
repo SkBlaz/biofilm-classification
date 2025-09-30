@@ -305,6 +305,9 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
     partial_dir = "/".join(path_to_data.split("/")[:-1]) + f"/partial/"
     if not os.path.isdir(partial_dir):
         os.mkdir(partial_dir)
+    
+    # Store CV results to find best hyperparameters for final model training
+    cv_results = []
         
     for repetition in range(3):
         for n_components in [16, 32, 64, 128, 256, 512, "all"]:
@@ -395,36 +398,17 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
 
                             acc = accuracy_score(y_test, y_hat)
                         
-                        # Save models if requested - on first fold and repetition, for the best available n_components value
-                        # Prioritize 'all' features over dimensionality reduction to ensure inference uses all features
-                        best_n_components_options = ["all"]
-                        if save_models and i == 0 and repetition == 0 and desc_components in best_n_components_options and thr_features:
-                            models_dir = "/".join(path_to_data.split("/")[:-1]) + "/models"
-                            os.makedirs(models_dir, exist_ok=True)
-                            
-                            # Save the trained model
-                            model_path = os.path.join(models_dir, f"{model_name}_model.joblib")
-                            if isinstance(model, str):  # Skip string representations from autogluon
-                                logger.info(f"Skipping model save for {model_name} (string representation)")
-                            else:
-                                joblib.dump(model, model_path)
-                                logger.info(f"Saved model {model_name} to {model_path}")
-                                
-                                # Save feature names and other metadata
-                                metadata = {
-                                    'feature_names': list(all_cols),
-                                    'target_mapping': catmap,
-                                    'n_components': desc_components,  # Save original desc_components ("all") not converted value
-                                    'thr_features': thr_features,
-                                    'thr_indices': thr_indices.tolist() if len(thr_indices) > 0 else [],
-                                    'filter_mode': filter_mode,
-                                    'model_name': model_name,
-                                    'accuracy': acc,
-                                    'svd_transformer': svd_transformer  # Save fitted SVD transformer
-                                }
-                                metadata_path = os.path.join(models_dir, f"{model_name}_metadata.joblib") 
-                                joblib.dump(metadata, metadata_path)
-                                logger.info(f"Saved metadata for {model_name} to {metadata_path}")
+                        # Store CV results for later use in final model training
+                        if save_models:
+                            cv_results.append({
+                                'model_name': model_name,
+                                'repetition': repetition,
+                                'n_components': desc_components,
+                                'thr_features': thr_features,
+                                'fold': i,
+                                'accuracy': acc,
+                                'svd_transformer': svd_transformer
+                            })
                         
                         test_map = ",".join([catmap[x] for x in y_test])
                         output = [
@@ -446,6 +430,117 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
     dfx.to_csv(fout, sep="\t")
 
     logger.info(f"Wrote classification outputs to {fout}")
+    
+    # Train final models on all data using best hyperparameters from cross-validation
+    if save_models and cv_results:
+        logger.info("Training final models on all data using best hyperparameters from cross-validation")
+        
+        # Convert cv_results to DataFrame for easier analysis
+        cv_df = pd.DataFrame(cv_results)
+        
+        # Find best hyperparameters for each model (prioritize 'all' features and thr_features=True)
+        best_configs = {}
+        for model_name in cv_df['model_name'].unique():
+            model_results = cv_df[cv_df['model_name'] == model_name]
+            
+            # First try with 'all' features and thr_features=True
+            preferred_results = model_results[
+                (model_results['n_components'] == 'all') & 
+                (model_results['thr_features'] == True)
+            ]
+            
+            if len(preferred_results) > 0:
+                # Use mean accuracy across folds for the preferred configuration
+                best_config = preferred_results.groupby(['n_components', 'thr_features'])['accuracy'].mean().reset_index()
+                best_config = best_config.loc[best_config['accuracy'].idxmax()]
+            else:
+                # Fall back to best overall configuration
+                best_config = model_results.groupby(['n_components', 'thr_features'])['accuracy'].mean().reset_index()
+                best_config = best_config.loc[best_config['accuracy'].idxmax()]
+            
+            best_configs[model_name] = {
+                'n_components': best_config['n_components'],
+                'thr_features': best_config['thr_features'],
+                'accuracy': best_config['accuracy']
+            }
+        
+        models_dir = "/".join(path_to_data.split("/")[:-1]) + "/models"
+        os.makedirs(models_dir, exist_ok=True)
+        
+        # Train final models using best configurations on ALL data
+        for model_name, config in best_configs.items():
+            logger.info(f"Training final {model_name} model with n_components={config['n_components']}, thr_features={config['thr_features']}")
+            
+            # Prepare data using the same logic from CV
+            X_final = X.copy()
+            if not config['thr_features'] and config['n_components'] == "all" and len(thr_indices) > 0:
+                X_final = X_final[:, thr_indices]
+            
+            # Create a fresh model instance
+            if model_name in models:
+                if model_name == 'dummy':
+                    final_model = DummyClassifier()
+                elif model_name == 'decisiontree':
+                    final_model = tree.DecisionTreeClassifier()
+                elif model_name == 'logistic':
+                    final_model = LogisticRegression()
+                elif model_name == 'rf':
+                    final_model = RandomForestClassifier()
+                elif model_name == 'xgb':
+                    final_model = XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective='binary:logistic')
+                elif model_name == 'gridsearch':
+                    final_model = GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM)
+                elif model_name == 'tpot' and TPOT_AVAILABLE:
+                    final_model = TPOTClassifier(generations=5, population_size=20, cv=5, random_state=42, verbosity=2, n_jobs=PARALLELISM, memory='auto')
+                else:
+                    logger.warning(f"Unknown model type {model_name}, skipping final model training")
+                    continue
+                
+                # Apply SVD transformation if needed
+                svd_transformer = None
+                n_components_val = config['n_components']
+                if config['n_components'] != "all":
+                    n_components_val = int(config['n_components'])
+                    svd_transformer = TruncatedSVD(n_components=n_components_val, n_iter=15, random_state=42)
+                    X_final = svd_transformer.fit_transform(X_final)
+                else:
+                    n_components_val = X_final.shape[1]
+                
+                # Skip autogluon for final model training as it's complex to handle
+                if model_name == 'autogluon':
+                    logger.info(f"Skipping final model training for {model_name} (autogluon)")
+                    continue
+                
+                try:
+                    # Train final model on all data
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        final_model.fit(X_final, y)
+                    
+                    # Save the final model
+                    model_path = os.path.join(models_dir, f"{model_name}_model.joblib")
+                    joblib.dump(final_model, model_path)
+                    logger.info(f"Saved final model {model_name} to {model_path}")
+                    
+                    # Save metadata
+                    metadata = {
+                        'feature_names': list(all_cols),
+                        'target_mapping': catmap,
+                        'n_components': config['n_components'],
+                        'thr_features': config['thr_features'],
+                        'thr_indices': thr_indices.tolist() if len(thr_indices) > 0 else [],
+                        'filter_mode': filter_mode,
+                        'model_name': model_name,
+                        'cv_accuracy': config['accuracy'],
+                        'svd_transformer': svd_transformer
+                    }
+                    metadata_path = os.path.join(models_dir, f"{model_name}_metadata.joblib")
+                    joblib.dump(metadata, metadata_path)
+                    logger.info(f"Saved metadata for final model {model_name} to {metadata_path}")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to train final model {model_name}: {e}")
+                    continue
 
 
 def do_classification_rfe(xs, y, path_to_data, tagname="all"):
