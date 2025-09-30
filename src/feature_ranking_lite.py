@@ -8,9 +8,9 @@ import joblib
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.dummy import DummyClassifier
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, make_scorer, f1_score
 from sklearn.decomposition import TruncatedSVD
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, RandomizedSearchCV
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from xgboost import XGBClassifier
@@ -277,12 +277,37 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
     catmap = dict(zip(y, ys.values))
     upsampling = 1
 
+    # Define hyperparameter grid for RandomForest tuning
+    rf_param_dist = {
+        "n_estimators": np.arange(100, 1001, 100),
+        "max_features": ["sqrt", "log2", None] + list(np.arange(0.1, 0.6, 0.1)),
+        "max_depth": [None] + list(np.arange(5, 31, 5)),
+        "min_samples_split": np.arange(2, 21, 2),
+        "min_samples_leaf": np.arange(1, 11, 1),
+        "bootstrap": [True, False],
+        "class_weight": [None, "balanced", "balanced_subsample"]
+    }
+    
+    # Create tuned RandomForest using RandomizedSearchCV
+    rf_base = RandomForestClassifier(random_state=42, n_jobs=-1)
+    cv_rf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    tuned_rf = RandomizedSearchCV(
+        estimator=rf_base,
+        param_distributions=rf_param_dist,
+        n_iter=50,  # Number of parameter settings that are sampled
+        scoring=make_scorer(f1_score, average="weighted"),
+        cv=cv_rf,
+        verbose=2,
+        random_state=42,
+        n_jobs=-1
+    )
+
     if all_learners:
         models = {
             'dummy': DummyClassifier(),
             'decisiontree': tree.DecisionTreeClassifier(),
             'logistic': LogisticRegression(),
-            'rf': RandomForestClassifier(),
+            'rf': tuned_rf,
             'xgb': XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective='binary:logistic'),
             'gridsearch': GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM),
             #'tpot': TPOTClassifier(generations=5, population_size=20, cv=5, random_state=42, verbosity=2, n_jobs=PARALLELISM, memory='auto'),
@@ -294,7 +319,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
     else:
         # Default behavior: only RandomForest (fast)
         models = {
-            'rf': RandomForestClassifier(),
+            'rf': tuned_rf,
         }
     
     # Add autogluon model only if available
@@ -485,7 +510,17 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                 elif model_name == 'logistic':
                     final_model = LogisticRegression()
                 elif model_name == 'rf':
-                    final_model = RandomForestClassifier()
+                    # Use tuned RandomForest for final model
+                    final_model = RandomizedSearchCV(
+                        estimator=RandomForestClassifier(random_state=42, n_jobs=-1),
+                        param_distributions=rf_param_dist,
+                        n_iter=50,
+                        scoring=make_scorer(f1_score, average="weighted"),
+                        cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=42),
+                        verbose=2,
+                        random_state=42,
+                        n_jobs=-1
+                    )
                 elif model_name == 'xgb':
                     final_model = XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective='binary:logistic')
                 elif model_name == 'gridsearch':
@@ -517,9 +552,18 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                         warnings.simplefilter("ignore")
                         final_model.fit(X_final, y)
                     
+                    # For RandomizedSearchCV models, log the best parameters and use best estimator
+                    if hasattr(final_model, 'best_params_'):
+                        logger.info(f"Best parameters for {model_name}: {final_model.best_params_}")
+                        logger.info(f"Best CV score for {model_name}: {final_model.best_score_}")
+                        # Save the best estimator instead of the search object
+                        model_to_save = final_model.best_estimator_
+                    else:
+                        model_to_save = final_model
+                    
                     # Save the final model
                     model_path = os.path.join(models_dir, f"{model_name}_model.joblib")
-                    joblib.dump(final_model, model_path)
+                    joblib.dump(model_to_save, model_path)
                     logger.info(f"Saved final model {model_name} to {model_path}")
                     
                     # Save metadata
@@ -534,6 +578,12 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                         'cv_accuracy': config['accuracy'],
                         'svd_transformer': svd_transformer
                     }
+                    
+                    # Add hyperparameter tuning info for RandomizedSearchCV models
+                    if hasattr(final_model, 'best_params_'):
+                        metadata['best_params'] = final_model.best_params_
+                        metadata['best_cv_score'] = final_model.best_score_
+                    
                     metadata_path = os.path.join(models_dir, f"{model_name}_metadata.joblib")
                     joblib.dump(metadata, metadata_path)
                     logger.info(f"Saved metadata for final model {model_name} to {metadata_path}")
