@@ -10,7 +10,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.dummy import DummyClassifier
 from sklearn.metrics import accuracy_score, make_scorer, f1_score
 from sklearn.decomposition import TruncatedSVD
-from sklearn.model_selection import StratifiedKFold, RandomizedSearchCV
+from sklearn.model_selection import StratifiedKFold, RandomizedSearchCV, GroupKFold
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from xgboost import XGBClassifier
@@ -23,6 +23,25 @@ import warnings
 from sklearn.exceptions import DataConversionWarning
 
 warnings.simplefilter(action='ignore', category=DataConversionWarning)
+
+# Import HalvingRandomSearchCV (available in sklearn >= 1.0)
+try:
+    from sklearn.experimental import enable_halving_search_cv
+    from sklearn.model_selection import HalvingRandomSearchCV
+    HALVING_AVAILABLE = True
+except ImportError:
+    HALVING_AVAILABLE = False
+    HalvingRandomSearchCV = None
+
+# Import Optuna
+try:
+    import optuna
+    from optuna.pruners import MedianPruner
+    from optuna.samplers import TPESampler
+    OPTUNA_AVAILABLE = True
+except ImportError:
+    OPTUNA_AVAILABLE = False
+    optuna = None
 
 try:
     from tpot import TPOTClassifier
@@ -270,9 +289,478 @@ def name_manipulator_date(value: str):
     return (value[:8], re.search(r"st--([^-_]+)-", value).group(1))
 
 
+def rf_search_space(for_halving=False):
+    """
+    Returns a comprehensive hyperparameter search space for RandomForest.
+    
+    This search space includes:
+    - n_estimators: 200-1600 trees (not included if for_halving=True)
+    - max_features: sqrt, log2, None, and float values 0.1-0.9
+    - max_depth: None (unlimited) or 6-40
+    - min_samples_split: 2-20
+    - min_samples_leaf: 1-20
+    - bootstrap: True/False
+    - class_weight: None, balanced, balanced_subsample
+    - max_samples: None or 0.5-0.95 (only valid when bootstrap=True)
+    
+    Args:
+        for_halving: If True, excludes n_estimators and max_samples (for HalvingRandomSearchCV)
+    """
+    space = {
+        "max_features": ["sqrt", "log2", None] + list(np.arange(0.1, 1.0, 0.1)),
+        "max_depth": [None] + list(range(6, 41, 2)),
+        "min_samples_split": list(range(2, 21, 1)),
+        "min_samples_leaf": list(range(1, 21, 1)),
+        "bootstrap": [True, False],
+        "class_weight": [None, "balanced", "balanced_subsample"],
+    }
+    
+    if not for_halving:
+        space["n_estimators"] = list(range(200, 1601, 100))
+        # Note: max_samples is handled specially - only used when bootstrap=True
+        # We'll filter this during sampling
+    
+    return space
+
+
+def make_groups_from_index(index, mode="date"):
+    """
+    Extract groups from sample names to prevent data leakage in CV.
+    
+    Args:
+        index: pandas Index or list of sample names
+        mode: "date" to group by date+sev, "sev" to group by sev only
+        
+    Returns:
+        numpy array of group labels (integers)
+    """
+    if mode == "date":
+        # Extract date (first 8 chars) and sev (st--XXX)
+        groups = []
+        for sample_name in index:
+            try:
+                date = sample_name[:8]
+                sev_match = re.search(r"st--([^-_]+)", sample_name)
+                if sev_match:
+                    sev = sev_match.group(1)
+                    groups.append(f"{date}_{sev}")
+                else:
+                    # Fallback: use just the date
+                    groups.append(date)
+            except:
+                # Fallback: use the full sample name
+                groups.append(sample_name)
+        
+        # Convert to integer labels
+        unique_groups = sorted(set(groups))
+        group_to_int = {g: i for i, g in enumerate(unique_groups)}
+        return np.array([group_to_int[g] for g in groups])
+    
+    elif mode == "sev":
+        # Extract only sev
+        groups = []
+        for sample_name in index:
+            try:
+                sev_match = re.search(r"st--([^-_]+)", sample_name)
+                if sev_match:
+                    sev = sev_match.group(1)
+                    groups.append(sev)
+                else:
+                    groups.append(sample_name)
+            except:
+                groups.append(sample_name)
+        
+        # Convert to integer labels
+        unique_groups = sorted(set(groups))
+        group_to_int = {g: i for i, g in enumerate(unique_groups)}
+        return np.array([group_to_int[g] for g in groups])
+    
+    else:
+        raise ValueError(f"Unknown mode: {mode}, expected 'date' or 'sev'")
+
+
+def tune_rf_optuna(X, y, groups=None, time_budget_sec=600):
+    """
+    Tune RandomForest using Optuna Bayesian optimization.
+    
+    Features:
+    - Bayesian optimization with TPE sampler
+    - Median pruner for early stopping of unpromising trials
+    - Time-budgeted optimization
+    - Group-aware CV if groups are provided
+    
+    Args:
+        X: Feature matrix (numpy array or pandas DataFrame)
+        y: Target labels (numpy array or pandas Series)
+        groups: Optional group labels for GroupKFold CV
+        time_budget_sec: Time budget in seconds (default: 600)
+        
+    Returns:
+        (best_estimator, study): Best RandomForest model and Optuna study object
+    """
+    if not OPTUNA_AVAILABLE:
+        logger.warning("Optuna not available, cannot use tune_rf_optuna")
+        return None, None
+    
+    logger.info(f"Starting Optuna RF tuning with time budget {time_budget_sec}s")
+    
+    # Ensure X is numpy array
+    if hasattr(X, 'values'):
+        X = X.values
+    if hasattr(y, 'values'):
+        y = y.values
+    
+    def objective(trial):
+        # Sample hyperparameters
+        params = {
+            "n_estimators": trial.suggest_int("n_estimators", 200, 1600, step=100),
+            "max_depth": trial.suggest_categorical("max_depth", [None, 6, 10, 15, 20, 25, 30, 35, 40]),
+            "min_samples_split": trial.suggest_int("min_samples_split", 2, 20),
+            "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 20),
+            "bootstrap": trial.suggest_categorical("bootstrap", [True, False]),
+            "class_weight": trial.suggest_categorical("class_weight", [None, "balanced", "balanced_subsample"]),
+            "random_state": 42,
+            "n_jobs": -1
+        }
+        
+        # Add max_features (categorical + continuous)
+        max_features_choice = trial.suggest_categorical("max_features_type", ["sqrt", "log2", "none", "float"])
+        if max_features_choice == "sqrt":
+            params["max_features"] = "sqrt"
+        elif max_features_choice == "log2":
+            params["max_features"] = "log2"
+        elif max_features_choice == "none":
+            params["max_features"] = None
+        else:  # float
+            params["max_features"] = trial.suggest_float("max_features_value", 0.1, 0.9)
+        
+        # Add max_samples if bootstrap is True
+        if params["bootstrap"]:
+            max_samples_choice = trial.suggest_categorical("max_samples_type", ["none", "float"])
+            if max_samples_choice == "float":
+                params["max_samples"] = trial.suggest_float("max_samples_value", 0.5, 0.95)
+            else:
+                params["max_samples"] = None
+        
+        # Create model
+        rf = RandomForestClassifier(**params)
+        
+        # Setup CV
+        if groups is not None:
+            n_groups = len(np.unique(groups))
+            if n_groups >= 2:
+                cv = GroupKFold(n_splits=min(5, n_groups))
+                cv_splits = list(cv.split(X, y, groups))
+            else:
+                # Fall back to StratifiedKFold if not enough groups
+                logger.warning(f"Only {n_groups} group(s) found, falling back to StratifiedKFold")
+                n_splits = min(5, max(2, len(X) // 2))
+                cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+                cv_splits = list(cv.split(X, y))
+        else:
+            n_splits = min(5, max(2, len(X) // 2))
+            cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+            cv_splits = list(cv.split(X, y))
+        
+        # Cross-validation with pruning
+        scores = []
+        for fold_idx, (train_idx, val_idx) in enumerate(cv_splits):
+            X_train, X_val = X[train_idx], X[val_idx]
+            y_train, y_val = y[train_idx], y[val_idx]
+            
+            rf.fit(X_train, y_train)
+            y_pred = rf.predict(X_val)
+            score = f1_score(y_val, y_pred, average="weighted")
+            scores.append(score)
+            
+            # Report intermediate value for pruning
+            trial.report(np.mean(scores), fold_idx)
+            
+            # Check if trial should be pruned
+            if trial.should_prune():
+                raise optuna.TrialPruned()
+        
+        return np.mean(scores)
+    
+    # Create study with pruner and sampler
+    study = optuna.create_study(
+        direction="maximize",
+        sampler=TPESampler(seed=42),
+        pruner=MedianPruner(n_startup_trials=5, n_warmup_steps=2)
+    )
+    
+    # Optimize with time budget
+    study.optimize(objective, timeout=time_budget_sec, n_jobs=1, show_progress_bar=False)
+    
+    logger.info(f"Optuna completed {len(study.trials)} trials")
+    logger.info(f"Best trial score: {study.best_trial.value:.4f}")
+    logger.info(f"Best parameters: {study.best_params}")
+    
+    # Build best estimator
+    best_params = study.best_params.copy()
+    
+    # Reconstruct max_features
+    if best_params["max_features_type"] == "sqrt":
+        max_features = "sqrt"
+    elif best_params["max_features_type"] == "log2":
+        max_features = "log2"
+    elif best_params["max_features_type"] == "none":
+        max_features = None
+    else:
+        max_features = best_params.get("max_features_value", 0.5)
+    
+    # Reconstruct max_samples
+    max_samples = None
+    if best_params.get("bootstrap", False):
+        if best_params.get("max_samples_type") == "float":
+            max_samples = best_params.get("max_samples_value", None)
+    
+    # Remove auxiliary keys
+    for key in ["max_features_type", "max_features_value", "max_samples_type", "max_samples_value"]:
+        best_params.pop(key, None)
+    
+    best_params["max_features"] = max_features
+    if "bootstrap" in best_params and best_params["bootstrap"]:
+        best_params["max_samples"] = max_samples
+    
+    best_rf = RandomForestClassifier(**best_params, random_state=42, n_jobs=-1)
+    best_rf.fit(X, y)
+    
+    return best_rf, study
+
+
+def tune_rf_halving(X, y, groups=None):
+    """
+    Tune RandomForest using HalvingRandomSearchCV with successive halving.
+    
+    Uses n_estimators as the resource parameter - starts with small forests
+    and progressively increases size for promising candidates.
+    
+    Args:
+        X: Feature matrix (numpy array or pandas DataFrame)
+        y: Target labels (numpy array or pandas Series)
+        groups: Optional group labels for GroupKFold CV
+        
+    Returns:
+        (best_estimator, search): Best RandomForest model and search object
+    """
+    if not HALVING_AVAILABLE:
+        logger.warning("HalvingRandomSearchCV not available, cannot use tune_rf_halving")
+        return None, None
+    
+    logger.info("Starting HalvingRandomSearchCV RF tuning")
+    
+    # Ensure proper format
+    if hasattr(X, 'values'):
+        X = X.values
+    if hasattr(y, 'values'):
+        y = y.values
+    
+    # Create search space (exclude n_estimators as it's used as resource)
+    search_space = rf_search_space(for_halving=True)
+    
+    # Setup CV
+    if groups is not None:
+        n_groups = len(np.unique(groups))
+        if n_groups >= 2:
+            cv = GroupKFold(n_splits=min(5, n_groups))
+        else:
+            # Fall back to StratifiedKFold if not enough groups
+            logger.warning(f"Only {n_groups} group(s) found, falling back to StratifiedKFold")
+            n_splits = min(5, max(2, len(X) // 2))
+            cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+    else:
+        n_splits = min(5, max(2, len(X) // 2))
+        cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+    
+    # Create base estimator
+    rf_base = RandomForestClassifier(random_state=42, n_jobs=-1)
+    
+    # Create halving search
+    search = HalvingRandomSearchCV(
+        estimator=rf_base,
+        param_distributions=search_space,
+        resource="n_estimators",
+        max_resources=1600,
+        min_resources=200,
+        scoring=make_scorer(f1_score, average="weighted"),
+        cv=cv,
+        random_state=42,
+        n_jobs=-1,
+        verbose=0
+    )
+    
+    search.fit(X, y, groups=groups if groups is not None else None)
+    
+    logger.info(f"HalvingRandomSearchCV completed")
+    logger.info(f"Best score: {search.best_score_:.4f}")
+    logger.info(f"Best parameters: {search.best_params_}")
+    
+    return search.best_estimator_, search
+
+
+from sklearn.model_selection import ParameterSampler
+
+def tune_rf_randomized(X, y, groups=None, n_iter=50):
+    """
+    Tune RandomForest using RandomizedSearchCV with rich search space.
+    
+    Fallback method when Optuna or Halving are not available.
+    Uses manual cross-validation to handle conditional parameters properly.
+    
+    Args:
+        X: Feature matrix (numpy array or pandas DataFrame)
+        y: Target labels (numpy array or pandas Series)
+        groups: Optional group labels for GroupKFold CV
+        n_iter: Number of parameter settings sampled (default: 50)
+        
+    Returns:
+        (best_estimator, search): Best RandomForest model and search object
+    """
+    logger.info(f"Starting RandomizedSearchCV RF tuning with {n_iter} iterations")
+    
+    # Ensure proper format
+    if hasattr(X, 'values'):
+        X = X.values
+    if hasattr(y, 'values'):
+        y = y.values
+    
+    # Get base search space
+    search_space = rf_search_space(for_halving=False)
+    
+    # Setup CV
+    if groups is not None:
+        n_groups = len(np.unique(groups))
+        if n_groups >= 2:
+            cv = GroupKFold(n_splits=min(5, n_groups))
+            cv_splits = list(cv.split(X, y, groups))
+        else:
+            # Fall back to StratifiedKFold if not enough groups
+            logger.warning(f"Only {n_groups} group(s) found, falling back to StratifiedKFold")
+            n_splits = min(5, max(2, len(X) // 2))
+            cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+            cv_splits = list(cv.split(X, y))
+    else:
+        n_splits = min(5, max(2, len(X) // 2))
+        cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+        cv_splits = list(cv.split(X, y))
+    
+    # Sample parameters manually, handling bootstrap/max_samples constraint
+    best_score = -np.inf
+    best_params = None
+    best_estimator = None
+    
+    np.random.seed(42)
+    for i in range(n_iter):
+        # Sample parameters
+        params = {}
+        for key, values in search_space.items():
+            if isinstance(values, list):
+                params[key] = np.random.choice(values)
+        
+        # Handle max_samples conditionally
+        if params.get('bootstrap', True):
+            # When bootstrap=True, randomly choose max_samples
+            if np.random.random() < 0.5:
+                params['max_samples'] = None
+            else:
+                params['max_samples'] = np.random.uniform(0.5, 0.95)
+        else:
+            # When bootstrap=False, max_samples must be None
+            params['max_samples'] = None
+        
+        # Create model with these parameters
+        rf = RandomForestClassifier(**params, random_state=42, n_jobs=-1)
+        
+        # Cross-validate
+        scores = []
+        for train_idx, val_idx in cv_splits:
+            X_train, X_val = X[train_idx], X[val_idx]
+            y_train, y_val = y[train_idx], y[val_idx]
+            
+            rf_clone = RandomForestClassifier(**params, random_state=42, n_jobs=-1)
+            rf_clone.fit(X_train, y_train)
+            y_pred = rf_clone.predict(X_val)
+            score = f1_score(y_val, y_pred, average="weighted")
+            scores.append(score)
+        
+        mean_score = np.mean(scores)
+        
+        if mean_score > best_score:
+            best_score = mean_score
+            best_params = params.copy()
+            best_estimator = RandomForestClassifier(**best_params, random_state=42, n_jobs=-1)
+    
+    # Fit best estimator on full data
+    best_estimator.fit(X, y)
+    
+    logger.info(f"RandomizedSearchCV completed")
+    logger.info(f"Best score: {best_score:.4f}")
+    logger.info(f"Best parameters: {best_params}")
+    
+    # Create a mock search object for compatibility
+    class MockSearch:
+        def __init__(self, best_estimator, best_params, best_score):
+            self.best_estimator_ = best_estimator
+            self.best_params_ = best_params
+            self.best_score_ = best_score
+    
+    search = MockSearch(best_estimator, best_params, best_score)
+    
+    return best_estimator, search
+
+
+def build_best_rf(X, y, sample_index=None, time_budget_sec=300):
+    """
+    Build the best RandomForest model using the best available tuning method.
+    
+    Priority order:
+    1. Optuna (if available) - most sophisticated
+    2. HalvingRandomSearchCV (if available) - efficient resource allocation
+    3. RandomizedSearchCV - reliable fallback
+    
+    Args:
+        X: Feature matrix (numpy array or pandas DataFrame)
+        y: Target labels (numpy array or pandas Series)
+        sample_index: Optional pandas Index for extracting groups
+        time_budget_sec: Time budget for Optuna (default: 300s)
+        
+    Returns:
+        Best RandomForest estimator (not the search object)
+    """
+    # Extract groups if sample_index is provided
+    groups = None
+    if sample_index is not None:
+        try:
+            groups = make_groups_from_index(sample_index, mode="date")
+            logger.info(f"Created {len(np.unique(groups))} groups for group-aware CV")
+        except Exception as e:
+            logger.warning(f"Could not extract groups from index: {e}")
+            groups = None
+    
+    # Try methods in order of preference
+    if OPTUNA_AVAILABLE:
+        logger.info("Using Optuna for hyperparameter optimization")
+        best_rf, study = tune_rf_optuna(X, y, groups=groups, time_budget_sec=time_budget_sec)
+        if best_rf is not None:
+            return best_rf
+    
+    if HALVING_AVAILABLE:
+        logger.info("Using HalvingRandomSearchCV for hyperparameter optimization")
+        best_rf, search = tune_rf_halving(X, y, groups=groups)
+        if best_rf is not None:
+            return best_rf
+    
+    # Fallback to RandomizedSearchCV
+    logger.info("Using RandomizedSearchCV for hyperparameter optimization")
+    best_rf, search = tune_rf_randomized(X, y, groups=groups, n_iter=50)
+    return best_rf
+
+
 def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models=False, all_learners=False):
 
     all_cols = X.columns
+    sample_index = ys.index  # Preserve the index for group extraction
     thr_indices = []
     for enx, x in enumerate(all_cols):
         if "Threshold" in x:
@@ -283,36 +771,9 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
     catmap = dict(zip(y, ys.values))
     upsampling = 1
 
-    # Define hyperparameter grid for RandomForest tuning
-    rf_param_dist = {
-        "n_estimators": np.arange(100, 1001, 100),
-        "max_features": ["sqrt", "log2", None] + list(np.arange(0.1, 0.6, 0.1)),
-        "max_depth": [None] + list(np.arange(5, 31, 5)),
-        "min_samples_split": np.arange(2, 21, 2),
-        "min_samples_leaf": np.arange(1, 11, 1),
-        "bootstrap": [True, False],
-        "class_weight": [None, "balanced", "balanced_subsample"]
-    }
-    
-    # Create tuned RandomForest using RandomizedSearchCV
-    # Adapt CV folds and iterations based on dataset size
-    n_samples = X.shape[0]
-    n_splits = min(5, max(2, n_samples // 2))  # Use 2-5 folds based on sample size
-    n_iter = 10  # Reduced for faster execution, still provides good hyperparameter search
-    logger.info(f"Using {n_splits} CV folds and {n_iter} iterations for dataset with {n_samples} samples")
-    
-    rf_base = RandomForestClassifier(random_state=42, n_jobs=-1)
-    cv_rf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-    tuned_rf = RandomizedSearchCV(
-        estimator=rf_base,
-        param_distributions=rf_param_dist,
-        n_iter=n_iter,
-        scoring=make_scorer(f1_score, average="weighted"),
-        cv=cv_rf,
-        verbose=0,  # Reduced verbosity for faster execution
-        random_state=42,
-        n_jobs=-1
-    )
+    # Build best RandomForest using advanced HPO (Optuna -> Halving -> RandomizedSearch)
+    logger.info("Building best RandomForest model using advanced hyperparameter optimization")
+    tuned_rf = build_best_rf(X, y, sample_index=sample_index, time_budget_sec=300)
 
     if all_learners:
         models = {
@@ -532,6 +993,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                 X_final = X_final[:, thr_indices]
             
             # Create a fresh model instance
+            model_already_fitted = False
             if model_name in models:
                 if model_name == 'dummy':
                     final_model = DummyClassifier()
@@ -540,22 +1002,14 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                 elif model_name == 'logistic':
                     final_model = LogisticRegression()
                 elif model_name == 'rf':
-                    # Use tuned RandomForest for final model with adaptive CV folds
-                    n_samples_final = X_final.shape[0]
-                    n_splits_final = min(5, max(2, n_samples_final // 2))
-                    n_iter_final = 10  # Reduced for faster execution
-                    logger.info(f"Using {n_splits_final} CV folds and {n_iter_final} iterations for final model training with {n_samples_final} samples")
-                    
-                    final_model = RandomizedSearchCV(
-                        estimator=RandomForestClassifier(random_state=42, n_jobs=-1),
-                        param_distributions=rf_param_dist,
-                        n_iter=n_iter_final,
-                        scoring=make_scorer(f1_score, average="weighted"),
-                        cv=StratifiedKFold(n_splits=n_splits_final, shuffle=True, random_state=42),
-                        verbose=0,
-                        random_state=42,
-                        n_jobs=-1
-                    )
+                    # Use build_best_rf for final model training with advanced HPO
+                    logger.info(f"Using build_best_rf for final RF model training")
+                    # Create index from sample_index for group extraction
+                    final_sample_index = sample_index if sample_index is not None else None
+                    # build_best_rf returns an already fitted model
+                    final_model = build_best_rf(X_final, y, sample_index=final_sample_index, time_budget_sec=300)
+                    # Skip the fit step for this model as it's already fitted
+                    model_already_fitted = True
                 elif model_name == 'xgb':
                     final_model = XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective='binary:logistic')
                 elif model_name == 'gridsearch':
@@ -582,10 +1036,11 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                     continue
                 
                 try:
-                    # Train final model on all data
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore")
-                        final_model.fit(X_final, y)
+                    # Train final model on all data (unless already fitted)
+                    if not model_already_fitted:
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            final_model.fit(X_final, y)
                     
                     # For RandomizedSearchCV models, log the best parameters and use best estimator
                     if hasattr(final_model, 'best_params_'):
