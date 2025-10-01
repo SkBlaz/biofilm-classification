@@ -8,9 +8,9 @@ import joblib
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.dummy import DummyClassifier
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, make_scorer, f1_score
 from sklearn.decomposition import TruncatedSVD
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, RandomizedSearchCV
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from xgboost import XGBClassifier
@@ -182,7 +182,13 @@ def compute_rankings(data: str,
     Saves the rankings into files (csv and pdf) to the output directory
     (see ``get_out_dir``).
     """
-    fout = "/".join(path_to_data.split("/")[:-1]) + f"/rankings_{target_col}.tsv"
+    # Handle case where path_to_data has no directory separator
+    path_parts = path_to_data.split("/")[:-1]
+    if path_parts:
+        base_dir = "/".join(path_parts)
+    else:
+        base_dir = "."  # Current directory if no path is specified
+    fout = base_dir + f"/rankings_{target_col}.tsv"
     logger.info(fout)
 
     if fout:
@@ -277,12 +283,43 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
     catmap = dict(zip(y, ys.values))
     upsampling = 1
 
+    # Define hyperparameter grid for RandomForest tuning
+    rf_param_dist = {
+        "n_estimators": np.arange(100, 1001, 100),
+        "max_features": ["sqrt", "log2", None] + list(np.arange(0.1, 0.6, 0.1)),
+        "max_depth": [None] + list(np.arange(5, 31, 5)),
+        "min_samples_split": np.arange(2, 21, 2),
+        "min_samples_leaf": np.arange(1, 11, 1),
+        "bootstrap": [True, False],
+        "class_weight": [None, "balanced", "balanced_subsample"]
+    }
+    
+    # Create tuned RandomForest using RandomizedSearchCV
+    # Adapt CV folds and iterations based on dataset size
+    n_samples = X.shape[0]
+    n_splits = min(5, max(2, n_samples // 2))  # Use 2-5 folds based on sample size
+    n_iter = 10  # Reduced for faster execution, still provides good hyperparameter search
+    logger.info(f"Using {n_splits} CV folds and {n_iter} iterations for dataset with {n_samples} samples")
+    
+    rf_base = RandomForestClassifier(random_state=42, n_jobs=-1)
+    cv_rf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+    tuned_rf = RandomizedSearchCV(
+        estimator=rf_base,
+        param_distributions=rf_param_dist,
+        n_iter=n_iter,
+        scoring=make_scorer(f1_score, average="weighted"),
+        cv=cv_rf,
+        verbose=0,  # Reduced verbosity for faster execution
+        random_state=42,
+        n_jobs=-1
+    )
+
     if all_learners:
         models = {
             'dummy': DummyClassifier(),
             'decisiontree': tree.DecisionTreeClassifier(),
             'logistic': LogisticRegression(),
-            'rf': RandomForestClassifier(),
+            'rf': tuned_rf,
             'xgb': XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective='binary:logistic'),
             'gridsearch': GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM),
             #'tpot': TPOTClassifier(generations=5, population_size=20, cv=5, random_state=42, verbosity=2, n_jobs=PARALLELISM, memory='auto'),
@@ -294,7 +331,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
     else:
         # Default behavior: only RandomForest (fast)
         models = {
-            'rf': RandomForestClassifier(),
+            'rf': tuned_rf,
         }
     
     # Add autogluon model only if available
@@ -302,7 +339,13 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
         models['autogluon'] = TabularPredictor(label="label")
     
     outputs = []
-    partial_dir = "/".join(path_to_data.split("/")[:-1]) + f"/partial/"
+    # Handle case where path_to_data has no directory separator
+    path_parts = path_to_data.split("/")[:-1]
+    if path_parts:
+        base_dir = "/".join(path_parts)
+    else:
+        base_dir = "."  # Current directory if no path is specified
+    partial_dir = base_dir + f"/partial/"
     if not os.path.isdir(partial_dir):
         os.mkdir(partial_dir)
     
@@ -425,7 +468,13 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
         logger.info("All model evaluation complete, deleted partial results")
     dfx = pd.DataFrame(outputs)
     dfx.columns = ['tag', 'model', 'upsampling', 'n_components', 'fold', 'accuracy', 'test_set', 'thr_features']
-    fout = "/".join(path_to_data.split("/")[:-1]) + f"/classification_{filter_mode}.tsv"
+    # Handle case where path_to_data has no directory separator
+    path_parts = path_to_data.split("/")[:-1]
+    if path_parts:
+        base_dir = "/".join(path_parts)
+    else:
+        base_dir = "."  # Current directory if no path is specified
+    fout = base_dir + f"/classification_{filter_mode}.tsv"
     dfx = dfx.sort_values(by=['accuracy'])
     dfx.to_csv(fout, sep="\t")
 
@@ -464,7 +513,13 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                 'accuracy': best_config['accuracy']
             }
         
-        models_dir = "/".join(path_to_data.split("/")[:-1]) + "/models"
+        # Handle case where path_to_data has no directory separator
+        path_parts = path_to_data.split("/")[:-1]
+        if path_parts:
+            base_dir = "/".join(path_parts)
+        else:
+            base_dir = "."  # Current directory if no path is specified
+        models_dir = base_dir + "/models"
         os.makedirs(models_dir, exist_ok=True)
         
         # Train final models using best configurations on ALL data
@@ -485,7 +540,22 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                 elif model_name == 'logistic':
                     final_model = LogisticRegression()
                 elif model_name == 'rf':
-                    final_model = RandomForestClassifier()
+                    # Use tuned RandomForest for final model with adaptive CV folds
+                    n_samples_final = X_final.shape[0]
+                    n_splits_final = min(5, max(2, n_samples_final // 2))
+                    n_iter_final = 10  # Reduced for faster execution
+                    logger.info(f"Using {n_splits_final} CV folds and {n_iter_final} iterations for final model training with {n_samples_final} samples")
+                    
+                    final_model = RandomizedSearchCV(
+                        estimator=RandomForestClassifier(random_state=42, n_jobs=-1),
+                        param_distributions=rf_param_dist,
+                        n_iter=n_iter_final,
+                        scoring=make_scorer(f1_score, average="weighted"),
+                        cv=StratifiedKFold(n_splits=n_splits_final, shuffle=True, random_state=42),
+                        verbose=0,
+                        random_state=42,
+                        n_jobs=-1
+                    )
                 elif model_name == 'xgb':
                     final_model = XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective='binary:logistic')
                 elif model_name == 'gridsearch':
@@ -517,9 +587,18 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                         warnings.simplefilter("ignore")
                         final_model.fit(X_final, y)
                     
+                    # For RandomizedSearchCV models, log the best parameters and use best estimator
+                    if hasattr(final_model, 'best_params_'):
+                        logger.info(f"Best parameters for {model_name}: {final_model.best_params_}")
+                        logger.info(f"Best CV score for {model_name}: {final_model.best_score_}")
+                        # Save the best estimator instead of the search object
+                        model_to_save = final_model.best_estimator_
+                    else:
+                        model_to_save = final_model
+                    
                     # Save the final model
                     model_path = os.path.join(models_dir, f"{model_name}_model.joblib")
-                    joblib.dump(final_model, model_path)
+                    joblib.dump(model_to_save, model_path)
                     logger.info(f"Saved final model {model_name} to {model_path}")
                     
                     # Save metadata
@@ -534,6 +613,12 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                         'cv_accuracy': config['accuracy'],
                         'svd_transformer': svd_transformer
                     }
+                    
+                    # Add hyperparameter tuning info for RandomizedSearchCV models
+                    if hasattr(final_model, 'best_params_'):
+                        metadata['best_params'] = final_model.best_params_
+                        metadata['best_cv_score'] = final_model.best_score_
+                    
                     metadata_path = os.path.join(models_dir, f"{model_name}_metadata.joblib")
                     joblib.dump(metadata, metadata_path)
                     logger.info(f"Saved metadata for final model {model_name} to {metadata_path}")
@@ -580,7 +665,13 @@ def do_classification_rfe(xs, y, path_to_data, tagname="all"):
         logger.info(f"Testing top features: {j} out of {len(sorted_indices)} (acc: {mean_acc})")
         out_df.append({"top_n": j, "accuracy": mean_acc})
     dfx_out = pd.DataFrame(out_df)
-    fout = "/".join(path_to_data.split("/")[:-1]) + f"/ablation_ranking_{tagname}.tsv"
+    # Handle case where path_to_data has no directory separator
+    path_parts = path_to_data.split("/")[:-1]
+    if path_parts:
+        base_dir = "/".join(path_parts)
+    else:
+        base_dir = "."  # Current directory if no path is specified
+    fout = base_dir + f"/ablation_ranking_{tagname}.tsv"
     dfx_out.to_csv(fout, sep="\t")    
     print(dfx_out)
 
