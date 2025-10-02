@@ -87,3 +87,9 @@ Thumbs.db
 
 # Docker
 .dockerignore
+/manual/_minted-manual
+/manual/manual.aux
+/manual/manual.log
+/manual/manual.out
+/manual/manual.synctex.gz
+/manual/manual.toc

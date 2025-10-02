@@ -24,7 +24,7 @@
 \newcommand{\cs}[1]{\texttt{\textbackslash #1}}
 
 % Frontmatter data; appears on title page
-\title{Imagine analysis pipeline\\User manual}
+\title{Biofilm classification analysis pipeline\\User manual}
 \version{1.0.0}
 \author{IMAGINE Project}
 \softwarelogo{\includegraphics[width=8cm]{logo}}
@@ -37,14 +37,14 @@
 \newpage
 
 \section{Introduction}
-The Imagine analysis pipeline automatically extracts features from biofilm images, identifies patterns in three-dimensional data and classifies images based on a selected target. Here we present the use when the target is the name of the strain and the classification process is used to determine which bacterial strain each image represents.
+The biofilm analysis pipeline automatically extracts features from biofilm images, identifies patterns in three-dimensional data and classifies images based on a selected target. Here we present the use when the target is the name of the strain and the classification process is used to determine which bacterial strain each image represents.
 
 \section{Image requirements}
 As input we use 3D images (z-stacks) of biofilms consisting of several image layers. They must be saved in tif format, other formats are currently not compatible with the pipeline.
 
 In case of Zeiss LSM10 microscope high-throughput imaging, the images at different positions of the sample can be acquired in such a way that the images are saved in one file. The images for further analysis must be separated into separated tiffs (one image represents only one position, which includes all images of a 3D stack). This can be done using open source software \doclink{https://imagej.net/software/fiji/}{ImageJ FIJI} with a provided ImageJ script for splitting and converting images from lsm files (Zeiss microscopes) (Figure~\ref{fig:script}).
 
-The execution of the Imagine pipeline depends heavily on the information contained in the image names, which should follow the example below.
+The execution of the pipeline depends heavily on the information contained in the image names, which should follow the example below.
 
 Scheme for image naming:\\
 <DT>\_s\_<SP>\_st\_<ST>\_p\_<WC>\_pos<WP>\_tm\_<GT>\_ch\_<CH>\_z\_<LD>
@@ -90,7 +90,7 @@ The renaming process can be carried out semi-automatically by the \doclink{https
 
 \section{PC Requirements}
 
-The Imagine pipeline is designed to run on both Windows and Unix-based systems, or more generally on any system that supports Docker. Hardware requirements include at least two computing cores (CPUs) and 4 gigabytes of ram. The files required to run the pipeline are approximately 500 MB in size, and 1 GB of memory may be required to run the analysis smoothly.
+The pipeline is designed to run on both Windows and Unix-based systems, or more generally on any system that supports Docker. Hardware requirements include at least two computing cores (CPUs) and 4 gigabytes of ram. The files required to run the pipeline are approximately 500 MB in size, and 1 GB of memory may be required to run the analysis smoothly.
 
 Level required:
 \begin{itemize}
@@ -106,51 +106,42 @@ A Docker host daemon is required to build Docker images. The easiest way to meet
 	\item Start Docker Desktop by double-clicking on the Docker icon in the Start menu. It might run in the background and you might need to bring it to the front from the tray (bottom right corner).
 \end{enumerate}
 
-\begin{figure}
-	\centering
-	\includegraphics[width=0.5\textwidth]{git}
-	\caption{\label{fig:git} Downloading the source code. (i) Click "code" (ii) Click on “zip” option in the "download source code" section of the dropdown. (iii) Save the zip file to Desktop.}
-\end{figure}
-
 \subsection{Building the Docker image}
 
-The next step is to build the Imagine Docker image.
+The next step is to build the Docker image.
 \begin{enumerate}
-	\item Download "imagine-main.zip" from the imagine git website (see Figure~\ref{fig:git}).
-	\item Extract "imagine-main.zip" into the imagine-main (you can rename it if you want) folder on your desktop. 
-	\item Navigate into the folder that you extracted the zip file into, right-click and select "open in terminal" to start the terminal in the "imagine-main" folder. Link to “open in terminal” can be hidden also in “show more options”.  If these options are not available on your system we suggest extracting the downloaded file onto C:/, open cmd and navigate to the folder using command cd e.g. cd C:/path/to/my/folder. Cmd can be found by typing “cmd” in Windows search and is run by clicking on “Command Prompt”. 
-	\item Connect to the internet prior to running the build command. 
+	\item Clone the source code from the GitHub website into the desired location.
+	\item Start the terminal in the above-selected location.
+	\item Build the biofilm classification Docker container using the command below.
 \end{enumerate}
-
-Once the above steps are done, write or copy the following command into the terminal to build a Docker image specifically created for running the Imagine project analyses.
 
 For Windows users:
 \begin{minted}{bat}
-c:\my-download-folder\imagine> build-and-verify.bat
+c:\my-download-folder\biofilm-classification> build-and-verify.bat
 \end{minted}
 
 For Linux users:
 \begin{minted}{sh}
 # to make the file executable
-(/my-download-folder/imagine) $ chmox +x build-and-verify.sh 
-(/my-download-folder/imagine) $ ./build-and-verify.sh
+(/my-download-folder/biofilm-classification) $ chmox +x build-and-verify.sh 
+(/my-download-folder/biofilm-classification) $ ./build-and-verify.sh
 \end{minted}
 
 Once the Docker image is built and verified (it takes a while), you can run analyses as described below. 
-The Docker image will not need to be rebuilt unless changes are made to the Imagine pipeline scripts.
+The Docker image will not need to be rebuilt unless changes are made to the source code.
 
-You can close the Docker desktop application but leave it running in the background (you will see an icon in the taskbar indicating that the Docker daemon is still running and ready to run containers). You can close the terminal window if you do not intend to continue or leave it open to run the Imagine pipeline.
+You can close the Docker desktop application but leave it running in the background (you will see an icon in the taskbar indicating that the Docker daemon is still running and ready to run containers). You can close the terminal window if you do not intend to continue or leave it open to run the classification pipeline.
 
 
-\section{Preparation of data for running the Imagine pipeline}
+\section{Preparation of data for running the classification pipeline}
 
 Before executing the command to calculate features you need to: 
 \begin{enumerate}
 	\item Prepare a folder with your input images, e.g. create a folder example\_images on the desktop, and remember the path or address of the folder, e.g. /c/Users/my\_name/Desktop/example\_images).
-	\item Create a folder in which you want to save the calculation results. For example, create the subfolder results\_example on the desktop and make a note of the path or address, e.g.\\ /c/Users/my\_name/Desktop/imagine/results\_example.
-	\item (optional) Change the voxel dimensions if necessary: To do this, go to imagine-main/src, find the feature generator script and change the following part as desired: \\
+	\item Create a folder in which you want to save the calculation results. For example, create the subfolder results\_example on the desktop and make a note of the path or address, e.g.\\ /c/Users/my\_name/Desktop/biofilm-classification/results\_example.
+	\item (optional) Change the voxel dimensions if necessary: To do this, go to src folder, find the feature generator script and change the following part as desired: \\
 	\# constants voxel\_size = 0.13 * 0.13 * 0.5 pixel\_area = 0.13 ** 2. If you make changes to the feature generator code, you must recreate the Docker image as described above.
-	\item Open the folder "imagine-main" (or the name you chose when unzipping the zip file). Search for the file with the name “.env”.
+	\item Open the source code folder. Search for the file with the name “.env”.
 \end{enumerate}
 
 You will need to replace the path to the images in the .env file: \\
@@ -158,20 +149,17 @@ You will need to replace the path to the images in the .env file: \\
 
 c:\\my\_folder\\test\_images, you need to write it as /c/my\_folder/test\_images. Make sure that you do not change the text after the ":".
 
-One must replace "/c/Users/my\_name/Desktop/imagine/results\_example" with the corresponding path if you have created the subfolder in a different location than described above. The address must be changed as described above. Again, make sure that you do not change the text after the ":".
+One must replace "/c/Users/my\_name/Desktop/biofilm-classification/results\_example" with the corresponding path if you have created the subfolder in a different location than described above. The address must be changed as described above. Again, make sure that you do not change the text after the ":".
 
 Open the file and change the paths in the .env file:
 
 \# change these paths so that they point to your data and desired results folder\\
 IMAGINE\_IMAGES=/c/Users/my\_name/Desktop/example\_images\\
-IMAGINE\_RESULTS=/c/Users/my\_name/Desktop/imagine/results\_example
+IMAGINE\_RESULTS=/c/Users/my\_name/Desktop/biofilm-classification/results\_example
 
-Alternatively, you can also create your own file with the information about the paths. Save this file in the “imagine-main” folder. If you run generate\_features or learning\_benchmark, you must specify the name in the command (see below). While in the "imagine-main" folder (or whatever name you picked when you extracted the zip file) open the terminal in this folder as described above (right click, then "open in terminal"). Additionally, the Docker daemon must be running (there should be an icon in the taskbar). If it is not, open the Docker Desktop application as described above.
+\section{Generating features using the classification pipeline}
 
-
-\section{Generating features using the Imagine pipeline}
-
-To generate features with the Imagine pipeline, run the following command in the terminal (the parts in<> must be replaced as described above and below and <> as well (see examples below):
+To generate features with the pipeline, run the following command in the terminal (the parts in<> must be replaced as described above and below and <> as well (see examples below):
 
 \begin{minted}{sh}
 docker compose run --rm datafile.tsv generate_features
@@ -183,14 +171,14 @@ If you are not using an .env file but your own file, change the command accordin
 docker compose 
   --env-file myownfilename.txt 
   run 
-  --rm imagine 
+  --rm biofilm-classification
   datafile.tsv generate_features
 \end{minted}
 
 For the examples above, the command is:
 \begin{minted}{sh}
 docker compose run 
-	--rm imagine 1 
+	--rm biofilm-classification 1 
 	datafile.tsv 10 generate_features
 \end{minted}
 
@@ -199,7 +187,7 @@ And, if you use your own file with paths:
 \begin{minted}{sh}
 docker compose 
   --env-file test_paths.txt run 
-  --rm imagine 1 datafile.tsv 10 generate_features
+  --rm biofilm-classification 1 datafile.tsv 10 generate_features
 \end{minted}
 
 The parameter “1” determines the parallelization rate — a higher parallelization (should not exceed the number of CPU cores in your computer) works faster, but consumes more resources of the computer, while a lower parallelization (1) works slower, but should also be completed on machines with fewer resources.
@@ -211,6 +199,10 @@ If you want to test the software, you can use test images (which are supplied wi
 docker compose run --rm imagine-test-generate-features
 docker compose run --rm imagine-test-learning-benchmark
 docker compose run --rm imagine-test-data-visualization
+docker compose run --rm imagine-test-learning-benchmark-save-models
+docker compose run --rm imagine-test-inference
+docker compose run --rm imagine-test-inference-env
+docker compose run --rm imagine-test-inference-fast
 \end{minted}
 
 
@@ -218,7 +210,7 @@ The main output of this step is \textbf{datafile.tsv}, where all calculated feat
 Once the process is complete, check the results folder and in particular the datafile. 
 In the first column of the data file, all analyzed images should be listed by name. If some images are missing, check the format of the missing images. 
 
-An example of what kind of results you can expect can be found in the imagine-main/results\_example folder that belongs to the pipeline.
+An example of what kind of results you can expect can be found in the biofilm-classification/examples/results\_example folder that belongs to the pipeline.
 
 The file datafile.tsv can be opened with Excel for checking. If the file becomes too large for Excel, selected rows of the table can be exported to csv and opened with Excel to check the calculations more intuitively:
 Open the command prompt as described above. 
@@ -236,20 +228,20 @@ How features are calculated is described in the last chapter of the manual and i
 
 
 
-\section{Classification using the Imagine pipeline}
+\section{Classification using the pipeline}
 
 The command for comparison of the classifiers (benchmark) is as follows (the <> sections must be replaced as above):
 
 \begin{minted}{sh}
 docker compose run 
-	--rm imagine 
+	--rm biofilm-classification 
 	datafile.tsv learning_benchmark	
 \end{minted}
 
 For example:
 \begin{minted}{sh}
 docker compose run 
-	--rm imagine 1 
+	--rm biofilm-classification 1 
 	datafile.tsv 10 learning_benchmark 
 \end{minted}
 
@@ -301,7 +293,7 @@ Any model can be disabled by placing a hash symbol \# immediately before its def
 
 After any such modification in the selected models, the image should be rebuilt by using:
 \begin{minted}{sh}
-docker compose build imagine
+docker compose build --no-cache
 \end{minted}
 
 
@@ -351,15 +343,16 @@ The easiest way is to replace the string after \_st\_ in the image name with the
 The number of layers in the 3D images can be reduced with the command from the pipeline:
 \begin{minted}{sh}
 docker compose run 
-	--rm imagine datafile.tsv 
+	--rm biofilm-classification datafile.tsv 
 	reduce_layers <initial number of layers>
 \end{minted}
 
 To reduce the layers from 21 to 11, you can use the following example:
 \begin{minted}{sh}
-	docker compose build imagine
+docker compose run 
+    --rm biofilm-classification 1 datafile.tsv 10 reduce_layers 21
 \end{minted}
-docker compose run --rm imagine 1 datafile.tsv 10 reduce\_layers 21
+
 This command removes every other layer from the bottom up to create a 3D image with half of the original layers. We can reduce the number of layers down to the bottom layer. Then use images with a reduced number of layers to run the pipeline as described above.
 
 \section{Feature descriptions to help with interpretation}
@@ -438,7 +431,7 @@ GPT energy: Energy is another way of expressing the uniformity or regularity of 
 \appendix
 
 
-\section{List and descriptions of biofilm features calculated by the Imagine pipeline\label{apdx:features}}
+\section{List and descriptions of biofilm features calculated by the pipeline\label{apdx:features}}
 
 
 * The image can be analysed as a raw image without adjustments or the pixel intensity values  can be normalised, which is referred to as norminten. The pixel intensity values  in the  raw image are normalized per layer by subtracting the average pixel intensity value of the individual layer by the sum of average pixel intensity values for all layers to obtain values between 0 and 1.
