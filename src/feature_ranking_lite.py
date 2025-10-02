@@ -772,8 +772,23 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
     upsampling = 1
 
     # Build best RandomForest using advanced HPO (Optuna -> Halving -> RandomizedSearch)
-    logger.info("Building best RandomForest model using advanced hyperparameter optimization")
-    tuned_rf = build_best_rf(X, y, sample_index=sample_index, time_budget_sec=300)
+    # Use adaptive time budget based on dataset size
+    n_samples = X.shape[0]
+    if n_samples < 20:
+        # Small dataset (e.g., CI tests): use minimal time budget
+        time_budget_sec = 30
+    elif n_samples < 100:
+        # Small dataset: moderate time budget
+        time_budget_sec = 60
+    elif n_samples < 500:
+        # Medium dataset: standard time budget
+        time_budget_sec = 180
+    else:
+        # Large dataset: extended time budget
+        time_budget_sec = 300
+    
+    logger.info(f"Building best RandomForest model using advanced hyperparameter optimization (time budget: {time_budget_sec}s for {n_samples} samples)")
+    tuned_rf = build_best_rf(X, y, sample_index=sample_index, time_budget_sec=time_budget_sec)
 
     if all_learners:
         models = {
@@ -1006,8 +1021,18 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                     logger.info(f"Using build_best_rf for final RF model training")
                     # Create index from sample_index for group extraction
                     final_sample_index = sample_index if sample_index is not None else None
+                    # Adaptive time budget based on dataset size
+                    n_samples_final = X_final.shape[0]
+                    if n_samples_final < 20:
+                        time_budget_final = 30
+                    elif n_samples_final < 100:
+                        time_budget_final = 60
+                    elif n_samples_final < 500:
+                        time_budget_final = 180
+                    else:
+                        time_budget_final = 300
                     # build_best_rf returns an already fitted model
-                    final_model = build_best_rf(X_final, y, sample_index=final_sample_index, time_budget_sec=300)
+                    final_model = build_best_rf(X_final, y, sample_index=final_sample_index, time_budget_sec=time_budget_final)
                     # Skip the fit step for this model as it's already fitted
                     model_already_fitted = True
                 elif model_name == 'xgb':
