@@ -9,3 +9,4 @@ plotly
 xgboost
 scikit-image
 shap
+matplotlib
