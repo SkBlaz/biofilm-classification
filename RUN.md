@@ -83,6 +83,11 @@ docker compose run --rm imagine-test-inference-env
   - `*_predictions.tsv` - Predictions for each input image with confidence scores
   - `*_probabilities.tsv` - Prediction probabilities if available
   - `inference_summary.tsv` - Summary of predictions from all models
+  - `explanations/` - SHAP explanations for model predictions (feature importance):
+    - `*_shap_values.csv` - SHAP values for each prediction (binary/regression models)
+    - `*_shap_class_*.csv` - SHAP values for each class (multi-class models)
+    - `*_summary_plot.png` - Visual summary of feature importance
+    - `*_feature_importance.csv` - Mean absolute SHAP values ranking features by importance
 - `./examples/test_images_results/inference_output_env/` - Directory containing environment variable inference results:
   - Same structure as above but from environment variable mode test
 
@@ -234,6 +239,8 @@ This will produce a folder called `tmp` in the results folder. The folder contai
 ## Task: Inference
 
 To run inference on new images using pre-trained models, use the `inference` task. This requires that models have been previously trained using the `learning_benchmark_save_models` task.
+
+The inference task automatically generates SHAP (SHapley Additive exPlanations) explanations that provide model-agnostic insights into which features contributed most to each prediction. These explanations help understand and interpret the model's decision-making process.
 
 ### Environment Variable Mode (Recommended)
 
