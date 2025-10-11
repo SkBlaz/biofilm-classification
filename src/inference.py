@@ -513,6 +513,11 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
                     n_samples = min(50, X_values.shape[0])
                     shap_values = explainer.shap_values(X_values[:n_samples])
                     
+                    # Handle 3D array case (binary classification) for KernelExplainer too
+                    if isinstance(shap_values, np.ndarray) and shap_values.ndim == 3:
+                        logger.info(f"Converting 3D SHAP values to 2D (taking positive class)")
+                        shap_values = shap_values[:, :, 1]
+                    
                     # Adjust X_values and related data to match
                     if n_samples < X_values.shape[0]:
                         logger.warning(f"Limited SHAP computation to {n_samples} samples due to computational cost")
@@ -521,6 +526,7 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
                         
                 except Exception as e:
                     logger.error(f"KernelExplainer failed for {model_name}: {e}")
+                    shap_values = None
                     continue
             
             if shap_values is None:
