@@ -477,8 +477,18 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
                     logger.info(f"Using TreeExplainer for {model_name}")
                     explainer = shap.TreeExplainer(model)
                     shap_values = explainer.shap_values(X_values)
+                    
+                    # TreeExplainer might return a list for multi-class or 3D array for binary
+                    # Handle 3D array case (binary classification)
+                    if isinstance(shap_values, np.ndarray) and shap_values.ndim == 3:
+                        logger.info(f"Converting 3D SHAP values to 2D (taking positive class)")
+                        # For binary classification, take the values for the positive class (index 1)
+                        # This is shape (n_samples, n_features, n_classes) -> (n_samples, n_features)
+                        shap_values = shap_values[:, :, 1]
+                    
                 except Exception as e:
                     logger.warning(f"TreeExplainer failed for {model_name}: {e}")
+                    shap_values = None
             
             # Fall back to KernelExplainer (model-agnostic but slower)
             if shap_values is None:
