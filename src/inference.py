@@ -15,6 +15,7 @@ import pandas as pd
 import logging
 import subprocess
 from pathlib import Path
+import shap
 
 logging.basicConfig(format="%(asctime)s - %(message)s",
                     datefmt="%d-%b-%y %H:%M:%S")
@@ -403,8 +404,194 @@ def run_inference(models, metadata, features_file, output_dir):
         summary_df.to_csv(summary_file, sep="\t", index=False)
         logger.info(f"Saved inference summary to {summary_file}")
     
+    # Generate SHAP explanations
+    try:
+        generate_shap_explanations(models, metadata, all_predictions, output_dir)
+    except Exception as e:
+        logger.error(f"Failed to generate SHAP explanations: {e}")
+        logger.warning("Continuing without SHAP explanations")
+    
     logger.info(f"Inference complete. Results saved to {output_dir}")
     return len(all_predictions)
+
+
+def generate_shap_explanations(models, metadata, all_predictions, output_dir):
+    """Generate SHAP explanations for model predictions.
+    
+    Args:
+        models: Dictionary of loaded models
+        metadata: Dictionary of model metadata
+        all_predictions: Dictionary of prediction results including processed features
+        output_dir: Directory to save SHAP explanations
+    """
+    logger.info("Generating SHAP explanations...")
+    
+    # Create explanations subdirectory
+    explanations_dir = os.path.join(output_dir, "explanations")
+    os.makedirs(explanations_dir, exist_ok=True)
+    
+    for model_name, model in models.items():
+        if model_name not in all_predictions:
+            logger.warning(f"Skipping SHAP for {model_name} - no predictions available")
+            continue
+            
+        try:
+            logger.info(f"Generating SHAP explanations for {model_name}...")
+            
+            results = all_predictions[model_name]
+            X = results['processed_features']
+            
+            # Convert to numpy array for SHAP
+            X_values = X.values
+            
+            # Get metadata for this model
+            meta = metadata.get(model_name, {})
+            
+            # Apply the same transformations as during inference
+            thr_features = meta.get('thr_features', False)
+            n_components = meta.get('n_components', 'all')
+            
+            # Apply feature thresholding BEFORE SVD if conditions match training
+            if not thr_features and n_components == "all" and 'thr_indices' in meta:
+                thr_indices = np.array(meta['thr_indices'])
+                if len(thr_indices) > 0 and max(thr_indices) < X_values.shape[1]:
+                    X_values = X_values[:, thr_indices]
+            
+            # Apply dimensionality reduction if used during training
+            if 'svd_transformer' in meta and meta['svd_transformer'] is not None:
+                svd_transformer = meta['svd_transformer']
+                X_values = svd_transformer.transform(X_values)
+                # For SVD-transformed features, use generic column names
+                feature_names = [f"component_{i}" for i in range(X_values.shape[1])]
+            else:
+                # Use original feature names
+                feature_names = list(X.columns)
+            
+            # Select an appropriate SHAP explainer based on model type
+            explainer = None
+            shap_values = None
+            
+            # Try TreeExplainer first (for tree-based models)
+            if hasattr(model, 'estimators_') or 'Forest' in str(type(model)) or 'XGB' in str(type(model)):
+                try:
+                    logger.info(f"Using TreeExplainer for {model_name}")
+                    explainer = shap.TreeExplainer(model)
+                    shap_values = explainer.shap_values(X_values)
+                except Exception as e:
+                    logger.warning(f"TreeExplainer failed for {model_name}: {e}")
+            
+            # Fall back to KernelExplainer (model-agnostic but slower)
+            if shap_values is None:
+                try:
+                    logger.info(f"Using KernelExplainer for {model_name}")
+                    # Sample a subset of data as background for KernelExplainer
+                    # Use min of 100 samples or all available
+                    background_size = min(100, X_values.shape[0])
+                    background_indices = np.random.choice(X_values.shape[0], background_size, replace=False)
+                    background = X_values[background_indices]
+                    
+                    # Create explainer with predict function
+                    if hasattr(model, 'predict_proba'):
+                        predict_fn = lambda x: model.predict_proba(x)
+                    else:
+                        predict_fn = lambda x: model.predict(x).reshape(-1, 1)
+                    
+                    explainer = shap.KernelExplainer(predict_fn, background)
+                    
+                    # Compute SHAP values for all samples (can be slow)
+                    # Limit to first 50 samples if dataset is large
+                    n_samples = min(50, X_values.shape[0])
+                    shap_values = explainer.shap_values(X_values[:n_samples])
+                    
+                    # Adjust X_values and related data to match
+                    if n_samples < X_values.shape[0]:
+                        logger.warning(f"Limited SHAP computation to {n_samples} samples due to computational cost")
+                        X_values = X_values[:n_samples]
+                        results['sample_names'] = results['sample_names'][:n_samples]
+                        
+                except Exception as e:
+                    logger.error(f"KernelExplainer failed for {model_name}: {e}")
+                    continue
+            
+            if shap_values is None:
+                logger.error(f"Could not generate SHAP values for {model_name}")
+                continue
+            
+            # Handle multi-class case - shap_values might be a list
+            if isinstance(shap_values, list):
+                # For multi-class, take the class with highest probability for each sample
+                # Or we can save explanations for each class
+                logger.info(f"Multi-class model detected with {len(shap_values)} classes")
+                
+                # Save SHAP values for each class
+                for class_idx, class_shap in enumerate(shap_values):
+                    class_name = class_idx
+                    if 'target_mapping' in meta:
+                        class_name = meta['target_mapping'].get(class_idx, class_idx)
+                    
+                    # Create DataFrame with SHAP values
+                    shap_df = pd.DataFrame(
+                        class_shap,
+                        index=results['sample_names'],
+                        columns=feature_names
+                    )
+                    
+                    # Save to CSV
+                    shap_file = os.path.join(explanations_dir, f"{model_name}_shap_class_{class_name}.csv")
+                    shap_df.to_csv(shap_file)
+                    logger.info(f"Saved SHAP values for {model_name} class {class_name}")
+                
+                # For summary, use the first class
+                shap_values_summary = shap_values[0]
+            else:
+                shap_values_summary = shap_values
+                
+                # Create DataFrame with SHAP values
+                shap_df = pd.DataFrame(
+                    shap_values_summary,
+                    index=results['sample_names'],
+                    columns=feature_names
+                )
+                
+                # Save to CSV
+                shap_file = os.path.join(explanations_dir, f"{model_name}_shap_values.csv")
+                shap_df.to_csv(shap_file)
+                logger.info(f"Saved SHAP values for {model_name}")
+            
+            # Generate summary plot and save as HTML
+            try:
+                import matplotlib
+                matplotlib.use('Agg')  # Use non-interactive backend
+                import matplotlib.pyplot as plt
+                
+                # Summary plot
+                plt.figure(figsize=(10, 6))
+                shap.summary_plot(shap_values_summary, X_values, feature_names=feature_names, show=False)
+                summary_plot_file = os.path.join(explanations_dir, f"{model_name}_summary_plot.png")
+                plt.savefig(summary_plot_file, bbox_inches='tight', dpi=150)
+                plt.close()
+                logger.info(f"Saved summary plot for {model_name}")
+                
+                # Feature importance (mean absolute SHAP values)
+                mean_abs_shap = np.abs(shap_values_summary).mean(axis=0)
+                importance_df = pd.DataFrame({
+                    'feature': feature_names,
+                    'importance': mean_abs_shap
+                }).sort_values('importance', ascending=False)
+                
+                importance_file = os.path.join(explanations_dir, f"{model_name}_feature_importance.csv")
+                importance_df.to_csv(importance_file, index=False)
+                logger.info(f"Saved feature importance for {model_name}")
+                
+            except Exception as e:
+                logger.warning(f"Could not generate plots for {model_name}: {e}")
+            
+        except Exception as e:
+            logger.error(f"Failed to generate SHAP explanations for {model_name}: {e}")
+            continue
+    
+    logger.info(f"SHAP explanations saved to {explanations_dir}")
+
 
 
 def main():
