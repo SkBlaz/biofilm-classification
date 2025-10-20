@@ -140,6 +140,7 @@ if [ $LEARNING_TASK = "learning_benchmark" ]; then
 	fi
 	# calculating feature rankings + intermediary frames etc.
 	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" ${ALL_LEARNERS_FLAG}
+	python visualize_benchmark.py
 fi
 
 if [ $LEARNING_TASK = "learning_benchmark_save_models" ]; then
@@ -151,6 +152,7 @@ if [ $LEARNING_TASK = "learning_benchmark_save_models" ]; then
 	fi
 	# calculating feature rankings + intermediary frames etc. + save models for inference
 	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" --save_models ${ALL_LEARNERS_FLAG}
+	python visualize_benchmark.py
 fi
 
 #if [ $LEARNING_TASK = "data_visualization" ]; then
