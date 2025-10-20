@@ -17,6 +17,8 @@ import subprocess
 from pathlib import Path
 import shap
 
+from sklearn.ensemble import RandomForestClassifier
+
 logging.basicConfig(format="%(asctime)s - %(message)s",
                     datefmt="%d-%b-%y %H:%M:%S")
 logging.getLogger(__name__).setLevel(logging.INFO)
@@ -247,7 +249,7 @@ def run_inference(models, metadata, features_file, output_dir):
                         
                 if extra_features:
                     logger.info(f"Dropping extra features for {model_name}: {len(extra_features)} features")
-                    logger.info(f"Extra features being dropped: {list(extra_features)}")
+                    logger.info(f"Extra features being dropped: {list(extra_features) if len(extra_features) < 10 else str(len(extra_features)) + ' features'}")
                     X = X.drop(columns=list(extra_features))
                 
                 # Reorder columns to match training
@@ -440,7 +442,6 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
             
             results = all_predictions[model_name]
             X = results['processed_features']
-            
             # Convert to numpy array for SHAP
             X_values = X.values
             
@@ -475,8 +476,52 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
             if hasattr(model, 'estimators_') or 'Forest' in str(type(model)) or 'XGB' in str(type(model)):
                 try:
                     logger.info(f"Using TreeExplainer for {model_name}")
+                    
+                    df_x = pd.DataFrame(X_values, columns=feature_names)
                     explainer = shap.TreeExplainer(model)
-                    shap_values = explainer.shap_values(X_values)
+                    shap_values = explainer.shap_values(df_x)
+                    explanation = explainer(df_x)
+
+                    import matplotlib
+                    matplotlib.use('Agg')  # Use non-interactive backend
+                    import matplotlib.pyplot as plt
+
+                    # Generate explanations for each example
+                    for i, (idx, row) in enumerate(X.iterrows()):
+                        logger.info(f"Generating explanation for model {model_name} and example {idx}")
+
+                        row_dir = os.path.join(explanations_dir, idx)
+                        os.makedirs(row_dir, exist_ok=True)
+                        for class_idx in range(shap_values.shape[2]):
+                            class_name = class_idx
+                            if 'target_mapping' in meta:
+                                class_name = meta['target_mapping'].get(class_idx, class_idx)
+
+                            flag = "_true" if class_name in idx else ""
+                            flag += "_predicted" if results['predictions'][i] == class_name else ""
+                            
+                            plt.figure(figsize=(10, 6))
+                            shap.plots.decision(
+                                explainer.expected_value[class_idx],
+                                shap_values[i, :, class_idx],
+                                feature_names=list(df_x.columns),
+                                show=False
+                            )
+                        
+                            decision_plot_file = os.path.join(row_dir, f"{model_name}_{class_name}_decision{flag}.png")
+                            plt.savefig(decision_plot_file, bbox_inches="tight", dpi=150)
+                            plt.close()
+                            
+                           
+                            plt.figure(figsize=(10, 6))
+                            shap.plots.waterfall(
+                                explanation[i, :, class_idx],
+                                show=False
+                            )
+                        
+                            waterfall_plot_file = os.path.join(row_dir, f"{model_name}_{class_name}_waterfall{flag}.png")
+                            plt.savefig(waterfall_plot_file, bbox_inches="tight", dpi=150)
+                            plt.close()
                     
                     # TreeExplainer might return a list for multi-class or 3D array for binary
                     # Handle 3D array case (binary classification)
@@ -581,9 +626,9 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
                 import matplotlib.pyplot as plt
                 
                 # Summary plot
-                plt.figure(figsize=(10, 6))
                 shap.summary_plot(shap_values_summary, X_values, feature_names=feature_names, show=False)
                 summary_plot_file = os.path.join(explanations_dir, f"{model_name}_summary_plot.png")
+                plt.gcf().set_size_inches(56, 12)
                 plt.savefig(summary_plot_file, bbox_inches='tight', dpi=150)
                 plt.close()
                 logger.info(f"Saved summary plot for {model_name}")
@@ -608,7 +653,65 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
     
     logger.info(f"SHAP explanations saved to {explanations_dir}")
 
+def total_abs_diff_per_feature(rf, X_values, feature_names=None):
+    """
+    Computes total absolute difference between feature values and split thresholds
+    along the decision path for a given sample, across all trees in a RandomForest.
 
+    Returns both the global total and per-feature totals.
+
+    Parameters
+    ----------
+    rf : fitted RandomForestClassifier or RandomForestRegressor
+        The trained random forest.
+    X_values : array-like of shape (n_features,)
+        The feature vector for the sample.
+    feature_names : list of str, optional
+        Feature names for readability.
+
+    Returns
+    -------
+    total_diff : float
+        Sum of all absolute differences across all splits and trees.
+    per_feature_diff : dict
+        Mapping {feature_name or index: total_abs_difference}.
+    details : list of dict
+        Full details of each split (tree index, feature, threshold, value, abs_diff).
+    """
+
+    X_values = np.array(X_values).reshape(1, -1)
+    total_diff = 0.0
+    per_feature_diff = defaultdict(float)
+    details = []
+
+    for tree_idx, estimator in enumerate(rf.estimators_):
+        tree = estimator.tree_
+        node_indicator = estimator.decision_path(X_values)
+        node_index = node_indicator.indices  # indices of nodes that the sample passes through
+
+        for node_id in node_index:
+            # Skip leaf nodes
+            if tree.children_left[node_id] == -1:
+                continue
+
+            feature_idx = tree.feature[node_id]
+            threshold = tree.threshold[node_id]
+            feature_value = X_values[0, feature_idx]
+            diff = abs(feature_value - threshold)
+
+            total_diff += diff
+            key = feature_names[feature_idx] if feature_names is not None else feature_idx
+            per_feature_diff[key] += diff
+
+            details.append({
+                "tree": tree_idx,
+                "feature": key,
+                "threshold": threshold,
+                "feature_value": feature_value,
+                "abs_diff": diff
+            })
+
+    return total_diff, dict(per_feature_diff), details
 
 def main():
     parser = argparse.ArgumentParser(
@@ -640,8 +743,10 @@ def main():
         
         # Generate features for input images
         logger.info("Generating features for input images...")
-        os.makedirs(args.temp_dir, exist_ok=True)
-        features_file = generate_features_for_images(args.images_dir, args.temp_dir)
+        #os.makedirs(args.temp_dir, exist_ok=True)
+        #features_file = generate_features_for_images(args.images_dir, args.temp_dir)
+        features_file = os.path.join(args.temp_dir, "inference_data.tsv")
+
         
         # Run inference
         logger.info("Running inference...")
