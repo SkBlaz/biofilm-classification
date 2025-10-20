@@ -504,6 +504,7 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
                             shap.plots.decision(
                                 explainer.expected_value[class_idx],
                                 shap_values[i, :, class_idx],
+                                feature_display_range=slice(None, -16, -1),
                                 feature_names=list(df_x.columns),
                                 show=False
                             )
@@ -516,6 +517,7 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
                             plt.figure(figsize=(10, 6))
                             shap.plots.waterfall(
                                 explanation[i, :, class_idx],
+                                max_display=15,
                                 show=False
                             )
                         
@@ -743,9 +745,8 @@ def main():
         
         # Generate features for input images
         logger.info("Generating features for input images...")
-        #os.makedirs(args.temp_dir, exist_ok=True)
-        #features_file = generate_features_for_images(args.images_dir, args.temp_dir)
-        features_file = os.path.join(args.temp_dir, "inference_data.tsv")
+        os.makedirs(args.temp_dir, exist_ok=True)
+        features_file = generate_features_for_images(args.images_dir, args.temp_dir)
 
         
         # Run inference
