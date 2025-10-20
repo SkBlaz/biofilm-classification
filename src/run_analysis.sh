@@ -20,7 +20,7 @@ if [ $# -lt 4 ]; then
   echo -e "\t\t<nb parallel jobs (4)>"
   echo -e "\t\t<dataset name (datafile.tsv)>"
   echo -e "\t\t<top features to visualize (10)>"
-  echo -e "\t\t<task (generate_features | learning_benchmark | learning_benchmark_save_models | data_visualization | inference)>"
+  echo -e "\t\t<task (generate_features | learning_benchmark | learning_benchmark_save_models | inference)>"
   echo -e "\t\t[--all_learners (optional: enable all ML algorithms)]"
   echo
   echo
@@ -153,16 +153,16 @@ if [ $LEARNING_TASK = "learning_benchmark_save_models" ]; then
 	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" --save_models ${ALL_LEARNERS_FLAG}
 fi
 
-if [ $LEARNING_TASK = "data_visualization" ]; then
-	# Check if datafile exists in working directory but not in results directory
-	if [ ! -f "${RESULTS_CREATE_DF}" ] && [ -f "${INPUT_DATASETNAME}" ]; then
-		echo "Copying ${INPUT_DATASETNAME} from working directory to ${RESULTS_CREATE_DF}"
-		mkdir -p "${OUTPUT_RESULTS_FOLDER}"
-		cp "${INPUT_DATASETNAME}" "${RESULTS_CREATE_DF}"
-	fi
-	# visualizations
-	python ./visualizations/pipeline_visualizations.py --data "${RESULTS_CREATE_DF}" --rankings "${RESULTS_RANKING_FILE}" --fout "${RESULTS_FOLDER_VISUALIZATIONS}" --nbfeatures "${INPUT_NB_VISUALIZATION_FEATURES}"
-fi
+#if [ $LEARNING_TASK = "data_visualization" ]; then
+#	# Check if datafile exists in working directory but not in results directory
+#	if [ ! -f "${RESULTS_CREATE_DF}" ] && [ -f "${INPUT_DATASETNAME}" ]; then
+#		echo "Copying ${INPUT_DATASETNAME} from working directory to ${RESULTS_CREATE_DF}"
+#		mkdir -p "${OUTPUT_RESULTS_FOLDER}"
+#		cp "${INPUT_DATASETNAME}" "${RESULTS_CREATE_DF}"
+#	fi
+#	# visualizations
+#	python ./visualizations/pipeline_visualizations.py --data "${RESULTS_CREATE_DF}" --rankings "${RESULTS_RANKING_FILE}" --fout "${RESULTS_FOLDER_VISUALIZATIONS}" --nbfeatures "${INPUT_NB_VISUALIZATION_FEATURES}"
+#fi
 
 if [ $LEARNING_TASK = "reduce_layers" ]; then
   # halve number of layers in images
