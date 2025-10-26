@@ -155,16 +155,22 @@ if [ $LEARNING_TASK = "learning_benchmark_save_models" ]; then
 	python visualize_benchmark.py
 fi
 
-#if [ $LEARNING_TASK = "data_visualization" ]; then
-#	# Check if datafile exists in working directory but not in results directory
-#	if [ ! -f "${RESULTS_CREATE_DF}" ] && [ -f "${INPUT_DATASETNAME}" ]; then
-#		echo "Copying ${INPUT_DATASETNAME} from working directory to ${RESULTS_CREATE_DF}"
-#		mkdir -p "${OUTPUT_RESULTS_FOLDER}"
-#		cp "${INPUT_DATASETNAME}" "${RESULTS_CREATE_DF}"
-#	fi
-#	# visualizations
-#	python ./visualizations/pipeline_visualizations.py --data "${RESULTS_CREATE_DF}" --rankings "${RESULTS_RANKING_FILE}" --fout "${RESULTS_FOLDER_VISUALIZATIONS}" --nbfeatures "${INPUT_NB_VISUALIZATION_FEATURES}"
-#fi
+if [ $LEARNING_TASK = "data_visualization" ]; then
+	# Check if datafile exists in working directory but not in results directory
+	if [ ! -f "${RESULTS_CREATE_DF}" ] && [ -f "${INPUT_DATASETNAME}" ]; then
+		echo "Copying ${INPUT_DATASETNAME} from working directory to ${RESULTS_CREATE_DF}"
+		mkdir -p "${OUTPUT_RESULTS_FOLDER}"
+		cp "${INPUT_DATASETNAME}" "${RESULTS_CREATE_DF}"
+	fi
+	# Use rankings_label.tsv if rankings.tsv doesn't exist
+	RANKINGS_FILE="${RESULTS_RANKING_FILE}"
+	if [ ! -f "${RANKINGS_FILE}" ] && [ -f "${OUTPUT_RESULTS_FOLDER}/rankings_label.tsv" ]; then
+		echo "Using rankings_label.tsv for visualization"
+		RANKINGS_FILE="${OUTPUT_RESULTS_FOLDER}/rankings_label.tsv"
+	fi
+	# visualizations
+	python ./visualizations/pipeline_visualizations.py --data "${RESULTS_CREATE_DF}" --rankings "${RANKINGS_FILE}" --fout "${RESULTS_FOLDER_VISUALIZATIONS}" --nbfeatures "${INPUT_NB_VISUALIZATION_FEATURES}"
+fi
 
 if [ $LEARNING_TASK = "reduce_layers" ]; then
   # halve number of layers in images
