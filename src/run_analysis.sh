@@ -138,6 +138,8 @@ if [ $LEARNING_TASK = "learning_benchmark" ]; then
 		mkdir -p "${OUTPUT_RESULTS_FOLDER}"
 		cp "${INPUT_DATASETNAME}" "${RESULTS_CREATE_DF}"
 	fi
+	# Ensure visualizations directory exists
+	mkdir -p "${RESULTS_FOLDER_VISUALIZATIONS}"
 	# calculating feature rankings + intermediary frames etc.
 	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" ${ALL_LEARNERS_FLAG}
 	python visualize_benchmark.py
@@ -150,6 +152,8 @@ if [ $LEARNING_TASK = "learning_benchmark_save_models" ]; then
 		mkdir -p "${OUTPUT_RESULTS_FOLDER}"
 		cp "${INPUT_DATASETNAME}" "${RESULTS_CREATE_DF}"
 	fi
+	# Ensure visualizations directory exists
+	mkdir -p "${RESULTS_FOLDER_VISUALIZATIONS}"
 	# calculating feature rankings + intermediary frames etc. + save models for inference
 	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" --save_models ${ALL_LEARNERS_FLAG}
 	python visualize_benchmark.py

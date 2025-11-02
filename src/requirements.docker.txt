@@ -10,3 +10,4 @@ xgboost
 scikit-image
 shap
 matplotlib
+seaborn

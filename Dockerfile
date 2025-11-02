@@ -26,6 +26,7 @@ COPY src/create_final_df_from_results.py \
 	 src/feature_ranking_lite.py \
 	 src/inference.py \
 	 src/remove_layers.sh \
+	 src/visualize_benchmark.py \
 	 ./
 
 # visualizations
