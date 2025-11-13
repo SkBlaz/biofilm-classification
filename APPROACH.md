@@ -1,6 +1,6 @@
-# Algorithmic overview of ICS
+# Algorithmic overview of MicroICS
 
-There are two main computational components that constitute each run.
+There are three main computational components that constitute each run.
 
 ## Feature construction
 Feature construction aims to facilitate the process of identifying geometric (and other!) features from a given 3D image. The main source file that contains the bulk of the logic is `src/feature_generator.py`. Features that are created broadly follow the following algorithm:
@@ -51,3 +51,6 @@ Explanation:
 5. `accuracy` -> accuracy metric
 6. `test_set` -> What were the labels of the test set for this fold
 7. `thr_features` -> are we using thresholded features (True/False possible)
+
+## Inference
+Inference is the final computational component that applies trained machine learning models to new, unseen biofilm images. Once the feature construction and machine learning steps have been completed, inference enables real-time classification of images without requiring retraining. The trained models are used to predict strain, virulence, or other properties for newly acquired biofilm images, making the system practical for diagnostic applications. This component leverages the trained classifiers to efficiently process new images through the established feature extraction pipeline and produce predictions based on the learned patterns.
