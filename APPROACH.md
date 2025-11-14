@@ -12,26 +12,25 @@ Feature construction aims to facilitate the process of identifying geometric (an
 Statistics aim to extract both density based aspects, as well as general (e.g., homogeneity) aspects of images. The goal of this part is to produce a comprehensive feature set fast, as it's meant to run in parallel for thousands of images on commodity hardware (e.g., Fiji-based flows for similar scope run out of memory). One of the novelties of this approach is automated threshold-based generation -- as we cannot be certain of appropriate thresholds when generating features, we lift the constraint and generate thousands of features corresponding to different e.g., intensity/volume thresholds. This, albeit resulting in many features, enables the algorithms to capture the relevant patterns while remaining general (same threshold for whole data set). Rough sets of features generated:
 
 1. counts (based on intensity, thresholded)
-2. Platonic sized colonies (thresholded)
-3. Aggregate counts (thresholded)
-4. Large colonies (thresholded)
-5. Normalized counts (thresholded)
-6. Intensity diffs (max - min)
-7. Max intensity
-8. Median intensity
-9. Standard deviation of intensity
-10. Mean intensity
-11. minProp (new) - proportion of pixels that are below mean intensity
-13. Normalized dispersion (std / avg. pixel intensity)
-14. Normalized values for all above w.r.t. all layer values
-15. BioVolume
-16. SubstratumCoverage
-17. Homogeneity
-18. ThicknessThreshold(min_thr) - thickness, thresholded
-19. RoughnessThreshold(min_thr) - roughness, thresholded
-20. layerwise global diff - mean
-21. layerwise global diff - max
-22. layerwise global diff - min
+2. Normalized counts (thresholded)
+3. Intensity diffs (max - min)
+4. Max intensity
+5. Median intensity
+6. Standard deviation of intensity
+7. Mean intensity
+8. minProp (new) - proportion of pixels that are below mean intensity
+9. Normalized dispersion (std / avg. pixel intensity)
+10. Normalized values for all above w.r.t. all layer values
+11. BioVolume
+12. SubstratumCoverage
+13. Homogeneity
+14. ThicknessThreshold(min_thr) - thickness, thresholded
+15. RoughnessThreshold(min_thr) - roughness, thresholded
+16. layerwise global diff - mean
+17. layerwise global diff - max
+18. layerwise global diff - min
+19. Fractal dimension
+20. Graycomatrix features (contrast, correlation, dissimilarity, energy)
 
 ## Machine learning
 Machine learning takes as input the results of feature construction, and attempts to associate the plethora of generated features with the target of interest (strain in most cases). We ran comprehensive experiments with different approaches (`feature_ranking_lite.py`), and as default selected tree ensembles, as they offered good time-performance trade-off. This part of the flow enables insights into learnability of strain properties based on image-derived features. Main use case is of diagnostic nature -- for new images, the trained algorithm will be used to assess the strain/virulence/other properties. Results of machine learning are discussed next (example follows)
