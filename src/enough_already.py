@@ -5,13 +5,14 @@ of having multiple training sets per given test set. The training sets vary in s
 """
 
 import os
+import random
 import re
+
 import numpy as np
-from tqdm import tqdm, trange
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
-import random
+from tqdm import tqdm, trange
 
 
 def get_out_dir(sub="how_much_is_enough"):
@@ -76,9 +77,7 @@ def extract_pools(index: pd.Index, r_seed: int):
     random.seed(r_seed)
     for p in pools:
         random.shuffle(pools[p])
-    assert len({len(ps) for ps in pools.values()}) == 1, {
-        p: len(y) for p, y in pools.items()
-    }
+    assert len({len(ps) for ps in pools.values()}) == 1, {p: len(y) for p, y in pools.items()}
     return pools, group_ids
 
 
@@ -137,9 +136,7 @@ def do_classification(
     group_ids: list[tuple[str, str]],
     results: pd.DataFrame,
 ):
-    model = RandomForestClassifier(
-        n_estimators=200, max_features=1.0, random_state=1234, n_jobs=-1
-    )
+    model = RandomForestClassifier(n_estimators=200, max_features=1.0, random_state=1234, n_jobs=-1)
     max_pools = max(len(ps) for ps in pools.values())
 
     sample_names = list(x_data.index)
@@ -154,9 +151,7 @@ def do_classification(
         train_sample_names = [sample_names[i] for i in train_ind]
         test_sample_names = [sample_names[i] for i in test_ind]
         for n_pools in trange(1, max_pools + 1, leave=False):
-            ok_positions = filter_data(
-                pools, n_pools, train_sample_names, test_sample_names
-            )
+            ok_positions = filter_data(pools, n_pools, train_sample_names, test_sample_names)
             x_train_filt = x_train[ok_positions]
             y_train_filt = y_train[ok_positions]
             model.fit(x_train_filt, y_train_filt)
@@ -197,9 +192,7 @@ if __name__ == "__main__":
         "../prepared_data/2023-08-05-paral2-final",
         "../prepared_data/2023-08-06-extra-features-final_only_custom",
     ]
-    files = [
-        base_file + appendix + ".tsv" for base_file in base_files for appendix in [""]
-    ]
+    files = [base_file + appendix + ".tsv" for base_file in base_files for appendix in [""]]
     for data_file in files:
         print(f"Processing {data_file}")
         the_file = os.path.join(this_dir, data_file)

@@ -1,12 +1,12 @@
-import pandas as pd
+import glob
 import logging
 import sys
-import tqdm
 from collections import defaultdict
-import glob
 
-logging.basicConfig(format="%(asctime)s - %(message)s",
-                    datefmt="%d-%b-%y %H:%M:%S")
+import pandas as pd
+import tqdm
+
+logging.basicConfig(format="%(asctime)s - %(message)s", datefmt="%d-%b-%y %H:%M:%S")
 logging.getLogger(__name__).setLevel(logging.INFO)
 
 

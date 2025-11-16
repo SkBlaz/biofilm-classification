@@ -1,24 +1,24 @@
-import os
-import re
-import numpy as np
-from tqdm import tqdm
 import argparse
 
-#from imblearn.over_sampling import BorderlineSMOTE
-import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.dummy import DummyClassifier
-from sklearn.feature_selection import mutual_info_classif
-from sklearn.metrics import accuracy_score
-from sklearn.linear_model import LogisticRegression
-from sklearn.decomposition import TruncatedSVD
-from sklearn.model_selection import StratifiedKFold
-from xgboost import XGBClassifier
-#from tabpfn import TabPFNClassifier
-#import tpot
-
-
+# from tabpfn import TabPFNClassifier
+# import tpot
 import logging
+import os
+import re
+
+import numpy as np
+
+# from imblearn.over_sampling import BorderlineSMOTE
+import pandas as pd
+from sklearn.decomposition import TruncatedSVD
+from sklearn.dummy import DummyClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_selection import mutual_info_classif
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import StratifiedKFold
+from tqdm import tqdm
+from xgboost import XGBClassifier
 
 logging.basicConfig(format="%(asctime)s %(message)s", level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -94,9 +94,7 @@ class ForestRanking(Ranking):
 
     def __init__(self, n_estimators=200, max_features=1.0):
         super().__init__(f"RandomForest(n={n_estimators}, p={max_features})")
-        self.model = RandomForestClassifier(
-            n_estimators=n_estimators, max_features=max_features, random_state=1234
-        )
+        self.model = RandomForestClassifier(n_estimators=n_estimators, max_features=max_features, random_state=1234)
 
     def compute_scores(self, xs: pd.DataFrame, y: pd.Series):
         self.model.fit(xs.values, y.values)
@@ -139,9 +137,7 @@ def load_data(path_to_data: str):
     return data
 
 
-def compute_rankings(
-    path_to_data: str, target_col="label", skip: bool = False, fout: str = ""
-):
+def compute_rankings(path_to_data: str, target_col="label", skip: bool = False, fout: str = ""):
     """
     Computes feature rankings for the data found at ``path_to_data``,
     where the target column is ``target_col``.
@@ -158,9 +154,7 @@ def compute_rankings(
     y_data = data[target_col]
     if skip:
         return x_data, y_data, None
-    scores_data = pd.DataFrame(
-        index=x_columns, columns=[model.name for model in models], data=0.0
-    )
+    scores_data = pd.DataFrame(index=x_columns, columns=[model.name for model in models], data=0.0)
     for model in models:
         logger.info(f"Computing rankings for {model} - shape: {x_data.shape}")
         model.fit(x_data, y_data)
@@ -178,9 +172,7 @@ def compute_rankings(
     else:
         output_file = os.path.join(out_dir, f"rankings_{file_appendix}.tsv")
     logger.info(f"Saving the ranking results to {output_file}")
-    scores_data.reset_index().rename(columns={"index": "feature"}).to_csv(
-        output_file, sep="\t", index=False
-    )
+    scores_data.reset_index().rename(columns={"index": "feature"}).to_csv(output_file, sep="\t", index=False)
     return x_data, y_data, scores_data
 
 
@@ -234,9 +226,7 @@ def human_grouping(sample_names: pd.Series):
     name_to_i = {name: i for i, name in enumerate(sample_names)}
     train_indices = []
     test_indices = []
-    human_split_file = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "human_split.csv"
-    )
+    human_split_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "human_split.csv")
     with open(human_split_file, encoding="utf-8") as f:
         for line in f:
             example, part = line.strip().split(",")
@@ -265,9 +255,7 @@ def prepare_groups(sample_name_data: pd.Series, splitter: str):
         yield human_grouping(sample_name_data)
         return
     else:
-        raise ValueError(
-            f"Wrong splitter: {splitter} (optimistic, date, human allowed)"
-        )
+        raise ValueError(f"Wrong splitter: {splitter} (optimistic, date, human allowed)")
 
     unique = {value: i for i, value in enumerate(y_transformed.unique())}
     group_to_indices = {group: [] for group in unique}
@@ -282,17 +270,17 @@ def prepare_groups(sample_name_data: pd.Series, splitter: str):
                 train_indices.extend(other_indices)
         yield train_indices, test_indices
 
-def do_classification_simple(X, ys):
 
+def do_classification_simple(X, ys):
     X = X.values
     y = pd.Categorical(ys.values).codes
     catmap = dict(zip(y, ys.values))
-    skf = StratifiedKFold(n_splits=10)    
+    skf = StratifiedKFold(n_splits=10)
     upsampling = 1
     n_components = 32
     # tpot.TPOTClassifier(generations=10, population_size=10, verbosity=2, config_dict="TPOT NN"), TabPFNClassifier(device='cpu', N_ensemble_configurations=32), XGBClassifier()
     models = [RandomForestClassifier(), DummyClassifier()]
-    #models = [RandomForestClassifier(), DummyClassifier(), tpot.TPOTClassifier(generations=10, population_size=10, verbosity=2, config_dict="TPOT NN"), TabPFNClassifier(device='cpu', N_ensemble_configurations=32), XGBClassifier()]
+    # models = [RandomForestClassifier(), DummyClassifier(), tpot.TPOTClassifier(generations=10, population_size=10, verbosity=2, config_dict="TPOT NN"), TabPFNClassifier(device='cpu', N_ensemble_configurations=32), XGBClassifier()]
     for reduce_dim in [True, False]:
         for model in models:
             for i, (train_index, test_index) in enumerate(skf.split(X, y)):
@@ -300,7 +288,7 @@ def do_classification_simple(X, ys):
                 x_test = X[test_index]
                 y_train = y[train_index]
                 y_test = y[test_index]
-                
+
                 if reduce_dim or "TabPFN" in str(model):
                     svd = TruncatedSVD(n_components=n_components, n_iter=15, random_state=42).fit(x_train)
                     x_train = svd.transform(x_train)
@@ -315,7 +303,7 @@ def do_classification_simple(X, ys):
                 output = ["RESULT", str(model).replace("\n", ""), upsampling, n_components, i, acc, test_map]
                 print("\t".join(str(x) for x in output))
 
-        
+
 def do_classification(
     x_data: pd.DataFrame,
     y_data: pd.Series,
@@ -334,28 +322,24 @@ def do_classification(
     # prepare models and results data
     models = {
         "dummy": DummyClassifier(),
-        "bagging": RandomForestClassifier(
-            n_estimators=200, max_features=1.0, random_state=1234
-        ),
+        "bagging": RandomForestClassifier(n_estimators=200, max_features=1.0, random_state=1234),
         "LR": LogisticRegression(max_iter=1000, random_state=1234),
         # "tpot": tpot.TPOTClassifier(
         #     generations=10, population_size=10, verbosity=2, config_dict="TPOT NN"
         # ),
     }
     models = {name: model for name, model in models.items() if name in model_names}
-    results = {model: [] for model in models}
-    names = list(x_data.index)
+    {model: [] for model in models}
+    list(x_data.index)
     # preprocess data
     logger.info("Converting to one-hot")
     x_data, _ = convert_to_one_hot(x_data)
     sample_names = x_data.index.to_series()
-    attribute_names = list(x_data.columns)
+    list(x_data.columns)
     x_data = x_data.values
     y_data = y_data.values
     # data frame of wrong predictions
-    df_wrong = pd.DataFrame(
-        columns=["group", "name", "true", "predicted", "decision makers"]
-    )
+    pd.DataFrame(columns=["group", "name", "true", "predicted", "decision makers"])
 
     # for name, model in models.items():
     #     # for each model
@@ -366,7 +350,7 @@ def do_classification(
     for enx, el in enumerate(set(y_data.tolist())):
         encoding[el] = enx
     y_data = np.array([encoding[x] for x in y_data])
-        
+
     for model in [RandomForestClassifier(), LogisticRegression(max_iter=1000), DummyClassifier(), XGBClassifier()]:
         for n_components in range(1, 25):
             for upsampling in [1, 5, 10, 15]:
@@ -425,18 +409,14 @@ def do_classification(
 
 if __name__ == "__main__":
     # let's turn this beast into a command-line puppy.
-    parser = argparse.ArgumentParser(
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
         "--files",
         nargs="*",
         default=[],
         help="Prepared datasets to analyze (paths to them)",
     )
-    parser.add_argument(
-        "--data-modifiers", nargs="*", default=[], help="For example, 'z--11 z--21'"
-    )
+    parser.add_argument("--data-modifiers", nargs="*", default=[], help="For example, 'z--11 z--21'")
     parser.add_argument(
         "--splitter",
         default="date",
@@ -463,7 +443,7 @@ if __name__ == "__main__":
 
     try:
         arguments = parser.parse_args()
-    except:
+    except SystemExit:
         parser.print_help()
         exit(999)
 
