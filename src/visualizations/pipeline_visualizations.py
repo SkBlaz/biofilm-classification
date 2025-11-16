@@ -1,6 +1,7 @@
 """
 Code that should be used as a part of the analysis pipeline.
 """
+
 import argparse
 
 from visualize import top_n_visualization
@@ -15,34 +16,38 @@ class VisualizationPipeline:
 
     def run(self):
         # top N based on training set; slice by strain and date
-        top_n_visualization(data_path=self.data_path,
-                            rankings_path=self.rankings_path,
-                            output_folder=self.output_folder,
-                            print_top_n=self.nb_features,
-                            x_col="pool",
-                            facet_strategy="strain_date")
+        top_n_visualization(
+            data_path=self.data_path,
+            rankings_path=self.rankings_path,
+            output_folder=self.output_folder,
+            print_top_n=self.nb_features,
+            x_col="pool",
+            facet_strategy="strain_date",
+        )
 
         # top N based on training set; slice by strain
-        top_n_visualization(data_path=self.data_path,
-                            rankings_path=self.rankings_path,
-                            output_folder=self.output_folder,
-                            print_top_n=self.nb_features,
-                            x_col="pool",
-                            facet_strategy="strain")
+        top_n_visualization(
+            data_path=self.data_path,
+            rankings_path=self.rankings_path,
+            output_folder=self.output_folder,
+            print_top_n=self.nb_features,
+            x_col="pool",
+            facet_strategy="strain",
+        )
 
         # top N based on training set; slice by strain
-        top_n_visualization(data_path=self.data_path,
-                            rankings_path=self.rankings_path,
-                            output_folder=self.output_folder,
-                            print_top_n=self.nb_features,
-                            x_col="strain",
-                            facet_strategy=None)
+        top_n_visualization(
+            data_path=self.data_path,
+            rankings_path=self.rankings_path,
+            output_folder=self.output_folder,
+            print_top_n=self.nb_features,
+            x_col="strain",
+            facet_strategy=None,
+        )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
         "--data",
         help="A TSV file with a prepared dataset to analyze (path to it)",

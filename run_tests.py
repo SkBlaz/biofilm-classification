@@ -8,7 +8,7 @@ import unittest
 
 # Discover and run all tests
 loader = unittest.TestLoader()
-suite = loader.discover('.', pattern='test_*.py')
+suite = loader.discover(".", pattern="test_*.py")
 
 runner = unittest.TextTestRunner(verbosity=2)
 result = runner.run(suite)

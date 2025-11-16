@@ -5,8 +5,7 @@ import sys
 
 import pandas as pd
 
-logging.basicConfig(format="%(asctime)s - %(message)s",
-                    datefmt="%d-%b-%y %H:%M:%S")
+logging.basicConfig(format="%(asctime)s - %(message)s", datefmt="%d-%b-%y %H:%M:%S")
 logging.getLogger(__name__).setLevel(logging.INFO)
 
 if __name__ == "__main__":
@@ -32,9 +31,7 @@ if __name__ == "__main__":
             all_dfs.append(melted_df)
 
     df_final = pd.concat(all_dfs)
-    df_final = df_final.reset_index().pivot(
-        index="sampleName", columns="variable", values="value"
-    )
+    df_final = df_final.reset_index().pivot(index="sampleName", columns="variable", values="value")
     df_final["label"] = [x.split("--")[4] for x in df_final.index.tolist()]
     ubound = df_final.isnull().sum(axis=1) / df_final.shape[1]
     df_final = df_final[ubound < 0.8]

@@ -18,22 +18,16 @@ def draw(feature, df_original, x_col, facet_col):
     else:
         rows = [1]
 
-    cfg = {
-        'data_frame': df_original,
-        'x': x_col,
-        'y': feature,
-        'points': "all",
-        'title': "Feature: " + feature
-    }
+    cfg = {"data_frame": df_original, "x": x_col, "y": feature, "points": "all", "title": "Feature: " + feature}
 
     if facet_col:
-        cfg['facet_col'] = facet_col
-        cfg['facet_col_wrap'] = colwrap
-        cfg['facet_row_spacing'] = 0.03
-        cfg['height'] = 400 * len(rows)
-        cfg['color'] = "pool"
+        cfg["facet_col"] = facet_col
+        cfg["facet_col_wrap"] = colwrap
+        cfg["facet_row_spacing"] = 0.03
+        cfg["height"] = 400 * len(rows)
+        cfg["color"] = "pool"
     else:
-        cfg['color'] = x_col
+        cfg["color"] = x_col
 
     fig = px.box(**cfg)
     fig.update_yaxes(title="")
@@ -53,21 +47,12 @@ def draw(feature, df_original, x_col, facet_col):
             )
     else:
         mdn = df_original[feature].median()
-        fig.add_hline(
-            y=mdn,
-            line_dash="dot",
-            annotation_text="median"
-        )
+        fig.add_hline(y=mdn, line_dash="dot", annotation_text="median")
 
     return fig
 
 
-def top_n_visualization(data_path,
-                        rankings_path,
-                        output_folder,
-                        print_top_n=None,
-                        x_col=None,
-                        facet_strategy=False):
+def top_n_visualization(data_path, rankings_path, output_folder, print_top_n=None, x_col=None, facet_strategy=False):
     """
     This script visualizes topN features in the input dataset by using rankings.
 
@@ -89,9 +74,7 @@ def top_n_visualization(data_path,
     if print_top_n is None:
         limit = df_rankings.shape[0]
     elif int(print_top_n) < 1 or int(print_top_n) > df_rankings.shape[0]:
-        raise ValueError(
-            f"print_top_n should be in the range of [1, {df_rankings.shape[0]}]"
-        )
+        raise ValueError(f"print_top_n should be in the range of [1, {df_rankings.shape[0]}]")
     else:
         limit = int(print_top_n)
 
@@ -117,7 +100,7 @@ def top_n_visualization(data_path,
     df_original["strain_date"] = strains_dates
     # df_original["position"] = positions
 
-    threshold = 10 ** -3
+    threshold = 10**-3
 
     print(f"Creating visualizations for top {limit} features.\n\n")
 
@@ -133,10 +116,7 @@ def top_n_visualization(data_path,
         if newname != feature:
             print(f"\t{i}\t{score}\t{feature}\t-> RENAMED TO:\t{newname}")
 
-        fig = draw(feature=feature,
-                   df_original=df_original,
-                   x_col=x_col,
-                   facet_col=facet_strategy)
+        fig = draw(feature=feature, df_original=df_original, x_col=x_col, facet_col=facet_strategy)
 
         fig.write_html(f"{output_folder}/{i:03}_{newname}.html", include_plotlyjs="cdn")
 

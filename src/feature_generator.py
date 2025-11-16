@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from scipy.ndimage import label
 
-warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
+warnings.simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 
 # create logger
 logger = logging.getLogger("imGenLogger")
@@ -37,29 +37,29 @@ pixel_area = 0.13**2
 
 
 def rgb2gray(rgb):
-    r, g, b = rgb[:,:,0], rgb[:,:,1], rgb[:,:,2]
+    r, g, b = rgb[:, :, 0], rgb[:, :, 1], rgb[:, :, 2]
     gray = 0.2989 * r + 0.5870 * g + 0.1140 * b
     return gray
 
+
 def gpt_fractal_dimension(Z):
     def boxcount(Z, k):
-        S = np.add.reduceat(
-            np.add.reduceat(Z, np.arange(0, Z.shape[0], k), axis=0),
-                               np.arange(0, Z.shape[1], k), axis=1)
-        return len(np.where((S > 0) & (S < k*k))[0])
-    Z = (Z < np.median(Z))
+        S = np.add.reduceat(np.add.reduceat(Z, np.arange(0, Z.shape[0], k), axis=0), np.arange(0, Z.shape[1], k), axis=1)
+        return len(np.where((S > 0) & (S < k * k))[0])
+
+    Z = Z < np.median(Z)
     p = min(Z.shape)
-    n = 2**np.floor(np.log(p)/np.log(2))
-    n = int(np.log(n)/np.log(2))
-    sizes = 2**np.arange(n, 1, -1)
+    n = 2 ** np.floor(np.log(p) / np.log(2))
+    n = int(np.log(n) / np.log(2))
+    sizes = 2 ** np.arange(n, 1, -1)
     counts = []
     for size in sizes:
         counts.append(boxcount(Z, size))
     coeffs = np.polyfit(np.log(sizes), np.log(counts), 1)
     return -coeffs[0]
 
-def calculate_spatial_spreading(image_stack):
 
+def calculate_spatial_spreading(image_stack):
     Dx, Dy, Dz = [], [], []
     for z, slice_ in enumerate(image_stack):
         indices = np.argwhere(slice_ > 0)
@@ -107,12 +107,10 @@ def get_transition_matrix(raw_image: np.ndarray, n_bins=None) -> np.ndarray:
 
 
 @numba.njit
-def transition_matrix_helper(binned_image: np.ndarray,
-                             n_bins: int) -> np.ndarray:
+def transition_matrix_helper(binned_image: np.ndarray, n_bins: int) -> np.ndarray:
     matrix = np.zeros((n_bins, n_bins))
     a, b, c = binned_image.shape
-    neighbors = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1),
-                 (0, 0, -1)]
+    neighbors = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
     for x in range(a):
         for y in range(b):
             for z in range(c):
@@ -137,7 +135,7 @@ def get_homogenity(raw_3d_image: np.ndarray) -> float:
     transition_matrix = get_transition_matrix(raw_3d_image)
     n_a, n_b = transition_matrix.shape
     a, b = np.indices((n_a, n_b))
-    return np.sum(transition_matrix / (1 + (a - b)**2))
+    return np.sum(transition_matrix / (1 + (a - b) ** 2))
 
 
 def subspace_fragmentation(labeled, pixel_size):
@@ -150,16 +148,14 @@ def subspace_fragmentation(labeled, pixel_size):
     return (individual, aggregates, colonies)
 
 
-def gpt_calculate_volume(labeled_image: np.ndarray,
-                         voxel_size: float) -> np.ndarray:
+def gpt_calculate_volume(labeled_image: np.ndarray, voxel_size: float) -> np.ndarray:
     unique_labels, counts = np.unique(labeled_image, return_counts=True)
     volumes = counts * voxel_size
     volume_dict = dict(zip(unique_labels, volumes))
     return np.median(np.array(list(volume_dict.values())))
 
 
-def gpt_measure_compactness(labeled_image: np.ndarray,
-                            voxel_size: float) -> np.ndarray:
+def gpt_measure_compactness(labeled_image: np.ndarray, voxel_size: float) -> np.ndarray:
     volumes = gpt_calculate_volume(labeled_image, voxel_size)
     surface_areas = gpt_calculate_surface_area(labeled_image)
     compactness = volumes / surface_areas
@@ -177,17 +173,13 @@ def gpt_calculate_surface_area(labeled_image: np.ndarray) -> np.ndarray:
         # Create a binary mask for the current label
         mask = (labeled_image == lbl).astype(np.uint8)
         # Use the scipy function to calculate the surface area
-        surface_area = np.sum(
-            np.gradient(np.array(mask))[0].astype(np.float32) >
-            0)  # Approximation
+        surface_area = np.sum(np.gradient(np.array(mask))[0].astype(np.float32) > 0)  # Approximation
         surface_area_dict[label] = surface_area
 
     return np.mean(np.array(list(surface_area_dict.values())))
 
 
-def gpt_calculate_texture_features(
-        image_stack: np.ndarray,
-        distances=[1], angles=[0, np.pi / 4, np.pi / 2, 3 * np.pi / 4]) -> pd.DataFrame:
+def gpt_calculate_texture_features(image_stack: np.ndarray, distances=[1], angles=[0, np.pi / 4, np.pi / 2, 3 * np.pi / 4]) -> pd.DataFrame:
     from skimage.feature import graycomatrix, graycoprops
 
     texture_features = []
@@ -195,39 +187,33 @@ def gpt_calculate_texture_features(
     for z in range(len(image_stack)):
         # Calculate the co-occurrence matrix for each slice
         slice_image = image_stack[z].astype(np.uint8)
-        glcm = graycomatrix(slice_image,
-                            distances=distances,
-                            angles=angles,
-                            levels=256,
-                            symmetric=True,
-                            normed=True)
+        glcm = graycomatrix(slice_image, distances=distances, angles=angles, levels=256, symmetric=True, normed=True)
 
         # Extract features from GLCM
         for distance in distances:
-            contrast = graycoprops(glcm, 'contrast')[0, 0]
-            dissimilarity = graycoprops(glcm, 'dissimilarity')[0, 0]
-            homogeneity = graycoprops(glcm, 'homogeneity')[0, 0]
-            energy = graycoprops(glcm, 'energy')[0, 0]
-            correlation = graycoprops(glcm, 'correlation')[0, 0]
-            asm = graycoprops(glcm, 'ASM')[0, 0]
+            contrast = graycoprops(glcm, "contrast")[0, 0]
+            dissimilarity = graycoprops(glcm, "dissimilarity")[0, 0]
+            homogeneity = graycoprops(glcm, "homogeneity")[0, 0]
+            energy = graycoprops(glcm, "energy")[0, 0]
+            correlation = graycoprops(glcm, "correlation")[0, 0]
+            asm = graycoprops(glcm, "ASM")[0, 0]
 
             # https://scikit-image.org/docs/stable/api/skimage.feature.html#skimage.feature.graycoprops
-            texture_features.append({
-                "GPTContrast": contrast,
-                "GPTDissimilarity": dissimilarity,
-                "GPTHomogeneity": homogeneity,
-                "GPTEnergy": energy,
-                "GPTCorrelation": correlation,
-                "GPTASM": asm
-            })
+            texture_features.append(
+                {
+                    "GPTContrast": contrast,
+                    "GPTDissimilarity": dissimilarity,
+                    "GPTHomogeneity": homogeneity,
+                    "GPTEnergy": energy,
+                    "GPTCorrelation": correlation,
+                    "GPTASM": asm,
+                }
+            )
 
     return pd.DataFrame(texture_features)
 
 
 def segment(filepath, outfolder):
-
-    
-    
     image = mtif.read_stack(filepath, units="um")
 
     actual_final_df = []
@@ -256,11 +242,9 @@ def segment(filepath, outfolder):
             cell_count, labeled = get_cell_count(sub_image, threshold)
             row[f"counts(inten<{threshold}"] = cell_count
 
-            tmp_img = (sub_image - np.mean(sub_image)) / (np.max(sub_image) -
-                                                          np.min(sub_image))
+            tmp_img = (sub_image - np.mean(sub_image)) / (np.max(sub_image) - np.min(sub_image))
 
-            row[f"counts(Norminten<{threshold}"], _ = get_cell_count(
-                tmp_img, threshold)
+            row[f"counts(Norminten<{threshold}"], _ = get_cell_count(tmp_img, threshold)
 
         tmp_count, _ = get_cell_count(sub_image, biomass_thr)
         biomass_counts_per_layers.append(tmp_count)
@@ -284,13 +268,12 @@ def segment(filepath, outfolder):
         row["min"] = np.min(sub_image)
 
         # Emptyness
-        row["minProp"] = len(np.where(sub_image < row["mean"])[0]) / (
-            sub_image.shape[0] * sub_image.shape[1])
+        row["minProp"] = len(np.where(sub_image < row["mean"])[0]) / (sub_image.shape[0] * sub_image.shape[1])
 
         # GPT-generated
-        row['GPTFractalDim'] = gpt_fractal_dimension(sub_image)
-        row['GPTVolume'] = gpt_calculate_volume(sub_image, voxel_size)
-        #row['GPTCompactness'] = gpt_measure_compactness(sub_image, voxel_size)
+        row["GPTFractalDim"] = gpt_fractal_dimension(sub_image)
+        row["GPTVolume"] = gpt_calculate_volume(sub_image, voxel_size)
+        # row['GPTCompactness'] = gpt_measure_compactness(sub_image, voxel_size)
         # row['GPTSurface'] = gpt_calculate_surface_area(sub_image)
 
         actual_final_df.append(row)
@@ -300,18 +283,18 @@ def segment(filepath, outfolder):
     print(f"Computing global features for {filepath} ..")
     all_values = np.array(all_values)
     out_df = pd.DataFrame(actual_final_df)
-    
+
     for threshold in np.arange(0.01, 0.3, 0.01):
-            pixel_count = out_df[f"counts(inten<{threshold}"].sum()
-            biovolume = (pixel_count * voxel_size) / 134 ** 2
-            out_df[f"BioVolumeThr{threshold}"] = biovolume  # inspired by (10.1099/00221287-146-10-2395)
+        pixel_count = out_df[f"counts(inten<{threshold}"].sum()
+        biovolume = (pixel_count * voxel_size) / 134**2
+        out_df[f"BioVolumeThr{threshold}"] = biovolume  # inspired by (10.1099/00221287-146-10-2395)
 
     for col in out_df.columns:
         out_df[f"{col}Normalized"] = 100 * (out_df[col] / out_df[col].sum())
 
-    out_df[
-        "SubstratumRelativeCoverage"
-    ] = 100 * (biomass_counts_per_layers[0] / all_pixels_layer)  # inspired by (doi:10.1088/1367-2630/17/3/033017)
+    out_df["SubstratumRelativeCoverage"] = 100 * (
+        biomass_counts_per_layers[0] / all_pixels_layer
+    )  # inspired by (doi:10.1088/1367-2630/17/3/033017)
     try:
         out_df["Homogenity"] = get_homogenity(image.raw_images)  # inspired by (10.1016/j.mimet.2004.08.003)
     except Exception:
@@ -322,10 +305,10 @@ def segment(filepath, outfolder):
         horizontal_spreding, vertical_spreading, total_spreading = calculate_spatial_spreading(image.raw_images)
     except Exception:
         pass
-    
-    out_df['SpreadingHorizontal'] = horizontal_spreding
-    out_df['SpreadingVertical'] = vertical_spreading
-    out_df['SpreadingTotal'] = total_spreading
+
+    out_df["SpreadingHorizontal"] = horizontal_spreding
+    out_df["SpreadingVertical"] = vertical_spreading
+    out_df["SpreadingTotal"] = total_spreading
 
     try:
         global_texture_features = gpt_calculate_texture_features(all_images).mean(axis=0)
@@ -334,7 +317,7 @@ def segment(filepath, outfolder):
     except Exception:
         # 2d case
         pass
-    
+
     # Mean thickness - basically highest vertical line per pixel - avg-d
     image_space = np.array(all_images)
 
@@ -402,4 +385,4 @@ if __name__ == "__main__":
     parser.add_argument("-f", "--file", help="File name", required=True)
     parser.add_argument("-of", "--outfolder", help="Output folder", required=True)
     args = vars(parser.parse_args())
-    segment(args['file'], args["outfolder"])
+    segment(args["file"], args["outfolder"])
