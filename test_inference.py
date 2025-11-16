@@ -3,10 +3,11 @@
 Unit tests for inference.py core functions.
 """
 
-import sys
-import unittest
-import tempfile
 import os
+import sys
+import tempfile
+import unittest
+
 import joblib
 import numpy as np
 import pandas as pd
@@ -15,7 +16,7 @@ from sklearn.ensemble import RandomForestClassifier
 # Add src directory to path
 sys.path.insert(0, 'src')
 
-from inference import load_models, format_predictions
+from inference import format_predictions, load_models
 
 
 class TestLoadModels(unittest.TestCase):

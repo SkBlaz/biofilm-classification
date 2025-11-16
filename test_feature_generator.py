@@ -5,19 +5,18 @@ Unit tests for feature_generator.py utility functions.
 
 import sys
 import unittest
+
 import numpy as np
-from scipy.ndimage import label
 
 # Add src directory to path
 sys.path.insert(0, 'src')
 
 from feature_generator import (
-    rgb2gray,
     calculate_spatial_spreading,
     get_cell_count,
-    get_transition_matrix,
     get_homogenity,
-    CONNECTION_KERNEL
+    get_transition_matrix,
+    rgb2gray,
 )
 
 

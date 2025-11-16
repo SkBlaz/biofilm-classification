@@ -1,40 +1,38 @@
-import os
-import gc
-import re
-import numpy as np
 import argparse
-import joblib
+import gc
+import logging
+import os
+import re
+import shutil
+import warnings
 
+import joblib
+import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.dummy import DummyClassifier
-from sklearn.metrics import accuracy_score, make_scorer, f1_score
+from sklearn import tree
 from sklearn.decomposition import TruncatedSVD
-from sklearn.model_selection import StratifiedKFold, RandomizedSearchCV
+from sklearn.dummy import DummyClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.exceptions import DataConversionWarning
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, f1_score, make_scorer
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, StratifiedKFold
 from sklearn.neighbors import KNeighborsClassifier
 from xgboost import XGBClassifier
-from sklearn import tree
-from sklearn.model_selection import GridSearchCV
-
-import shutil
-
-import warnings
-from sklearn.exceptions import DataConversionWarning
 
 warnings.simplefilter(action='ignore', category=DataConversionWarning)
 
 try:
     from tpot import TPOTClassifier
     TPOT_AVAILABLE = False
-except:
+except ImportError:
     TPOT_AVAILABLE = False
     TPOTClassifier = None
 
 try:
     from autogluon.tabular import TabularPredictor
     AUTOGLUON_AVAILABLE = False
-except:
+except ImportError:
     AUTOGLUON_AVAILABLE = False
     TabularPredictor = None
 
@@ -49,8 +47,6 @@ parameters = {
     'p': [1, 2, 3],                       # Minkowski distance with Manhattan (1), Euclidean (2), etc.
 }
 
-
-import logging
 
 logging.basicConfig(format="%(asctime)s %(message)s", level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -191,10 +187,7 @@ def compute_rankings(data: str,
     fout = base_dir + f"/rankings_{target_col}.tsv"
     logger.info(fout)
 
-    if fout:
-        output_file = fout
-    else:
-        output_file = os.path.join(out_dir, f"rankings_{file_appendix}.tsv")
+    output_file = fout
 
     x_columns = list(filter(lambda c: c != target_col, data.columns))
     x_columns = list(filter(lambda c: c != "Unnamed:", x_columns))
@@ -345,7 +338,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
         base_dir = "/".join(path_parts)
     else:
         base_dir = "."  # Current directory if no path is specified
-    partial_dir = base_dir + f"/partial/"
+    partial_dir = base_dir + "/partial/"
     if not os.path.isdir(partial_dir):
         os.mkdir(partial_dir)
     
@@ -495,7 +488,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
             # First try with 'all' features and thr_features=True
             preferred_results = model_results[
                 (model_results['n_components'] == 'all') & 
-                (model_results['thr_features'] == True)
+                (model_results['thr_features'])
             ]
             
             if len(preferred_results) > 0:
@@ -712,7 +705,7 @@ if __name__ == "__main__":
 
     try:
         arguments = parser.parse_args()
-    except:
+    except SystemExit:
         parser.print_help()
         exit(999)
 

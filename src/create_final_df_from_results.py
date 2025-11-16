@@ -1,9 +1,9 @@
-import os
-import pandas as pd
-import sys
 import glob
-
 import logging
+import os
+import sys
+
+import pandas as pd
 
 logging.basicConfig(format="%(asctime)s - %(message)s",
                     datefmt="%d-%b-%y %H:%M:%S")

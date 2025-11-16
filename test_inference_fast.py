@@ -4,12 +4,10 @@ Fast inference test using pre-generated features.
 This tests the core inference functionality without expensive TIF processing.
 """
 
-import os
-import sys
-import tempfile
-import shutil
-import pandas as pd
 import logging
+import os
+import shutil
+import sys
 
 # Add src directory to path
 sys.path.insert(0, '/opt/imagine')
@@ -67,7 +65,7 @@ def test_inference_with_pregenerated_features():
             shutil.rmtree(final_output_dir)
         shutil.copytree(temp_output_dir, final_output_dir)
         
-        logger.info(f"Inference test completed successfully!")
+        logger.info("Inference test completed successfully!")
         logger.info(f"Generated {len(output_files)} output files")
         logger.info(f"Results saved to {final_output_dir}")
         

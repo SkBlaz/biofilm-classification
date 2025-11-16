@@ -1,15 +1,14 @@
 import argparse
-import os.path
-
-import pandas as pd
-import numpy as np
-import multipagetiff as mtif
 import logging
-from scipy.ndimage import label
-import matplotlib.pyplot as plt
-import numba
-
+import os.path
 import warnings
+
+import matplotlib.pyplot as plt
+import multipagetiff as mtif
+import numba
+import numpy as np
+import pandas as pd
+from scipy.ndimage import label
 
 warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 
@@ -171,12 +170,12 @@ def gpt_calculate_surface_area(labeled_image: np.ndarray) -> np.ndarray:
     surface_area_dict = {}
     unique_labels = np.unique(labeled_image)
 
-    for label in unique_labels:
-        if label == 0:  # Skip background
+    for lbl in unique_labels:
+        if lbl == 0:  # Skip background
             continue
 
         # Create a binary mask for the current label
-        mask = (labeled_image == label).astype(np.uint8)
+        mask = (labeled_image == lbl).astype(np.uint8)
         # Use the scipy function to calculate the surface area
         surface_area = np.sum(
             np.gradient(np.array(mask))[0].astype(np.float32) >
@@ -315,13 +314,13 @@ def segment(filepath, outfolder):
     ] = 100 * (biomass_counts_per_layers[0] / all_pixels_layer)  # inspired by (doi:10.1088/1367-2630/17/3/033017)
     try:
         out_df["Homogenity"] = get_homogenity(image.raw_images)  # inspired by (10.1016/j.mimet.2004.08.003)
-    except:
+    except Exception:
         out_df["Homogeneity"] = 0
 
     horizontal_spreding, vertical_spreading, total_spreading = 0, 0, 0
     try:
         horizontal_spreding, vertical_spreading, total_spreading = calculate_spatial_spreading(image.raw_images)
-    except:
+    except Exception:
         pass
     
     out_df['SpreadingHorizontal'] = horizontal_spreding
@@ -332,7 +331,7 @@ def segment(filepath, outfolder):
         global_texture_features = gpt_calculate_texture_features(all_images).mean(axis=0)
         for k, v in global_texture_features.items():
             out_df[k] = v
-    except:
+    except Exception:
         # 2d case
         pass
     

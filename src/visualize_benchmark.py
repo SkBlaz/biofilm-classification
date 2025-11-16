@@ -1,10 +1,11 @@
 # visualize classifications
-import os
-import matplotlib.pyplot as plt
-import seaborn as sns
-import pandas as pd
 import glob
-import matplotlib
+import os
+
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
+
 #plt.rcParams.update({
 #    "text.usetex": True,
 #    "font.family": "sans-serif",
@@ -29,7 +30,8 @@ for result in glob.glob(results_folder + "/classification*"):
     models = [x.replace("DummyClassifier", "MajorityClassifier") for x in models]
     dfx.model = models
     dfx = dfx.sort_values(by=['accuracy'])
-    plt.clf(); plt.cla()
+    plt.clf()
+    plt.cla()
     plt.title(result.split("/")[-1].replace(".tsv", ""))
     order = ['MajorityClassifier', 'LogisticRegression', 'DecisionTreeClassifier', 'KNN-grid', 'RandomForestClassifier','XGBClassifier', 'AutoGluon']
     sns.barplot(y=dfx.model, x=dfx.accuracy, color="black", errwidth=0.5, capsize=0.5, palette="colorblind", hue=dfx.n_components, alpha=0.5, order=order)    
@@ -41,7 +43,8 @@ for result in glob.glob(results_folder + "/classification*"):
     plt.savefig(f"{results_folder}/visualizations/{img_name}.pdf", dpi=300)
     print(f"{img_name}.pdf")
 
-plt.clf();plt.cla()
+plt.clf()
+plt.cla()
 ablation_df = pd.read_csv(os.path.join(results_folder, "ablation_ranking_all.tsv"), sep="\t")
 ablation_df = ablation_df[ablation_df.top_n < 1000]
 max_top_n = ablation_df[ablation_df.accuracy == max(ablation_df.accuracy)]

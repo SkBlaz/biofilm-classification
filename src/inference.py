@@ -5,19 +5,18 @@ Inference script for biofilm classification models.
 This script loads pre-trained models and runs inference on new .tif images.
 """
 
-import os
-import sys
-import glob
 import argparse
+import glob
+import logging
+import os
+import subprocess
+import sys
+from collections import defaultdict
+
 import joblib
 import numpy as np
 import pandas as pd
-import logging
-import subprocess
-from pathlib import Path
 import shap
-
-from sklearn.ensemble import RandomForestClassifier
 
 logging.basicConfig(format="%(asctime)s - %(message)s",
                     datefmt="%d-%b-%y %H:%M:%S")
@@ -528,7 +527,7 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
                     # TreeExplainer might return a list for multi-class or 3D array for binary
                     # Handle 3D array case (binary classification)
                     if isinstance(shap_values, np.ndarray) and shap_values.ndim == 3:
-                        logger.info(f"Converting 3D SHAP values to 2D (taking positive class)")
+                        logger.info("Converting 3D SHAP values to 2D (taking positive class)")
                         # For binary classification, take the values for the positive class (index 1)
                         # This is shape (n_samples, n_features, n_classes) -> (n_samples, n_features)
                         shap_values = shap_values[:, :, 1]
@@ -549,9 +548,11 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
                     
                     # Create explainer with predict function
                     if hasattr(model, 'predict_proba'):
-                        predict_fn = lambda x: model.predict_proba(x)
+                        def predict_fn(x):
+                            return model.predict_proba(x)
                     else:
-                        predict_fn = lambda x: model.predict(x).reshape(-1, 1)
+                        def predict_fn(x):
+                            return model.predict(x).reshape(-1, 1)
                     
                     explainer = shap.KernelExplainer(predict_fn, background)
                     
@@ -562,7 +563,7 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
                     
                     # Handle 3D array case (binary classification) for KernelExplainer too
                     if isinstance(shap_values, np.ndarray) and shap_values.ndim == 3:
-                        logger.info(f"Converting 3D SHAP values to 2D (taking positive class)")
+                        logger.info("Converting 3D SHAP values to 2D (taking positive class)")
                         shap_values = shap_values[:, :, 1]
                     
                     # Adjust X_values and related data to match

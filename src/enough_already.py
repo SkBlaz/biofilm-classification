@@ -5,13 +5,14 @@ of having multiple training sets per given test set. The training sets vary in s
 """
 
 import os
+import random
 import re
+
 import numpy as np
-from tqdm import tqdm, trange
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
-import random
+from tqdm import tqdm, trange
 
 
 def get_out_dir(sub="how_much_is_enough"):

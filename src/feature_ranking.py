@@ -1,24 +1,24 @@
+import argparse
+
+#from tabpfn import TabPFNClassifier
+#import tpot
+import logging
 import os
 import re
+
 import numpy as np
-from tqdm import tqdm
-import argparse
 
 #from imblearn.over_sampling import BorderlineSMOTE
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.dummy import DummyClassifier
-from sklearn.feature_selection import mutual_info_classif
-from sklearn.metrics import accuracy_score
-from sklearn.linear_model import LogisticRegression
 from sklearn.decomposition import TruncatedSVD
+from sklearn.dummy import DummyClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_selection import mutual_info_classif
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
 from sklearn.model_selection import StratifiedKFold
+from tqdm import tqdm
 from xgboost import XGBClassifier
-#from tabpfn import TabPFNClassifier
-#import tpot
-
-
-import logging
 
 logging.basicConfig(format="%(asctime)s %(message)s", level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -343,17 +343,17 @@ def do_classification(
         # ),
     }
     models = {name: model for name, model in models.items() if name in model_names}
-    results = {model: [] for model in models}
-    names = list(x_data.index)
+    {model: [] for model in models}
+    list(x_data.index)
     # preprocess data
     logger.info("Converting to one-hot")
     x_data, _ = convert_to_one_hot(x_data)
     sample_names = x_data.index.to_series()
-    attribute_names = list(x_data.columns)
+    list(x_data.columns)
     x_data = x_data.values
     y_data = y_data.values
     # data frame of wrong predictions
-    df_wrong = pd.DataFrame(
+    pd.DataFrame(
         columns=["group", "name", "true", "predicted", "decision makers"]
     )
 
@@ -463,7 +463,7 @@ if __name__ == "__main__":
 
     try:
         arguments = parser.parse_args()
-    except:
+    except SystemExit:
         parser.print_help()
         exit(999)
 

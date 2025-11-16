@@ -6,13 +6,12 @@ UMAP + Dendrograms with a HIGH-CONTRAST, stable palette.
 - Optional distinct markers per label to improve separability
 """
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
-from matplotlib import cm
-from scipy.cluster import hierarchy
 import umap
+from scipy.cluster import hierarchy
 
 # -----------------------------
 # Sample identifier groups

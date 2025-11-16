@@ -1,20 +1,16 @@
 import argparse
-import plotly.graph_objects as go
-import matplotlib.pyplot as plt
 from collections import defaultdict
+
+import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from pandas import Series
 
 
 def parse_file_to_df(fname):
 
-    record_counter = 0
-    record_active = False
 
     ddl = defaultdict(list)
     with open(fname, encoding="cp1251") as inpfn:
-        record_txt = {}
-        records = []
-        record_counter = 0
-        current_image = None
         names = []
         distances = []
         percents = []
@@ -22,7 +18,6 @@ def parse_file_to_df(fname):
         full_names = []
         for line in inpfn:
             if "Image name:" in line:
-                record_counter = 0
                 nparts = line.split("\t")[1:][0].split(" ")[2].split("_")
                 aname = nparts[0] + "_" + nparts[6]
                 pos = nparts[7]
@@ -81,7 +76,7 @@ def visualize_interactive(dist_storage):
     for k, v in dist_storage.items():
         
         print(k)
-        d, l = k.split('_')
+        d, label_value = k.split('_')
 
         if d not in dates:
             dates.append(d)
@@ -95,7 +90,7 @@ def visualize_interactive(dist_storage):
             x=category_data['Distance'],
             y=category_data['Average'],
             mode='markers',
-            name=f"{d} {l}",
+            name=f"{d} {label_value}",
             error_y=go.scatter.ErrorY(array=category_data['Max'], arrayminus=category_data['Min']),
             marker=dict(
                 size=12,
@@ -114,10 +109,8 @@ def visualize_interactive(dist_storage):
     )
         
 
-    fig.write_html(f"output_images/interactive_avg.html")
+    fig.write_html("output_images/interactive_avg.html")
 
-
-from pandas import Series
 
 def average_and_errors(dist_storage):
     ret = {}

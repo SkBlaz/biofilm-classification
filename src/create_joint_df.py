@@ -1,9 +1,10 @@
-import pandas as pd
+import glob
 import logging
 import sys
-import tqdm
 from collections import defaultdict
-import glob
+
+import pandas as pd
+import tqdm
 
 logging.basicConfig(format="%(asctime)s - %(message)s",
                     datefmt="%d-%b-%y %H:%M:%S")

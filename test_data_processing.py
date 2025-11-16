@@ -3,10 +3,11 @@
 Unit tests for data processing utilities.
 """
 
-import sys
-import unittest
-import tempfile
 import os
+import sys
+import tempfile
+import unittest
+
 import pandas as pd
 
 # Add src directory to path

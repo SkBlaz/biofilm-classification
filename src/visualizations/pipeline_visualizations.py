@@ -66,7 +66,7 @@ if __name__ == "__main__":
     )
     try:
         arguments = parser.parse_args()
-    except:
+    except SystemExit:
         parser.print_help()
         exit(999)
 
