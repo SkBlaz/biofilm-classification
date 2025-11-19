@@ -442,7 +442,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                             )
 
                         test_map = ",".join([catmap[x] for x in y_test])
-                        output = ["RESULT", re.sub(r"\s+", ' ', str(model)), upsampling, n_components, i, acc, test_map, thr_features]
+                        output = ["RESULT", re.sub(r"\s+", " ", str(model)), upsampling, n_components, i, acc, test_map, thr_features]
                         with open(partial_path, "w") as f:
                             f.write("\t".join([str(x) for x in output]))
                             logger.info(f"Stored partial evaluation to {partial_path}")

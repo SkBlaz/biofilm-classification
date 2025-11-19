@@ -12,11 +12,13 @@ import seaborn as sns
 #    "font.sans-serif": "Helvetica",
 # })
 
+
 def extract_class(model_name):
-    if 'RandomForestClassifier' in model_name:
-        return 'RandomForestClassifier'
+    if "RandomForestClassifier" in model_name:
+        return "RandomForestClassifier"
     else:
         return model_name.split("(")[0]
+
 
 results_folder = "/imagine/results"
 
