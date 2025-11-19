@@ -12,6 +12,12 @@ import seaborn as sns
 #    "font.sans-serif": "Helvetica",
 # })
 
+def extract_class(model_name):
+    if 'RandomForestClassifier' in model_name:
+        return 'RandomForestClassifier'
+    else:
+        return model_name.split("(")[0]
+
 results_folder = "/imagine/results"
 
 for result in glob.glob(results_folder + "/classification*"):
@@ -24,7 +30,7 @@ for result in glob.glob(results_folder + "/classification*"):
             models_tmp.append("AutoGluon")
         else:
             models_tmp.append(model)
-    models = [x.split("(")[0] for x in models_tmp]
+    models = [extract_class(x) for x in models_tmp]
     models = [x.replace("GridSearchCV", "KNN-grid") for x in models]
     models = [x.replace("DummyClassifier", "MajorityClassifier") for x in models]
     dfx.model = models
