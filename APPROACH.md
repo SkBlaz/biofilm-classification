@@ -3,7 +3,7 @@
 There are three main computational components that constitute each run.
 
 ## Feature construction
-Feature construction aims to facilitate the process of identifying geometric (and other!) features from a given 3D image. The main source file that contains the bulk of the logic is `src/feature_generator.py`. Features that are created broadly follow the following algorithm:
+Feature construction aims to facilitate the process of identifying geometric (and other!) features from a given 3D image. The main source file that contains the bulk of the logic is `src/core/feature_generator.py`. Features that are created broadly follow the following algorithm:
 1. For each input feature (in parallel)
 2. For each layer in image
 3. Gather statistics about layer + push statistics about global info about image to a container
@@ -33,7 +33,7 @@ Statistics aim to extract both density based aspects, as well as general (e.g., 
 20. Graycomatrix features (contrast, correlation, dissimilarity, energy)
 
 ## Machine learning
-Machine learning takes as input the results of feature construction, and attempts to associate the plethora of generated features with the target of interest (strain in most cases). We ran comprehensive experiments with different approaches (`feature_ranking_lite.py`), and as default selected tree ensembles, as they offered good time-performance trade-off. This part of the flow enables insights into learnability of strain properties based on image-derived features. Main use case is of diagnostic nature -- for new images, the trained algorithm will be used to assess the strain/virulence/other properties. Results of machine learning are discussed next (example follows)
+Machine learning takes as input the results of feature construction, and attempts to associate the plethora of generated features with the target of interest (strain in most cases). We ran comprehensive experiments with different approaches (`src/analysis/feature_ranking_lite.py`), and as default selected tree ensembles, as they offered good time-performance trade-off. This part of the flow enables insights into learnability of strain properties based on image-derived features. Main use case is of diagnostic nature -- for new images, the trained algorithm will be used to assess the strain/virulence/other properties. Results of machine learning are discussed next (example follows)
 
 ```
 	tag	model	upsampling	n_components	fold	accuracy	test_set	thr_features
