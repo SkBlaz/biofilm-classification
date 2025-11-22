@@ -3,13 +3,14 @@
 Unit tests for feature_generator.py utility functions.
 """
 
+import os
 import sys
 import unittest
 
 import numpy as np
 
 # Add src directory to path
-sys.path.insert(0, "src")
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "core"))
 
 from feature_generator import (
     calculate_spatial_spreading,

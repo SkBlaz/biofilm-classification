@@ -10,7 +10,11 @@ import shutil
 import sys
 
 # Add src directory to path
-sys.path.insert(0, "/opt/imagine")
+# Use /opt/imagine for Docker, fallback to relative path for local testing
+if os.path.exists("/opt/imagine"):
+    sys.path.insert(0, "/opt/imagine")
+else:
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "core"))
 
 from inference import load_models, run_inference
 

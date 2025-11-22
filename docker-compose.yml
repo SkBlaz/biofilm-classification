@@ -97,7 +97,7 @@ services:
     <<: *base-test-config
     volumes:
       - type: bind
-        source: test_inference_fast.py
+        source: tests/test_inference_fast.py
         target: /opt/imagine/test_inference_fast.py
         read_only: true
       - type: bind

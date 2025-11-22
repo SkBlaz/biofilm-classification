@@ -11,7 +11,7 @@ import unittest
 import pandas as pd
 
 # Add src directory to path
-sys.path.insert(0, "src")
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "data"))
 
 from create_joint_df import extract_data
 

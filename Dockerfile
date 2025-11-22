@@ -18,15 +18,15 @@ RUN pip install \
 	-r requirements.docker.txt
 
 # processing, ranking and util
-COPY src/create_final_df_from_results.py \
-	 src/feature_generator.py \
-	 src/create_joint_df.py \
-	 src/analysis.py \
+COPY src/data/create_final_df_from_results.py \
+	 src/core/feature_generator.py \
+	 src/data/create_joint_df.py \
+	 src/analysis/analysis.py \
 	 src/run_analysis.sh \
-	 src/feature_ranking_lite.py \
-	 src/inference.py \
+	 src/analysis/feature_ranking_lite.py \
+	 src/core/inference.py \
 	 src/remove_layers.sh \
-	 src/visualize_benchmark.py \
+	 src/analysis/visualize_benchmark.py \
 	 ./
 
 # visualizations

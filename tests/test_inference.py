@@ -14,7 +14,7 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 
 # Add src directory to path
-sys.path.insert(0, "src")
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "core"))
 
 from inference import format_predictions, load_models
 
