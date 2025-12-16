@@ -464,7 +464,7 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
             shap_values = None
 
             # Try TreeExplainer first (for tree-based models)
-            if hasattr(model, "estimators_") or "Forest" in str(type(model)) or "XGB" in str(type(model)):
+            if hasattr(model, "estimators_") or "Forest" in str(type(model)) or "XGB" in str(type(model)) or "Tree" in str(type(model)):
                 try:
                     logger.info(f"Using TreeExplainer for {model_name}")
 
