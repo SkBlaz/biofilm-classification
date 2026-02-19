@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import joblib
 import numpy as np
@@ -16,7 +17,7 @@ from sklearn.ensemble import RandomForestClassifier
 # Add src directory to path
 sys.path.insert(0, "src")
 
-from inference import format_predictions, load_models
+from inference import format_predictions, load_models, run_inference
 
 
 class TestLoadModels(unittest.TestCase):
@@ -178,6 +179,59 @@ class TestFormatPredictions(unittest.TestCase):
         # Should still produce predictions
         self.assertIsInstance(results, pd.DataFrame)
         self.assertEqual(len(results), 2)
+
+
+class TestRunInference(unittest.TestCase):
+    """Test end-to-end inference execution with prepared feature table."""
+
+    class DummyModel:
+        def predict(self, X):
+            return np.array([0] * len(X))
+
+        def predict_proba(self, X):
+            return np.array([[0.75, 0.25]] * len(X))
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.output_dir = os.path.join(self.temp_dir, "output")
+        self.features_file = os.path.join(self.temp_dir, "features.tsv")
+        pd.DataFrame(
+            {
+                "sampleName": ["sample1", "sample2"],
+                "feature1": [1.0, np.inf],
+                "label": ["a", "b"],
+            }
+        ).set_index("sampleName").to_csv(self.features_file, sep="\t")
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.temp_dir)
+
+    @mock.patch("inference.generate_shap_explanations")
+    def test_run_inference_writes_prediction_outputs(self, mock_shap):
+        model = self.DummyModel()
+        models = {"demo": model}
+        metadata = {"demo": {"feature_names": ["feature1"], "target_mapping": {0: "class_a", 1: "class_b"}}}
+
+        successful_models = run_inference(models, metadata, self.features_file, self.output_dir)
+
+        self.assertEqual(successful_models, 1)
+        self.assertTrue(os.path.isfile(os.path.join(self.output_dir, "demo_predictions.tsv")))
+        self.assertTrue(os.path.isfile(os.path.join(self.output_dir, "demo_probabilities.tsv")))
+        self.assertTrue(os.path.isfile(os.path.join(self.output_dir, "demo_features.tsv")))
+        self.assertTrue(os.path.isfile(os.path.join(self.output_dir, "inference_summary.tsv")))
+        mock_shap.assert_called_once()
+
+    @mock.patch("inference.generate_shap_explanations")
+    def test_run_inference_skips_model_missing_svd_transformer(self, _mock_shap):
+        model = self.DummyModel()
+        models = {"demo": model}
+        metadata = {"demo": {"feature_names": ["feature1"], "n_components": 2}}
+
+        successful_models = run_inference(models, metadata, self.features_file, self.output_dir)
+
+        self.assertEqual(successful_models, 0)
 
 
 if __name__ == "__main__":
