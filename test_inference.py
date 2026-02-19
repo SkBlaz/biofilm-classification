@@ -212,7 +212,7 @@ class TestRunInference(unittest.TestCase):
     def test_run_inference_writes_prediction_outputs(self, mock_shap):
         model = self.DummyModel()
         models = {"demo": model}
-        metadata = {"demo": {"feature_names": ["feature1"], "target_mapping": {0: "class_a", 1: "class_b"}}}
+        metadata = {"demo": {"feature_names": ["feature1"], "target_mapping": {0: "a", 1: "b"}}}
 
         successful_models = run_inference(models, metadata, self.features_file, self.output_dir)
 
@@ -221,17 +221,21 @@ class TestRunInference(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(self.output_dir, "demo_probabilities.tsv")))
         self.assertTrue(os.path.isfile(os.path.join(self.output_dir, "demo_features.tsv")))
         self.assertTrue(os.path.isfile(os.path.join(self.output_dir, "inference_summary.tsv")))
+        processed = pd.read_csv(os.path.join(self.output_dir, "demo_features.tsv"), sep="\t", index_col=0)
+        self.assertFalse(np.isinf(processed["feature1"]).any())
         mock_shap.assert_called_once()
 
     @mock.patch("inference.generate_shap_explanations")
     def test_run_inference_skips_model_missing_svd_transformer(self, _mock_shap):
         model = self.DummyModel()
         models = {"demo": model}
+        # n_components set without a fitted svd_transformer should trigger skip.
         metadata = {"demo": {"feature_names": ["feature1"], "n_components": 2}}
 
         successful_models = run_inference(models, metadata, self.features_file, self.output_dir)
 
         self.assertEqual(successful_models, 0)
+        self.assertFalse(os.path.exists(os.path.join(self.output_dir, "inference_summary.tsv")))
 
 
 if __name__ == "__main__":
