@@ -283,8 +283,8 @@ def get_adaptive_cv(y, max_splits=5):
     class_count_info = ", ".join(str(count) for count in sorted(class_counts))
     reason = (
         f"Falling back to KFold because minimum class count is {min_class_count}; using {target_splits} folds "
-            f"with minimum class count {min_class_count} (class counts: {class_count_info})"
-        )
+        f"with minimum class count {min_class_count} (class counts: {class_count_info})"
+    )
     logger.warning(reason)
     return KFold(n_splits=target_splits, shuffle=True, random_state=42), target_splits, min_class_count, "kfold", reason
 
