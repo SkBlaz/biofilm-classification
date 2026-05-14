@@ -10,13 +10,14 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn import tree
+from sklearn.base import clone
 from sklearn.decomposition import TruncatedSVD
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.exceptions import DataConversionWarning
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score, make_scorer
-from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, StratifiedKFold
+from sklearn.model_selection import GridSearchCV, KFold, RandomizedSearchCV, StratifiedKFold
 from sklearn.neighbors import KNeighborsClassifier
 from xgboost import XGBClassifier
 
@@ -253,6 +254,23 @@ def name_manipulator_date(value: str):
     return (value[:8], re.search(r"st--([^-_]+)-", value).group(1))
 
 
+def get_adaptive_cv(y, max_splits=5):
+    y = np.asarray(y)
+    n_samples = len(y)
+    target_splits = min(max_splits, max(2, n_samples // 2))
+    _, class_counts = np.unique(y, return_counts=True)
+    min_class_count = int(class_counts.min()) if len(class_counts) else 0
+
+    if min_class_count >= 2:
+        n_splits = min(target_splits, min_class_count)
+        return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42), n_splits, min_class_count
+
+    logger.warning(
+        f"Minimum class count is {min_class_count}; falling back to KFold with {target_splits} splits instead of StratifiedKFold"
+    )
+    return KFold(n_splits=target_splits, shuffle=True, random_state=42), target_splits, min_class_count
+
+
 def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models=False, all_learners=False):
     all_cols = X.columns
     thr_indices = []
@@ -277,14 +295,15 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
     }
 
     # Create tuned RandomForest using RandomizedSearchCV
-    # Adapt CV folds and iterations based on dataset size
+    # Adapt CV folds and iterations based on dataset and class size
     n_samples = X.shape[0]
-    n_splits = min(5, max(2, n_samples // 2))  # Use 2-5 folds based on sample size
+    cv_rf, n_splits, min_class_count = get_adaptive_cv(y, max_splits=5)
     n_iter = 10  # Reduced for faster execution, still provides good hyperparameter search
-    logger.info(f"Using {n_splits} CV folds and {n_iter} iterations for dataset with {n_samples} samples")
+    logger.info(
+        f"Using {n_splits} CV folds and {n_iter} iterations for dataset with {n_samples} samples (minimum class count: {min_class_count})"
+    )
 
     rf_base = RandomForestClassifier(random_state=42, n_jobs=-1)
-    cv_rf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     tuned_rf = RandomizedSearchCV(
         estimator=rf_base,
         param_distributions=rf_param_dist,
@@ -346,7 +365,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                 continue
 
             for thr_features in [True, False]:
-                skf = StratifiedKFold(n_splits=3)
+                skf, _, _ = get_adaptive_cv(y, max_splits=3)
 
                 for i, (train_index, test_index) in enumerate(skf.split(X, y)):
                     x_train = X[train_index]
@@ -371,21 +390,32 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                             logger.info(f"Loaded existing partial evaluation from {partial_path}, skipping model evaluation")
                             continue
 
-                        logger.info(f"Running {n_components} {' '.join(str(model).split())}, fold: {i}, filter mode: {filter_mode}")
+                        model_for_fold = model
+                        if model_name == "rf" and isinstance(model, RandomizedSearchCV):
+                            cv_inner, n_splits_inner, min_class_count_inner = get_adaptive_cv(y_train, max_splits=5)
+                            logger.info(
+                                f"Using {n_splits_inner} inner CV folds for {model_name} on fold {i} "
+                                f"(minimum class count: {min_class_count_inner})"
+                            )
+                            model_for_fold = clone(model).set_params(cv=cv_inner)
+
+                        logger.info(
+                            f"Running {n_components} {' '.join(str(model_for_fold).split())}, fold: {i}, filter mode: {filter_mode}"
+                        )
 
                         # Prepare data with SVD if needed
                         x_train_model = x_train.copy()
                         x_test_model = x_test.copy()
                         svd_transformer = None
 
-                        if desc_components != "all" or "TabPFN" in str(model):
+                        if desc_components != "all" or "TabPFN" in str(model_for_fold):
                             svd_transformer = TruncatedSVD(n_components=n_components, n_iter=15, random_state=42).fit(x_train_model)
                             x_train_model = svd_transformer.transform(x_train_model)
                             x_test_model = svd_transformer.transform(x_test_model)
                         else:
                             n_components = x_train_model.shape[1]
 
-                        if "TabularPredictor" in str(model) and AUTOGLUON_AVAILABLE:
+                        if "TabularPredictor" in str(model_for_fold) and AUTOGLUON_AVAILABLE:
                             # if desc_components == "all":
                             #    continue
                             x_train_ag = pd.DataFrame(x_train_model)
@@ -398,18 +428,20 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                             train_data = pd.concat([x_train_ag, y_train_ag], axis=1)
                             test_data = pd.concat([x_test_ag, y_test_ag], axis=1)
 
-                            model = TabularPredictor(label="label")
+                            model_for_fold = TabularPredictor(label="label")
                             predictor = (
-                                model.fit(train_data, ag_args_fit={"num_cpus": PARALLELISM}) if PARALLELISM != -1 else model.fit(train_data)
+                                model_for_fold.fit(train_data, ag_args_fit={"num_cpus": PARALLELISM})
+                                if PARALLELISM != -1
+                                else model_for_fold.fit(train_data)
                             )
                             # predictor = model.fit(train_data)
                             y_hat = predictor.predict(test_data)
                             acc = accuracy_score(y_test_ag, y_hat)
-                            mname = str(model)
-                            del model
-                            model = mname
+                            mname = str(model_for_fold)
+                            del model_for_fold
+                            model_for_fold = mname
                             gc.collect()
-                        elif "TabularPredictor" in str(model) and not AUTOGLUON_AVAILABLE:
+                        elif "TabularPredictor" in str(model_for_fold) and not AUTOGLUON_AVAILABLE:
                             # Skip autogluon if not available
                             logger.warning(f"Skipping {model_name} - autogluon not available")
                             continue
@@ -417,8 +449,8 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                             try:
                                 with warnings.catch_warnings():
                                     warnings.simplefilter("ignore")
-                                    model.fit(x_train_model, y_train)
-                                    y_hat = model.predict(x_test_model)
+                                    model_for_fold.fit(x_train_model, y_train)
+                                    y_hat = model_for_fold.predict(x_test_model)
                             except Exception as e:
                                 logger.warning(
                                     f"Repetition {repetition} with {desc_components} components (THR: {thr_features}) model {model_name} fold {i} raised {e} (filter mode {filter_mode})"
@@ -442,7 +474,16 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                             )
 
                         test_map = ",".join([catmap[x] for x in y_test])
-                        output = ["RESULT", re.sub(r"\s+", " ", str(model)), upsampling, n_components, i, acc, test_map, thr_features]
+                        output = [
+                            "RESULT",
+                            re.sub(r"\s+", " ", str(model_for_fold)),
+                            upsampling,
+                            n_components,
+                            i,
+                            acc,
+                            test_map,
+                            thr_features,
+                        ]
                         with open(partial_path, "w") as f:
                             f.write("\t".join([str(x) for x in output]))
                             logger.info(f"Stored partial evaluation to {partial_path}")
@@ -524,11 +565,12 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                     final_model = LogisticRegression()
                 elif model_name == "rf":
                     # Use tuned RandomForest for final model with adaptive CV folds
-                    n_samples_final = X_final.shape[0]
-                    n_splits_final = min(5, max(2, n_samples_final // 2))
+                    cv_final, n_splits_final, min_class_count_final = get_adaptive_cv(y, max_splits=5)
                     n_iter_final = 10  # Reduced for faster execution
                     logger.info(
-                        f"Using {n_splits_final} CV folds and {n_iter_final} iterations for final model training with {n_samples_final} samples"
+                        "Using "
+                        f"{n_splits_final} CV folds and {n_iter_final} iterations for final model training with {X_final.shape[0]} samples "
+                        f"(minimum class count: {min_class_count_final})"
                     )
 
                     final_model = RandomizedSearchCV(
@@ -536,7 +578,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                         param_distributions=rf_param_dist,
                         n_iter=n_iter_final,
                         scoring=make_scorer(f1_score, average="weighted"),
-                        cv=StratifiedKFold(n_splits=n_splits_final, shuffle=True, random_state=42),
+                        cv=cv_final,
                         verbose=0,
                         random_state=42,
                         n_jobs=-1,
@@ -623,9 +665,9 @@ def do_classification_rfe(xs, y, path_to_data, tagname="all"):
     importances = np.array(model.feature_importances_)
     sorted_indices = np.argsort(importances)[::-1]
 
-    skf = StratifiedKFold(n_splits=3)
     X_init = xs.values
     y_init = pd.Categorical(y.values).codes
+    skf, _, _ = get_adaptive_cv(y_init, max_splits=3)
     out_df = []
     for j in range(1, len(sorted_indices), 20):
         X = X_init[:, sorted_indices[:j]]

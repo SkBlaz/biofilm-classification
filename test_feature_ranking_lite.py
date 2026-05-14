@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""
+Unit tests for adaptive CV selection in feature_ranking_lite.py.
+"""
+
+import sys
+import unittest
+
+import numpy as np
+from sklearn.model_selection import KFold, StratifiedKFold
+
+# Add src directory to path
+sys.path.insert(0, "src")
+
+from feature_ranking_lite import get_adaptive_cv
+
+
+class TestAdaptiveCV(unittest.TestCase):
+    """Test adaptive cross-validation setup."""
+
+    def test_uses_class_count_limited_stratified_kfold(self):
+        """Should reduce n_splits to minimum class count when needed."""
+        y = np.array([0, 0, 1, 1, 2, 2])
+        cv, n_splits, min_class_count = get_adaptive_cv(y, max_splits=5)
+
+        self.assertIsInstance(cv, StratifiedKFold)
+        self.assertEqual(n_splits, 2)
+        self.assertEqual(min_class_count, 2)
+
+    def test_falls_back_to_kfold_for_singleton_class(self):
+        """Should fall back to KFold when stratification is impossible."""
+        y = np.array([0, 0, 1])
+        cv, n_splits, min_class_count = get_adaptive_cv(y, max_splits=5)
+
+        self.assertIsInstance(cv, KFold)
+        self.assertEqual(n_splits, 2)
+        self.assertEqual(min_class_count, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
