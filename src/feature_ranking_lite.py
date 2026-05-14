@@ -258,27 +258,35 @@ def name_manipulator_date(value: str):
 def get_adaptive_cv(y, max_splits=5):
     """Build an adaptive CV splitter for classification targets.
 
-    Returns a tuple ``(cv_splitter, n_splits, min_class_count)``.
+    Returns a tuple ``(cv_splitter, n_splits, min_class_count, strategy, reason)``.
     Uses ``StratifiedKFold`` when each class has at least ``MIN_CV_SPLITS`` samples;
     otherwise falls back to ``KFold`` with the same adaptive split count.
     """
     y = np.asarray(y)
     n_samples = len(y)
-    if n_samples == 0:
-        raise ValueError("Cannot create cross-validation splitter for empty target array")
+    if n_samples < MIN_CV_SPLITS:
+        raise ValueError(f"Cannot create cross-validation splitter: at least {MIN_CV_SPLITS} samples are required, got {n_samples}")
 
     target_splits = min(max_splits, max(MIN_CV_SPLITS, n_samples // 2))
     _, class_counts = np.unique(y, return_counts=True)
     min_class_count = class_counts.min()
 
     if min_class_count >= MIN_CV_SPLITS:
+        class_count_info = ", ".join(str(count) for count in sorted(class_counts))
         n_splits = min(target_splits, min_class_count)
-        return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42), n_splits, min_class_count
+        reason = (
+            f"StratifiedKFold enabled because minimum class count is {min_class_count}; selected {n_splits} folds from target {target_splits} "
+            f"(class counts: {class_count_info})"
+        )
+        return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42), n_splits, min_class_count, "stratified", reason
 
-    logger.warning(
-        f"Minimum class count is {min_class_count}; falling back to KFold with {target_splits} splits instead of StratifiedKFold"
-    )
-    return KFold(n_splits=target_splits, shuffle=True, random_state=42), target_splits, min_class_count
+    class_count_info = ", ".join(str(count) for count in sorted(class_counts))
+    reason = (
+        f"Falling back to KFold because minimum class count is {min_class_count}; using {target_splits} folds "
+            f"with minimum class count {min_class_count} (class counts: {class_count_info})"
+        )
+    logger.warning(reason)
+    return KFold(n_splits=target_splits, shuffle=True, random_state=42), target_splits, min_class_count, "kfold", reason
 
 
 def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models=False, all_learners=False):
@@ -307,10 +315,11 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
     # Create tuned RandomForest using RandomizedSearchCV
     # Adapt CV folds and iterations based on dataset and class size
     n_samples = X.shape[0]
-    cv_rf, n_splits, min_class_count = get_adaptive_cv(y, max_splits=5)
+    cv_rf, n_splits, min_class_count, cv_strategy, cv_reason = get_adaptive_cv(y, max_splits=5)
     n_iter = 10  # Reduced for faster execution, still provides good hyperparameter search
     logger.info(
-        f"Using {n_splits} CV folds and {n_iter} iterations for dataset with {n_samples} samples (minimum class count: {min_class_count})"
+        f"Using {n_splits} CV folds and {n_iter} iterations for dataset with {n_samples} samples "
+        f"(strategy: {cv_strategy}, minimum class count: {min_class_count}). {cv_reason}"
     )
 
     rf_base = RandomForestClassifier(random_state=42, n_jobs=-1)
@@ -365,6 +374,12 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
     # Store CV results to find best hyperparameters for final model training
     cv_results = []
 
+    skf, outer_n_splits, outer_min_class_count, outer_cv_strategy, outer_cv_reason = get_adaptive_cv(y, max_splits=3)
+    logger.info(
+        f"Outer evaluation uses {outer_n_splits} folds (strategy: {outer_cv_strategy}, "
+        f"minimum class count: {outer_min_class_count}). {outer_cv_reason}"
+    )
+
     for repetition in range(3):
         for n_components in [16, 32, 64, 128, 256, 512, "all"]:
             desc_components = n_components
@@ -375,8 +390,6 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                 continue
 
             for thr_features in [True, False]:
-                skf, _, _ = get_adaptive_cv(y, max_splits=3)
-
                 for i, (train_index, test_index) in enumerate(skf.split(X, y)):
                     x_train = X[train_index]
                     x_test = X[test_index]
@@ -402,10 +415,12 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
 
                         model_for_fold = model
                         if isinstance(model, (RandomizedSearchCV, GridSearchCV)):
-                            cv_inner, n_splits_inner, min_class_count_inner = get_adaptive_cv(y_train, max_splits=5)
+                            cv_inner, n_splits_inner, min_class_count_inner, inner_cv_strategy, inner_cv_reason = get_adaptive_cv(
+                                y_train, max_splits=5
+                            )
                             logger.info(
                                 f"Using {n_splits_inner} inner CV folds for {model_name} on fold {i} "
-                                f"(minimum class count: {min_class_count_inner})"
+                                f"(strategy: {inner_cv_strategy}, minimum class count: {min_class_count_inner}). {inner_cv_reason}"
                             )
                             model_for_fold = clone(model).set_params(cv=cv_inner)
 
@@ -575,11 +590,11 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                     final_model = LogisticRegression()
                 elif model_name == "rf":
                     # Use tuned RandomForest for final model with adaptive CV folds
-                    cv_final, n_splits_final, min_class_count_final = get_adaptive_cv(y, max_splits=5)
+                    cv_final, n_splits_final, min_class_count_final, final_cv_strategy, final_cv_reason = get_adaptive_cv(y, max_splits=5)
                     n_iter_final = 10  # Reduced for faster execution
                     logger.info(
                         f"Using {n_splits_final} CV folds and {n_iter_final} iterations for final model training with {X_final.shape[0]} samples "
-                        f"(minimum class count: {min_class_count_final})"
+                        f"(strategy: {final_cv_strategy}, minimum class count: {min_class_count_final}). {final_cv_reason}"
                     )
 
                     final_model = RandomizedSearchCV(
@@ -676,7 +691,11 @@ def do_classification_rfe(xs, y, path_to_data, tagname="all"):
 
     X_init = xs.values
     y_init = pd.Categorical(y.values).codes
-    skf, _, _ = get_adaptive_cv(y_init, max_splits=3)
+    skf, rfe_n_splits, rfe_min_class_count, rfe_cv_strategy, rfe_cv_reason = get_adaptive_cv(y_init, max_splits=3)
+    logger.info(
+        f"RFE evaluation uses {rfe_n_splits} folds (strategy: {rfe_cv_strategy}, "
+        f"minimum class count: {rfe_min_class_count}). {rfe_cv_reason}"
+    )
     out_df = []
     for j in range(1, len(sorted_indices), 20):
         X = X_init[:, sorted_indices[:j]]
