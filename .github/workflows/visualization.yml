@@ -35,7 +35,6 @@ jobs:
         mkdir -p examples/test_images_results
         
     - name: Run learning benchmark to generate rankings
-      timeout-minutes: 15
       run: |
         echo "Running learning benchmark to generate rankings..."
         docker compose run --rm imagine-test-learning-benchmark
