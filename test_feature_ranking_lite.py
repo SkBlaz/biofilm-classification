@@ -25,6 +25,7 @@ class TestAdaptiveCV(unittest.TestCase):
 
         self.assertIsInstance(cv, StratifiedKFold)
         self.assertEqual(n_splits, 2)
+        self.assertEqual(cv.n_splits, 2)
         self.assertEqual(min_class_count, 2)
 
     def test_falls_back_to_kfold_for_singleton_class(self):
@@ -34,7 +35,13 @@ class TestAdaptiveCV(unittest.TestCase):
 
         self.assertIsInstance(cv, KFold)
         self.assertEqual(n_splits, 2)
+        self.assertEqual(cv.n_splits, n_splits)
         self.assertEqual(min_class_count, 1)
+
+    def test_empty_target_raises_value_error(self):
+        """Should reject empty target arrays."""
+        with self.assertRaises(ValueError):
+            get_adaptive_cv(np.array([]), max_splits=5)
 
 
 if __name__ == "__main__":

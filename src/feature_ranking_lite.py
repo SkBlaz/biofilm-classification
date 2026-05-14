@@ -56,6 +56,7 @@ logger = logging.getLogger(__name__)
 np.random.seed(123)
 
 PARALLELISM = -1
+MIN_CV_SPLITS = 2
 
 
 def get_out_dir(sub="ranking_results"):
@@ -255,13 +256,22 @@ def name_manipulator_date(value: str):
 
 
 def get_adaptive_cv(y, max_splits=5):
+    """Build an adaptive CV splitter for classification targets.
+
+    Returns a tuple ``(cv_splitter, n_splits, min_class_count)``.
+    Uses ``StratifiedKFold`` when each class has at least ``MIN_CV_SPLITS`` samples;
+    otherwise falls back to ``KFold`` with the same adaptive split count.
+    """
     y = np.asarray(y)
     n_samples = len(y)
-    target_splits = min(max_splits, max(2, n_samples // 2))
-    _, class_counts = np.unique(y, return_counts=True)
-    min_class_count = int(class_counts.min()) if len(class_counts) else 0
+    if n_samples == 0:
+        raise ValueError("Cannot create cross-validation splitter for empty target array")
 
-    if min_class_count >= 2:
+    target_splits = min(max_splits, max(MIN_CV_SPLITS, n_samples // 2))
+    _, class_counts = np.unique(y, return_counts=True)
+    min_class_count = class_counts.min()
+
+    if min_class_count >= MIN_CV_SPLITS:
         n_splits = min(target_splits, min_class_count)
         return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42), n_splits, min_class_count
 
@@ -391,7 +401,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                             continue
 
                         model_for_fold = model
-                        if model_name == "rf" and isinstance(model, RandomizedSearchCV):
+                        if isinstance(model, (RandomizedSearchCV, GridSearchCV)):
                             cv_inner, n_splits_inner, min_class_count_inner = get_adaptive_cv(y_train, max_splits=5)
                             logger.info(
                                 f"Using {n_splits_inner} inner CV folds for {model_name} on fold {i} "
@@ -568,8 +578,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                     cv_final, n_splits_final, min_class_count_final = get_adaptive_cv(y, max_splits=5)
                     n_iter_final = 10  # Reduced for faster execution
                     logger.info(
-                        "Using "
-                        f"{n_splits_final} CV folds and {n_iter_final} iterations for final model training with {X_final.shape[0]} samples "
+                        f"Using {n_splits_final} CV folds and {n_iter_final} iterations for final model training with {X_final.shape[0]} samples "
                         f"(minimum class count: {min_class_count_final})"
                     )
 
