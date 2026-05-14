@@ -34,7 +34,7 @@ jobs:
         mkdir -p examples/test_images_results
         
     - name: Setup models for inference testing
-      timeout-minutes: 15
+      timeout-minutes: 45
       run: |
         echo "Setting up models for inference testing..."
         docker compose run --rm imagine-test-learning-benchmark-save-models

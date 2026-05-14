@@ -53,7 +53,7 @@ for result in glob.glob(results_folder + "/classification*"):
         y=dfx.model,
         x=dfx.accuracy,
         color="black",
-        errwidth=0.5,
+        err_kws={"linewidth": 0.5},
         capsize=0.5,
         palette="colorblind",
         hue=dfx.n_components,
@@ -73,11 +73,16 @@ plt.cla()
 ablation_df = pd.read_csv(os.path.join(results_folder, "ablation_ranking_all.tsv"), sep="\t")
 ablation_df = ablation_df[ablation_df.top_n < 1000]
 max_top_n = ablation_df[ablation_df.accuracy == max(ablation_df.accuracy)]
+max_top_n_row = max_top_n.iloc[0]
 
 sns.lineplot(x=ablation_df.top_n, y=ablation_df.accuracy)
-plt.vlines(max_top_n.top_n, 0, max_top_n.accuracy, color="red", linestyle="dashed")
-plt.plot(max_top_n.top_n, max_top_n.accuracy, "ro")
-plt.text(max_top_n.top_n + 15, max_top_n.accuracy, f"Num features: {int(max_top_n.top_n)}, accuracy: {round(float(max_top_n.accuracy), 3)}")
+plt.vlines(max_top_n_row.top_n, 0, max_top_n_row.accuracy, color="red", linestyle="dashed")
+plt.plot(max_top_n_row.top_n, max_top_n_row.accuracy, "ro")
+plt.text(
+    max_top_n_row.top_n + 15,
+    max_top_n_row.accuracy,
+    f"Num features: {int(max_top_n_row.top_n)}, accuracy: {round(float(max_top_n_row.accuracy), 3)}",
+)
 plt.xlabel("Top n features considered (RF ranking)")
 plt.ylabel("Mean accuracy (3-fold cross validation)")
 plt.tight_layout()
