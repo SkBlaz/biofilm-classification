@@ -348,7 +348,13 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
         # Add TPOT only if available
         if TPOT_AVAILABLE:
             models["tpot"] = TPOTClassifier(
-                generations=5, population_size=20, cv=5, random_state=42, verbosity=2, n_jobs=PARALLELISM, memory="auto"
+                generations=5,
+                population_size=20,
+                cv=5,
+                random_state=42,
+                verbosity=2,
+                n_jobs=PARALLELISM,
+                memory="auto",
             )
     else:
         # Default behavior: only RandomForest (fast)
@@ -613,7 +619,13 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                     final_model = GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM)
                 elif model_name == "tpot" and TPOT_AVAILABLE:
                     final_model = TPOTClassifier(
-                        generations=5, population_size=20, cv=5, random_state=42, verbosity=2, n_jobs=PARALLELISM, memory="auto"
+                        generations=5,
+                        population_size=20,
+                        cv=5,
+                        random_state=42,
+                        verbosity=2,
+                        n_jobs=PARALLELISM,
+                        memory="auto",
                     )
                 else:
                     logger.warning(f"Unknown model type {model_name}, skipping final model training")
