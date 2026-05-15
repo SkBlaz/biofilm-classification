@@ -5,6 +5,7 @@ Unit tests for adaptive CV selection in feature_ranking_lite.py.
 
 import sys
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 from sklearn.model_selection import KFold, StratifiedKFold
@@ -12,7 +13,7 @@ from sklearn.model_selection import KFold, StratifiedKFold
 # Add src directory to path
 sys.path.insert(0, "src")
 
-from feature_ranking_lite import get_adaptive_cv
+from feature_ranking_lite import get_adaptive_cv, get_benchmark_runtime_config
 
 
 class TestAdaptiveCV(unittest.TestCase):
@@ -51,6 +52,26 @@ class TestAdaptiveCV(unittest.TestCase):
         """Should reject a single-sample target array."""
         with self.assertRaisesRegex(ValueError, "at least 2 samples"):
             get_adaptive_cv(np.array([1]), max_splits=5)
+
+
+class TestBenchmarkRuntimeConfig(unittest.TestCase):
+    """Test benchmark runtime tuning for CI and local runs."""
+
+    def test_uses_fast_runtime_config_in_ci(self):
+        with patch.dict("os.environ", {"CI": "true"}, clear=False):
+            config = get_benchmark_runtime_config()
+
+        self.assertEqual(config["n_iter"], 4)
+        self.assertEqual(config["repetitions"], 1)
+        self.assertEqual(config["n_components"], [16, 32, "all"])
+
+    def test_uses_default_runtime_config_outside_ci(self):
+        with patch.dict("os.environ", {}, clear=True):
+            config = get_benchmark_runtime_config()
+
+        self.assertEqual(config["n_iter"], 10)
+        self.assertEqual(config["repetitions"], 3)
+        self.assertEqual(config["n_components"], [16, 32, 64, 128, 256, 512, "all"])
 
 
 if __name__ == "__main__":
