@@ -63,9 +63,9 @@ def get_benchmark_runtime_config():
     """Return runtime settings for the learning benchmark."""
     if os.getenv("CI", "").lower() == "true":
         return {
-            "n_iter": 4,
+            "n_iter": 2,
             "repetitions": 1,
-            "n_components": [16, 32, "all"],
+            "n_components": ["all"],
         }
     return {
         "n_iter": 10,

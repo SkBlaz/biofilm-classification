@@ -61,9 +61,9 @@ class TestBenchmarkRuntimeConfig(unittest.TestCase):
         with patch.dict("os.environ", {"CI": "true"}, clear=False):
             config = get_benchmark_runtime_config()
 
-        self.assertEqual(config["n_iter"], 4)
+        self.assertEqual(config["n_iter"], 2)
         self.assertEqual(config["repetitions"], 1)
-        self.assertEqual(config["n_components"], [16, 32, "all"])
+        self.assertEqual(config["n_components"], ["all"])
 
     def test_uses_default_runtime_config_outside_ci(self):
         with patch.dict("os.environ", {}, clear=True):
