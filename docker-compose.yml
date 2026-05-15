@@ -5,6 +5,8 @@ x-base: &base
 
 x-base-test-config: &base-test-config
   <<: *base
+  environment:
+    - CI=true
   volumes:
     - type: bind
       source: examples/test_images
