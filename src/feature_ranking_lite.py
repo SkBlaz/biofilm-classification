@@ -59,6 +59,21 @@ PARALLELISM = -1
 MIN_CV_SPLITS = 2
 
 
+def get_benchmark_runtime_config():
+    """Return runtime settings for the learning benchmark."""
+    if os.getenv("CI", "").lower() == "true":
+        return {
+            "n_iter": 4,
+            "repetitions": 1,
+            "n_components": [16, 32, "all"],
+        }
+    return {
+        "n_iter": 10,
+        "repetitions": 3,
+        "n_components": [16, 32, 64, 128, 256, 512, "all"],
+    }
+
+
 def get_out_dir(sub="ranking_results"):
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), sub)
 
@@ -316,7 +331,8 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
     # Adapt CV folds and iterations based on dataset and class size
     n_samples = X.shape[0]
     cv_rf, n_splits, min_class_count, cv_strategy, cv_reason = get_adaptive_cv(y, max_splits=5)
-    n_iter = 10  # Reduced for faster execution, still provides good hyperparameter search
+    runtime_config = get_benchmark_runtime_config()
+    n_iter = runtime_config["n_iter"]
     logger.info(
         f"Using {n_splits} CV folds and {n_iter} iterations for dataset with {n_samples} samples "
         f"(strategy: {cv_strategy}, minimum class count: {min_class_count}). {cv_reason}"
@@ -386,8 +402,8 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
         f"minimum class count: {outer_min_class_count}). {outer_cv_reason}"
     )
 
-    for repetition in range(3):
-        for n_components in [16, 32, 64, 128, 256, 512, "all"]:
+    for repetition in range(runtime_config["repetitions"]):
+        for n_components in runtime_config["n_components"]:
             desc_components = n_components
 
             # Skip if n_components exceeds available features
@@ -597,7 +613,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                 elif model_name == "rf":
                     # Use tuned RandomForest for final model with adaptive CV folds
                     cv_final, n_splits_final, min_class_count_final, final_cv_strategy, final_cv_reason = get_adaptive_cv(y, max_splits=5)
-                    n_iter_final = 10  # Reduced for faster execution
+                    n_iter_final = runtime_config["n_iter"]
                     logger.info(
                         f"Using {n_splits_final} CV folds and {n_iter_final} iterations for final model training with {X_final.shape[0]} samples "
                         f"(strategy: {final_cv_strategy}, minimum class count: {min_class_count_final}). {final_cv_reason}"
