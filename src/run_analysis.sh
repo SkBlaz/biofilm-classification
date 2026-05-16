@@ -114,7 +114,7 @@ print_failure_hints() {
 		echo "Hint: The process may have run out of memory. Try reducing parallelism and/or using fewer learners."
 	fi
 
-	if grep -qiE "minimum class count|cannot create cross-validation splitter|label|target column|target_col|at least [0-9]+ samples" "$log_file"; then
+	if grep -qiE "cannot create cross-validation splitter|minimum class count|error.*label|failed.*label|missing.*label|error.*target[_ ]col|failed.*target[_ ]col|at least [0-9]+ samples" "$log_file"; then
 		echo "Hint: The dataset may not have enough supported labels/classes for the requested benchmark step."
 	fi
 
@@ -127,12 +127,20 @@ run_step() {
 	local step_name="$1"
 	shift
 
+	local safe_step_name
+	safe_step_name=$(echo "$step_name" | tr -c '[:alnum:]' '_')
+	local tmp_dir
+	tmp_dir="${TMPDIR:-/tmp}"
 	local log_file
-	log_file=$(mktemp)
+	log_file=$(mktemp "${tmp_dir}/pipeline_${safe_step_name}.XXXXXX") || {
+		echo "ERROR: Could not create a temporary log file for step: ${step_name}"
+		exit 1
+	}
 	echo "Running step: ${step_name}"
 
-	"$@" 2>&1 | tee "$log_file"
-	local status=${PIPESTATUS[0]}
+	"$@" >"$log_file" 2>&1
+	local status=$?
+	cat "$log_file"
 
 	if [ "$status" -ne 0 ]; then
 		echo ""
@@ -145,6 +153,18 @@ run_step() {
 	fi
 
 	rm -f "$log_file"
+}
+
+validate_tif_inputs() {
+	local image_dir="$1"
+	shopt -s nullglob
+	local tif_files=("${image_dir}"/*.tif)
+	shopt -u nullglob
+	if [ "${#tif_files[@]}" -eq 0 ]; then
+		echo "ERROR: No .tif files found in ${image_dir}"
+		return 1
+	fi
+	return 0
 }
 
 echo "Using the following parameters for input:"
@@ -160,12 +180,9 @@ if [ $LEARNING_TASK = "generate_features" ]; then
 	rm -rvf "${OUTPUT_RESULTS_FOLDER}/*"
 	mkdir -p "${OUTPUT_RESULTS_FOLDER}"/{feature_generator,raw,analysis,visualizations}
 
-	if ! ls "${INPUT_IMAGE_FOLDER}"/*.tif >/dev/null 2>&1; then
-		echo "ERROR: No .tif files found in ${INPUT_IMAGE_FOLDER}"
-		exit 1
-	fi
-	run_step "feature generation for all input images" parallel --progress --verbose -j"${INPUT_PARALLELISM}" \
-		python feature_generator.py --outfolder "${RESULTS_FOLDER_FEATURE_GENERATOR}" --file ::: "${INPUT_IMAGE_FOLDER}"/*.tif
+	run_step "validate input .tif files" validate_tif_inputs "${INPUT_IMAGE_FOLDER}"
+	run_step "feature generation for all input images" parallel --halt now,fail=1 --verbose -j"${INPUT_PARALLELISM}" \
+		python feature_generator.py --outfolder "${RESULTS_FOLDER_FEATURE_GENERATOR}" --file {} ::: "${INPUT_IMAGE_FOLDER}"/*.tif
 
 	# creating a dataset from images
 	run_step "create joint dataframe" python create_joint_df.py "${RESULTS_FOLDER_FEATURE_GENERATOR}" "${RESULTS_FOLDER_RAW}"
