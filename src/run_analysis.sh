@@ -1,4 +1,5 @@
 #!/bin/bash
+set -o pipefail
 ########################################################################################################################
 # run full pipe																											  #
 # bash run_analysis.sh <image folder> <number of parallel jobs> <TSV dataset name> <visualize top N features> #
@@ -106,6 +107,46 @@ RESULTS_FOLDER_RAW="${OUTPUT_RESULTS_FOLDER}/raw"
 RESULTS_FOLDER_ANALYSIS="${OUTPUT_RESULTS_FOLDER}/analysis"
 ############################################ [ LEAVE IT ] ##############################################################
 
+print_failure_hints() {
+	local log_file="$1"
+
+	if grep -qiE "out of memory|memoryerror|cannot allocate memory|killed" "$log_file"; then
+		echo "Hint: The process may have run out of memory. Try reducing parallelism and/or using fewer learners."
+	fi
+
+	if grep -qiE "minimum class count|cannot create cross-validation splitter|label|target column|target_col|at least [0-9]+ samples" "$log_file"; then
+		echo "Hint: The dataset may not have enough supported labels/classes for the requested benchmark step."
+	fi
+
+	if grep -qiE "No such file or directory|FileNotFoundError" "$log_file"; then
+		echo "Hint: One of the input/output paths does not exist or is not mounted correctly."
+	fi
+}
+
+run_step() {
+	local step_name="$1"
+	shift
+
+	local log_file
+	log_file=$(mktemp)
+	echo "Running step: ${step_name}"
+
+	"$@" 2>&1 | tee "$log_file"
+	local status=${PIPESTATUS[0]}
+
+	if [ "$status" -ne 0 ]; then
+		echo ""
+		echo "ERROR: Pipeline step failed: ${step_name}"
+		echo "Exit code: ${status}"
+		print_failure_hints "$log_file"
+		echo "Please review the logs above for details."
+		rm -f "$log_file"
+		exit "$status"
+	fi
+
+	rm -f "$log_file"
+}
+
 echo "Using the following parameters for input:"
 echo "Input images folder: $INPUT_IMAGE_FOLDER"
 echo "Results folder: $OUTPUT_RESULTS_FOLDER (if running Docker, map it to a volume to see the results)"
@@ -119,16 +160,21 @@ if [ $LEARNING_TASK = "generate_features" ]; then
 	rm -rvf "${OUTPUT_RESULTS_FOLDER}/*"
 	mkdir -p "${OUTPUT_RESULTS_FOLDER}"/{feature_generator,raw,analysis,visualizations}
 
-	ls "${INPUT_IMAGE_FOLDER}"/*.tif | awk -v res=$RESULTS_FOLDER_FEATURE_GENERATOR '{print "python feature_generator.py --outfolder " res " --file "$1}' | parallel --progress --verbose -j"${INPUT_PARALLELISM}"
+	if ! ls "${INPUT_IMAGE_FOLDER}"/*.tif >/dev/null 2>&1; then
+		echo "ERROR: No .tif files found in ${INPUT_IMAGE_FOLDER}"
+		exit 1
+	fi
+	run_step "feature generation for all input images" parallel --progress --verbose -j"${INPUT_PARALLELISM}" \
+		python feature_generator.py --outfolder "${RESULTS_FOLDER_FEATURE_GENERATOR}" --file ::: "${INPUT_IMAGE_FOLDER}"/*.tif
 
 	# creating a dataset from images
-	python create_joint_df.py "${RESULTS_FOLDER_FEATURE_GENERATOR}" "${RESULTS_FOLDER_RAW}"
+	run_step "create joint dataframe" python create_joint_df.py "${RESULTS_FOLDER_FEATURE_GENERATOR}" "${RESULTS_FOLDER_RAW}"
 
 	# Compute aggregated features
-	python analysis.py "${RESULTS_FOLDER_RAW}" "${RESULTS_FOLDER_ANALYSIS}"
+	run_step "compute aggregated features" python analysis.py "${RESULTS_FOLDER_RAW}" "${RESULTS_FOLDER_ANALYSIS}"
 
 	# Create the final DF
-	python create_final_df_from_results.py "${RESULTS_FOLDER_ANALYSIS}" "${RESULTS_CREATE_DF}"
+	run_step "create final dataframe" python create_final_df_from_results.py "${RESULTS_FOLDER_ANALYSIS}" "${RESULTS_CREATE_DF}"
 fi
 
 if [ $LEARNING_TASK = "learning_benchmark" ]; then
@@ -141,8 +187,8 @@ if [ $LEARNING_TASK = "learning_benchmark" ]; then
 	# Ensure visualizations directory exists
 	mkdir -p "${RESULTS_FOLDER_VISUALIZATIONS}"
 	# calculating feature rankings + intermediary frames etc.
-	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" ${ALL_LEARNERS_FLAG}
-	python visualize_benchmark.py
+	run_step "run learning benchmark" python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" ${ALL_LEARNERS_FLAG}
+	run_step "visualize benchmark results" python visualize_benchmark.py
 fi
 
 if [ $LEARNING_TASK = "learning_benchmark_save_models" ]; then
@@ -155,8 +201,8 @@ if [ $LEARNING_TASK = "learning_benchmark_save_models" ]; then
 	# Ensure visualizations directory exists
 	mkdir -p "${RESULTS_FOLDER_VISUALIZATIONS}"
 	# calculating feature rankings + intermediary frames etc. + save models for inference
-	python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" --save_models ${ALL_LEARNERS_FLAG}
-	python visualize_benchmark.py
+	run_step "run learning benchmark and save models" python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" --save_models ${ALL_LEARNERS_FLAG}
+	run_step "visualize benchmark results" python visualize_benchmark.py
 fi
 
 if [ $LEARNING_TASK = "data_visualization" ]; then
@@ -173,7 +219,7 @@ if [ $LEARNING_TASK = "data_visualization" ]; then
 		RANKINGS_FILE="${OUTPUT_RESULTS_FOLDER}/rankings_label.tsv"
 	fi
 	# visualizations
-	python ./visualizations/pipeline_visualizations.py --data "${RESULTS_CREATE_DF}" --rankings "${RANKINGS_FILE}" --fout "${RESULTS_FOLDER_VISUALIZATIONS}" --nbfeatures "${INPUT_NB_VISUALIZATION_FEATURES}"
+	run_step "generate data visualizations" python ./visualizations/pipeline_visualizations.py --data "${RESULTS_CREATE_DF}" --rankings "${RANKINGS_FILE}" --fout "${RESULTS_FOLDER_VISUALIZATIONS}" --nbfeatures "${INPUT_NB_VISUALIZATION_FEATURES}"
 fi
 
 if [ $LEARNING_TASK = "reduce_layers" ]; then
@@ -191,5 +237,5 @@ if [ $LEARNING_TASK = "inference" ]; then
 	echo "Images: $IMAGES_PATH" 
 	echo "Output: $INFERENCE_OUTPUT_PATH"
 	
-	python inference.py "$MODELS_PATH" "$IMAGES_PATH" "$INFERENCE_OUTPUT_PATH"
+	run_step "run inference pipeline" python inference.py "$MODELS_PATH" "$IMAGES_PATH" "$INFERENCE_OUTPUT_PATH"
 fi 
