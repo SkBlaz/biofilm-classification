@@ -9,6 +9,12 @@ import plotly.express as px
 warnings.filterwarnings("ignore", message=".*The 'nopython' keyword.*")
 
 
+def require_columns(df: pd.DataFrame, required: list[str], df_name: str):
+    missing = [column for column in required if column not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns in {df_name}: {missing}. Available columns: {list(df.columns)}")
+
+
 def draw(feature, df_original, x_col, facet_col):
     colwrap = 3
 
@@ -68,6 +74,9 @@ def top_n_visualization(data_path, rankings_path, output_folder, print_top_n=Non
 
     # read rankings
     df_rankings = pd.read_csv(rankings_path, sep="\t")
+    if df_rankings.empty:
+        raise ValueError("No ranking data available for visualization")
+    require_columns(df_rankings, ["feature", ranking_col], "rankings file")
     df_rankings = df_rankings.sort_values(by=[ranking_col], ascending=False)
 
     # check top n parameter
@@ -87,9 +96,14 @@ def top_n_visualization(data_path, rankings_path, output_folder, print_top_n=Non
 
     # read data
     df_original = pd.read_csv(data_path, sep="\t")
+    if df_original.empty:
+        raise ValueError("Cannot generate visualization: input dataset is empty")
+    require_columns(df_original, ["sampleName"], "input dataset")
 
     # add visualization features
     sample_names = df_original["sampleName"].str.split("--", expand=True)
+    if sample_names.shape[1] <= 6:
+        raise ValueError("Cannot generate visualization: invalid sampleName format in input dataset")
     strains = sample_names[4]
     strains_dates = sample_names[4] + " @ " + sample_names[0]
     pools = sample_names[6]
@@ -106,7 +120,8 @@ def top_n_visualization(data_path, rankings_path, output_folder, print_top_n=Non
 
     for i in range(0, limit):
         r = df_rankings[["feature", ranking_col]].iloc[i]
-        feature, score = r[0], r[1]
+        feature = r["feature"]
+        score = r[ranking_col]
 
         if score < threshold:
             print(f"Importance score {score} ({ranking_col}) lower than {threshold}. Quitting...")
