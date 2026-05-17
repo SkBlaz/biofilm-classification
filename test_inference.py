@@ -16,7 +16,7 @@ from sklearn.ensemble import RandomForestClassifier
 # Add src directory to path
 sys.path.insert(0, "src")
 
-from inference import format_predictions, load_models
+from inference import format_predictions, load_models, validate_cli_inputs
 
 
 class TestLoadModels(unittest.TestCase):
@@ -178,6 +178,37 @@ class TestFormatPredictions(unittest.TestCase):
         # Should still produce predictions
         self.assertIsInstance(results, pd.DataFrame)
         self.assertEqual(len(results), 2)
+
+
+class TestValidateCliInputs(unittest.TestCase):
+    """Test user-facing CLI input validation messages."""
+
+    def test_missing_models_directory(self):
+        with tempfile.TemporaryDirectory() as images_dir:
+            with self.assertRaises(ValueError) as context:
+                validate_cli_inputs("/does/not/exist", images_dir)
+            self.assertIn("Models directory does not exist", str(context.exception))
+            self.assertIn("Usage: python inference.py", str(context.exception))
+
+    def test_missing_model_files(self):
+        with tempfile.TemporaryDirectory() as models_dir, tempfile.TemporaryDirectory() as images_dir:
+            open(os.path.join(images_dir, "sample.tif"), "a", encoding="utf-8").close()
+            with self.assertRaises(ValueError) as context:
+                validate_cli_inputs(models_dir, images_dir)
+            self.assertIn("No model files matching '*_model.joblib'", str(context.exception))
+
+    def test_missing_tif_files(self):
+        with tempfile.TemporaryDirectory() as models_dir, tempfile.TemporaryDirectory() as images_dir:
+            open(os.path.join(models_dir, "demo_model.joblib"), "a", encoding="utf-8").close()
+            with self.assertRaises(ValueError) as context:
+                validate_cli_inputs(models_dir, images_dir)
+            self.assertIn("No '.tif' images were found", str(context.exception))
+
+    def test_valid_inputs(self):
+        with tempfile.TemporaryDirectory() as models_dir, tempfile.TemporaryDirectory() as images_dir:
+            open(os.path.join(models_dir, "demo_model.joblib"), "a", encoding="utf-8").close()
+            open(os.path.join(images_dir, "sample.tif"), "a", encoding="utf-8").close()
+            validate_cli_inputs(models_dir, images_dir)
 
 
 if __name__ == "__main__":
