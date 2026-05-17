@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 import joblib
 import numpy as np
@@ -183,6 +184,13 @@ class TestFormatPredictions(unittest.TestCase):
 class TestValidateCliInputs(unittest.TestCase):
     """Test user-facing CLI input validation messages."""
 
+    @staticmethod
+    def _create_test_file(directory, filename):
+        test_file = Path(directory, filename)
+        test_file.touch()
+        if not test_file.exists():
+            raise RuntimeError(f"Failed to create test file: {test_file}")
+
     def test_missing_models_directory(self):
         with tempfile.TemporaryDirectory() as images_dir:
             with self.assertRaises(ValueError) as context:
@@ -192,22 +200,22 @@ class TestValidateCliInputs(unittest.TestCase):
 
     def test_missing_model_files(self):
         with tempfile.TemporaryDirectory() as models_dir, tempfile.TemporaryDirectory() as images_dir:
-            open(os.path.join(images_dir, "sample.tif"), "a", encoding="utf-8").close()
+            self._create_test_file(images_dir, "sample.tif")
             with self.assertRaises(ValueError) as context:
                 validate_cli_inputs(models_dir, images_dir)
             self.assertIn("No model files matching '*_model.joblib'", str(context.exception))
 
     def test_missing_tif_files(self):
         with tempfile.TemporaryDirectory() as models_dir, tempfile.TemporaryDirectory() as images_dir:
-            open(os.path.join(models_dir, "demo_model.joblib"), "a", encoding="utf-8").close()
+            self._create_test_file(models_dir, "demo_model.joblib")
             with self.assertRaises(ValueError) as context:
                 validate_cli_inputs(models_dir, images_dir)
             self.assertIn("No '.tif' images were found", str(context.exception))
 
     def test_valid_inputs(self):
         with tempfile.TemporaryDirectory() as models_dir, tempfile.TemporaryDirectory() as images_dir:
-            open(os.path.join(models_dir, "demo_model.joblib"), "a", encoding="utf-8").close()
-            open(os.path.join(images_dir, "sample.tif"), "a", encoding="utf-8").close()
+            self._create_test_file(models_dir, "demo_model.joblib")
+            self._create_test_file(images_dir, "sample.tif")
             validate_cli_inputs(models_dir, images_dir)
 
 
