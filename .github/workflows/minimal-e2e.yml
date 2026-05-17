@@ -47,8 +47,10 @@ jobs:
       - name: Verify minimal e2e outputs
         run: |
           test -s examples/test_images_results/datafile.tsv
-          test -s examples/test_images_results/rankings.tsv
-          test -s examples/test_images_results/classification.tsv
+          test -s examples/test_images_results/rankings_label.tsv
+          test -s examples/test_images_results/rankings_date.tsv
+          test -s examples/test_images_results/classification_all.tsv
+          test -s examples/test_images_results/classification_no_counts_features.tsv
           test -d examples/test_images_results/visualizations
           test -n "$(ls -A examples/test_images_results/visualizations)"
           test -d examples/test_images_results/models
