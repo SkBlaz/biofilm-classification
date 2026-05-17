@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 from collections import defaultdict
+from pathlib import Path
 
 import joblib
 import numpy as np
@@ -21,6 +22,7 @@ import shap
 logging.basicConfig(format="%(asctime)s - %(message)s", datefmt="%d-%b-%y %H:%M:%S")
 logging.getLogger(__name__).setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
+CLI_USAGE = "Usage: python inference.py <models_dir> <images_dir> <output_dir>"
 
 
 def load_models(models_dir):
@@ -57,6 +59,27 @@ def load_models(models_dir):
         raise ValueError("No models could be loaded successfully")
 
     return models, metadata
+
+
+def validate_cli_inputs(models_dir, images_dir):
+    """Validate CLI input paths and provide actionable error messages."""
+    errors = []
+
+    if not os.path.isdir(models_dir):
+        errors.append(f"Models directory does not exist: {models_dir}")
+    elif not any(Path(models_dir).glob("*_model.joblib")):
+        errors.append(
+            f"No model files matching '*_model.joblib' were found in: {models_dir}. "
+            "Run learning_benchmark_save_models first or verify model naming."
+        )
+
+    if not os.path.isdir(images_dir):
+        errors.append(f"Images directory does not exist: {images_dir}")
+    elif not any(Path(images_dir).glob("*.tif")):
+        errors.append(f"No '.tif' images were found in: {images_dir}")
+
+    if errors:
+        raise ValueError("Invalid CLI inputs:\n- " + "\n- ".join(errors) + f"\n{CLI_USAGE}")
 
 
 def format_predictions(models, metadata, X):
@@ -705,13 +728,10 @@ def main():
 
     args = parser.parse_args()
 
-    # Validate input directories
-    if not os.path.isdir(args.models_dir):
-        logger.error(f"Models directory does not exist: {args.models_dir}")
-        sys.exit(1)
-
-    if not os.path.isdir(args.images_dir):
-        logger.error(f"Images directory does not exist: {args.images_dir}")
+    try:
+        validate_cli_inputs(args.models_dir, args.images_dir)
+    except ValueError as e:
+        logger.error(str(e))
         sys.exit(1)
 
     try:
@@ -731,8 +751,8 @@ def main():
 
         logger.info(f"Inference completed successfully using {num_models} models")
 
-    except Exception as e:
-        logger.error(f"Inference failed: {e}")
+    except Exception:
+        logger.exception("Inference failed unexpectedly.")
         sys.exit(1)
 
 
