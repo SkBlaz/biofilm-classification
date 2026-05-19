@@ -1,0 +1,72 @@
+name: Minimal E2E
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  minimal-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: |
+          echo "Building Docker image..."
+          docker compose build --no-cache
+
+      - name: Run minimal e2e pipeline
+        run: |
+          mkdir -p examples/test_images_results
+
+          echo "1/5: Generate features"
+          docker compose run --rm imagine-test-generate-features
+
+          echo "2/5: Learning benchmark"
+          docker compose run --rm imagine-test-learning-benchmark
+
+          echo "3/5: Data visualization"
+          docker compose run --rm imagine-test-data-visualization
+
+          echo "4/5: Learning benchmark with model saving"
+          docker compose run --rm imagine-test-learning-benchmark-save-models
+
+          echo "5/5: Fast inference"
+          docker compose run --rm imagine-test-inference-fast
+
+      - name: Verify minimal e2e outputs
+        run: |
+          test -s examples/test_images_results/datafile.tsv
+          test -s examples/test_images_results/rankings_label.tsv
+          test -s examples/test_images_results/rankings_date.tsv
+          test -s examples/test_images_results/classification_all.tsv
+          test -s examples/test_images_results/classification_no_counts_features.tsv
+          test -d examples/test_images_results/visualizations
+          test -n "$(ls -A examples/test_images_results/visualizations)"
+          test -d examples/test_images_results/models
+          test -n "$(ls -A examples/test_images_results/models)"
+          test -d examples/test_images_results/inference_test_output
+          test -n "$(ls -A examples/test_images_results/inference_test_output)"
+
+          ls -la examples/test_images_results/
+          ls -la examples/test_images_results/visualizations/
+          ls -la examples/test_images_results/models/
+          ls -la examples/test_images_results/inference_test_output/
+
+      - name: Upload minimal e2e artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: minimal-e2e-results
+          path: examples/test_images_results/
+          retention-days: 30
