@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import joblib
 import numpy as np
@@ -17,7 +18,32 @@ from sklearn.ensemble import RandomForestClassifier
 # Add src directory to path
 sys.path.insert(0, "src")
 
-from inference import format_predictions, load_models, validate_cli_inputs
+from inference import (
+    format_predictions,
+    generate_shap_explanations,
+    load_models,
+    run_inference,
+    total_abs_diff_per_feature,
+    validate_cli_inputs,
+)
+
+
+class RecordingModel:
+    """Small inference test double that records the final numpy array."""
+
+    def __init__(self, predictions=None):
+        self.predictions = predictions
+        self.seen_X = None
+
+    def predict(self, X):
+        self.seen_X = np.asarray(X)
+        if self.predictions is not None:
+            return np.array(self.predictions[: len(X)])
+        return np.zeros(len(X), dtype=int)
+
+    def predict_proba(self, X):
+        self.seen_X = np.asarray(X)
+        return np.tile(np.array([[0.75, 0.25]]), (len(X), 1))
 
 
 class TestLoadModels(unittest.TestCase):
@@ -217,6 +243,114 @@ class TestValidateCliInputs(unittest.TestCase):
             self._create_test_file(models_dir, "demo_model.joblib")
             self._create_test_file(images_dir, "sample.tif")
             validate_cli_inputs(models_dir, images_dir)
+
+
+class TestRunInference(unittest.TestCase):
+    """Test the file-based inference workflow."""
+
+    def test_run_inference_aligns_cleans_and_writes_outputs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            features_file = os.path.join(temp_dir, "features.tsv")
+            output_dir = os.path.join(temp_dir, "out")
+            pd.DataFrame(
+                {
+                    "feature1": [np.inf, 2.0],
+                    "extra_feature": [100.0, 200.0],
+                    "label": ["ignored_a", "ignored_b"],
+                },
+                index=["sample_a", "sample_b"],
+            ).to_csv(features_file, sep="\t")
+
+            model = RecordingModel()
+            metadata = {"demo": {"feature_names": ["feature1", "missing_feature"], "target_mapping": {0: "class_a", 1: "class_b"}}}
+
+            with patch("inference.generate_shap_explanations") as shap_mock:
+                num_models = run_inference({"demo": model}, metadata, features_file, output_dir)
+
+            self.assertEqual(num_models, 1)
+            shap_mock.assert_called_once()
+            np.testing.assert_allclose(model.seen_X, np.array([[5.14, 0.0], [2.0, 0.0]]))
+
+            predictions = pd.read_csv(os.path.join(output_dir, "demo_predictions.tsv"), sep="\t")
+            probabilities = pd.read_csv(os.path.join(output_dir, "demo_probabilities.tsv"), sep="\t", index_col=0)
+            processed = pd.read_csv(os.path.join(output_dir, "demo_features.tsv"), sep="\t", index_col=0)
+            summary = pd.read_csv(os.path.join(output_dir, "inference_summary.tsv"), sep="\t")
+
+            self.assertEqual(predictions["sample_name"].tolist(), ["sample_a", "sample_b"])
+            self.assertEqual(predictions["prediction"].tolist(), ["class_a", "class_a"])
+            self.assertEqual(probabilities.columns.tolist(), ["class_a", "class_b"])
+            self.assertEqual(processed.columns.tolist(), ["feature1", "missing_feature"])
+            self.assertEqual(summary.loc[0, "num_predictions"], 2)
+
+    def test_run_inference_skips_model_missing_required_svd_transformer(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            features_file = os.path.join(temp_dir, "features.tsv")
+            output_dir = os.path.join(temp_dir, "out")
+            pd.DataFrame({"feature1": [1.0], "feature2": [2.0]}, index=["sample_a"]).to_csv(features_file, sep="\t")
+
+            model = RecordingModel()
+            metadata = {"demo": {"feature_names": ["feature1", "feature2"], "n_components": 2}}
+
+            with patch("inference.generate_shap_explanations") as shap_mock:
+                num_models = run_inference({"demo": model}, metadata, features_file, output_dir)
+
+            self.assertEqual(num_models, 0)
+            shap_mock.assert_called_once()
+            self.assertIsNone(model.seen_X)
+            self.assertFalse(os.path.exists(os.path.join(output_dir, "inference_summary.tsv")))
+
+    def test_run_inference_applies_threshold_indices_before_prediction(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            features_file = os.path.join(temp_dir, "features.tsv")
+            output_dir = os.path.join(temp_dir, "out")
+            pd.DataFrame(
+                {
+                    "feature1": [1.0, 10.0],
+                    "feature2": [2.0, 20.0],
+                    "feature3": [3.0, 30.0],
+                },
+                index=["sample_a", "sample_b"],
+            ).to_csv(features_file, sep="\t")
+
+            model = RecordingModel()
+            metadata = {
+                "demo": {
+                    "feature_names": ["feature1", "feature2", "feature3"],
+                    "thr_features": False,
+                    "n_components": "all",
+                    "thr_indices": [0, 2],
+                }
+            }
+
+            with patch("inference.generate_shap_explanations"):
+                num_models = run_inference({"demo": model}, metadata, features_file, output_dir)
+
+            self.assertEqual(num_models, 1)
+            np.testing.assert_allclose(model.seen_X, np.array([[1.0, 3.0], [10.0, 30.0]]))
+
+
+class TestInferenceExplanations(unittest.TestCase):
+    """Test helper behavior around inference explanations."""
+
+    def test_generate_shap_explanations_returns_when_shap_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(sys.modules, {"shap": None}):
+                generate_shap_explanations({}, {}, {}, temp_dir)
+
+            self.assertFalse(os.path.exists(os.path.join(temp_dir, "explanations")))
+
+    def test_total_abs_diff_per_feature_reports_tree_path_differences(self):
+        rf = RandomForestClassifier(n_estimators=3, max_depth=2, random_state=42)
+        X = np.array([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]])
+        y = np.array([0, 0, 1, 1])
+        rf.fit(X, y)
+
+        total, per_feature, details = total_abs_diff_per_feature(rf, np.array([1.0, 0.0]), feature_names=["a", "b"])
+
+        self.assertGreaterEqual(total, 0.0)
+        self.assertTrue(set(per_feature).issubset({"a", "b"}))
+        self.assertEqual(len(details), len([detail for detail in details if detail["feature"] in {"a", "b"}]))
+        self.assertAlmostEqual(total, sum(detail["abs_diff"] for detail in details))
 
 
 if __name__ == "__main__":

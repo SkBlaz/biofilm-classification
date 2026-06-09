@@ -17,7 +17,6 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-import shap
 
 logging.basicConfig(format="%(asctime)s - %(message)s", datefmt="%d-%b-%y %H:%M:%S")
 logging.getLogger(__name__).setLevel(logging.INFO)
@@ -441,6 +440,11 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
         output_dir: Directory to save SHAP explanations
     """
     logger.info("Generating SHAP explanations...")
+    try:
+        import shap
+    except ImportError:
+        logger.warning("SHAP is not installed; skipping explanation generation")
+        return
 
     # Create explanations subdirectory
     explanations_dir = os.path.join(output_dir, "explanations")

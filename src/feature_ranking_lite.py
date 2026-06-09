@@ -159,11 +159,15 @@ def load_data(path_to_data: str):
     # inf --> max + 3.14
     # nan --> -666
     for c in data.columns:
-        max_val = data[c].replace(np.inf, np.nan).max()
-        if isinstance(max_val, str):
+        if not pd.api.types.is_numeric_dtype(data[c]):
             data[c] = data[c].fillna("missing")
+            continue
+
+        max_val = data[c].replace([np.inf, -np.inf], np.nan).max()
+        if pd.isna(max_val):
+            data[c] = data[c].replace([np.inf, -np.inf], np.nan).fillna(-666)
         else:
-            data[c] = data[c].replace(np.inf, max_val + 3.14).fillna(-666)
+            data[c] = data[c].replace([np.inf, -np.inf], [max_val + 3.14, -666]).fillna(-666)
 
     data = data.copy()
 
@@ -436,7 +440,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                             continue
 
                         model_for_fold = model
-                        if isinstance(model, (RandomizedSearchCV, GridSearchCV)):
+                        if isinstance(model, RandomizedSearchCV | GridSearchCV):
                             cv_inner, n_splits_inner, min_class_count_inner, inner_cv_strategy, inner_cv_reason = get_adaptive_cv(
                                 y_train, max_splits=5
                             )

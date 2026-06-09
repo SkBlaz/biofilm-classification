@@ -59,5 +59,5 @@ Keep newest entry at the top.
 
 | Date (UTC) | Bot/Agent | PR/Commit | AGENTS.md update summary |
 |---|---|---|---|
+| 2026-06-09 | Codex | current PR | Reviewed, no onboarding changes required. |
 | 2026-05-15 | @copilot | current PR | Initial detailed onboarding guide added. |
-

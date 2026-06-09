@@ -18,15 +18,11 @@ def extract_data(fname, namespace_identifiers):
     return None, None
 
 
-if __name__ == "__main__":
-    feature_generator_folder = sys.argv[1]
-    results_raw_folder = sys.argv[2]
+def create_joint_dataframe(feature_generator_folder, results_raw_folder, namespace_identifiers=None):
+    if namespace_identifiers is None:
+        namespace_identifiers = ["CustomAlgos", "DiffGlobal"]
 
-    # dpath = "../raw_dat_march_23/wetransfer_d_01022023_o_nj_p_d04_s_lm_st_394_gm_lb_gms_ns_sub_nc_t_24_ch_sy9_tret_1um_ista_pozicija-lsm_2023-03-10_1214"
     all_files = glob.glob(f"{feature_generator_folder}/*.txt")
-    #    namespace_identifiers = ["CustomAlgos"]
-    namespace_identifiers = ["CustomAlgos", "DiffGlobal"]
-    #    namespace_identifiers = ["vol3D", "surf3D", "Area2DLayers", "histAll", "CustomAlgos"]
 
     all_dfs = defaultdict(list)
     for fname in tqdm.tqdm(all_files[:]):
@@ -42,10 +38,21 @@ if __name__ == "__main__":
             df["sampleName"] = sample_name
             all_dfs[namespace].append(df.iloc[:100000])
 
+    outputs = {}
     for k, v in all_dfs.items():
         try:
             dfx_f = pd.concat(v, axis=0)
-            logging.warn(f"writing {results_raw_folder}/{k}.tsv")
-            dfx_f.to_csv(f"{results_raw_folder}/{k}.tsv", sep="\t")
+            output_file = f"{results_raw_folder}/{k}.tsv"
+            logging.warning(f"writing {output_file}")
+            dfx_f.to_csv(output_file, sep="\t")
+            outputs[k] = dfx_f
         except Exception as es:
             logging.error(es)
+    return outputs
+
+
+if __name__ == "__main__":
+    feature_generator_folder = sys.argv[1]
+    results_raw_folder = sys.argv[2]
+
+    create_joint_dataframe(feature_generator_folder, results_raw_folder)

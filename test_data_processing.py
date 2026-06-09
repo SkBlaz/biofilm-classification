@@ -13,7 +13,9 @@ import pandas as pd
 # Add src directory to path
 sys.path.insert(0, "src")
 
-from create_joint_df import extract_data
+from analysis import aggregate_raw_features
+from create_final_df_from_results import create_final_dataframe
+from create_joint_df import create_joint_dataframe, extract_data
 
 
 class TestExtractData(unittest.TestCase):
@@ -96,11 +98,9 @@ class TestExtractData(unittest.TestCase):
     def test_file_read_error(self):
         """Test handling of file read errors."""
         namespace_identifiers = ["CustomAlgos"]
-        # Test with non-existent file
-        identifier, df = extract_data("/nonexistent/file.txt", namespace_identifiers)
 
-        # Should return None, None on error (function doesn't handle this explicitly,
-        # but the test documents expected behavior)
+        with self.assertRaises(FileNotFoundError):
+            extract_data("/nonexistent/CustomAlgos_file.txt", namespace_identifiers)
 
 
 class TestDataProcessingUtilities(unittest.TestCase):
@@ -159,6 +159,107 @@ class TestDataProcessingUtilities(unittest.TestCase):
         self.assertEqual(pivoted.shape, (2, 2))
         self.assertEqual(pivoted.loc["A", "x"], 1)
         self.assertEqual(pivoted.loc["B", "y"], 4)
+
+    def test_create_joint_dataframe_writes_namespace_files(self):
+        """Test joining feature generator outputs into raw namespace TSVs."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            feature_dir = os.path.join(temp_dir, "features")
+            raw_dir = os.path.join(temp_dir, "raw")
+            os.makedirs(feature_dir)
+            os.makedirs(raw_dir)
+
+            custom_file = os.path.join(feature_dir, "date_s_Lm_st_L628_p_C03_pos001_tm_24_ch_Syto9_z_21CustomAlgos.txt")
+            diff_file = os.path.join(feature_dir, "date_s_Lm_st_L628_p_C03_pos001_tm_24_ch_Syto9_z_21DiffGlobal.txt")
+            ignored_file = os.path.join(feature_dir, "date_s_Lm_st_L628_p_C03_pos001_tm_24_ch_Syto9_z_21Other.txt")
+
+            pd.DataFrame({"layer_feature": [1.0, 2.0]}).to_csv(custom_file, sep="\t", index=False)
+            pd.DataFrame({"global_feature": [3.0]}).to_csv(diff_file, sep="\t", index=False)
+            pd.DataFrame({"ignored": [4.0]}).to_csv(ignored_file, sep="\t", index=False)
+
+            outputs = create_joint_dataframe(feature_dir, raw_dir)
+
+            self.assertEqual(set(outputs), {"CustomAlgos", "DiffGlobal"})
+            custom_output = pd.read_csv(os.path.join(raw_dir, "CustomAlgos.tsv"), sep="\t", index_col=0)
+            diff_output = pd.read_csv(os.path.join(raw_dir, "DiffGlobal.tsv"), sep="\t", index_col=0)
+            self.assertEqual(
+                custom_output["sampleName"].unique().tolist(), ["date--s--Lm--st--L628--p--C03--pos001--tm--24--ch--Syto9--z--21"]
+            )
+            self.assertEqual(len(custom_output), 2)
+            self.assertEqual(diff_output["global_feature"].tolist(), [3.0])
+
+    def test_aggregate_raw_features_writes_requested_statistics(self):
+        """Test analysis aggregation over raw namespace files."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            raw_dir = os.path.join(temp_dir, "raw")
+            analysis_dir = os.path.join(temp_dir, "analysis")
+            os.makedirs(raw_dir)
+            os.makedirs(analysis_dir)
+
+            pd.DataFrame(
+                {
+                    "sampleName": ["sample_a", "sample_a", "sample_b"],
+                    "feature": [1.0, 3.0, 10.0],
+                }
+            ).to_csv(os.path.join(raw_dir, "CustomAlgos.tsv"), sep="\t", index=False)
+
+            output_files = aggregate_raw_features(raw_dir, analysis_dir, statistics=["mean", "max", "q25"])
+
+            self.assertEqual(len(output_files), 3)
+            mean_df = pd.read_csv(os.path.join(analysis_dir, "SUMMARYCustomAlgos.tsv_mean.txt"), sep="\t")
+            max_df = pd.read_csv(os.path.join(analysis_dir, "SUMMARYCustomAlgos.tsv_max.txt"), sep="\t")
+            q25_df = pd.read_csv(os.path.join(analysis_dir, "SUMMARYCustomAlgos.tsv_q25.txt"), sep="\t")
+
+            self.assertEqual(mean_df.loc[mean_df["sampleName"] == "sample_a", "feature"].iloc[0], 2.0)
+            self.assertEqual(max_df.loc[max_df["sampleName"] == "sample_a", "feature"].iloc[0], 3.0)
+            self.assertEqual(q25_df.loc[q25_df["sampleName"] == "sample_a", "feature"].iloc[0], 1.5)
+
+    def test_create_final_dataframe_with_labels_preserves_training_format(self):
+        """Test final feature datafile creation still includes labels by default."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            analysis_dir = os.path.join(temp_dir, "analysis")
+            os.makedirs(analysis_dir)
+            outfile = os.path.join(temp_dir, "training_features.tsv")
+
+            pd.DataFrame(
+                {
+                    "sampleName": ["2023--s--Lm--st--L1323--p"],
+                    "feature_a": [1.5],
+                }
+            ).to_csv(os.path.join(analysis_dir, "SUMMARYCustomAlgos.tsv_mean.txt"), sep="\t", index=False)
+
+            result = create_final_dataframe(analysis_dir, outfile)
+
+            self.assertTrue(os.path.exists(outfile))
+            self.assertIn("label", result.columns)
+            self.assertIn("feature_a-SUMMARYCustomAlgos.tsv_mean.txt", result.columns)
+            self.assertEqual(result.loc["2023--s--Lm--st--L1323--p", "label"], "L1323")
+
+    def test_create_final_dataframe_without_labels_for_unknown_samples(self):
+        """Test final feature datafile creation for unknown inference images."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            analysis_dir = os.path.join(temp_dir, "analysis")
+            os.makedirs(analysis_dir)
+            outfile = os.path.join(temp_dir, "unknown_features.tsv")
+
+            pd.DataFrame(
+                {
+                    "sampleName": ["unknown_sample"],
+                    "feature_a": [1.5],
+                    "feature_b": [2.5],
+                }
+            ).to_csv(os.path.join(analysis_dir, "SUMMARYCustomAlgos.tsv_mean.txt"), sep="\t", index=False)
+
+            result = create_final_dataframe(analysis_dir, outfile, include_label=False)
+
+            self.assertTrue(os.path.exists(outfile))
+            self.assertEqual(result.index.tolist(), ["unknown_sample"])
+            self.assertNotIn("label", result.columns)
+            self.assertIn("feature_b-SUMMARYCustomAlgos.tsv_mean.txt", result.columns)
+
+    def test_create_final_dataframe_rejects_empty_analysis_folder(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "No aggregated feature files"):
+                create_final_dataframe(temp_dir, os.path.join(temp_dir, "data.tsv"))
 
     def test_string_operations(self):
         """Test string operations used in data processing."""
