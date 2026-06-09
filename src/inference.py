@@ -17,12 +17,15 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-import shap
 
 logging.basicConfig(format="%(asctime)s - %(message)s", datefmt="%d-%b-%y %H:%M:%S")
 logging.getLogger(__name__).setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
-CLI_USAGE = "Usage: python inference.py <models_dir> <images_dir> <output_dir>"
+CLI_USAGE = "Usage: python inference.py <models_dir> <images_dir_or_features_file> <output_dir> [--features_file <features.tsv>]"
+FEATURE_DATAFILE_FORMAT = (
+    "Feature datafiles must be tab-separated, with sample names in the first/index column "
+    "and one feature per remaining column. A label column is allowed and ignored during inference."
+)
 
 
 def load_models(models_dir):
@@ -61,9 +64,10 @@ def load_models(models_dir):
     return models, metadata
 
 
-def validate_cli_inputs(models_dir, images_dir):
+def validate_cli_inputs(models_dir, input_path=None, features_file=None):
     """Validate CLI input paths and provide actionable error messages."""
     errors = []
+    selected_input = features_file or input_path
 
     if not os.path.isdir(models_dir):
         errors.append(f"Models directory does not exist: {models_dir}")
@@ -73,10 +77,16 @@ def validate_cli_inputs(models_dir, images_dir):
             "Run learning_benchmark_save_models first or verify model naming."
         )
 
-    if not os.path.isdir(images_dir):
-        errors.append(f"Images directory does not exist: {images_dir}")
-    elif not any(Path(images_dir).glob("*.tif")):
-        errors.append(f"No '.tif' images were found in: {images_dir}")
+    if not selected_input:
+        errors.append("Either an images directory or a feature datafile is required")
+    elif os.path.isfile(selected_input):
+        if not selected_input.lower().endswith((".tsv", ".txt", ".csv")):
+            errors.append(f"Feature datafile should be a delimited text file (.tsv, .txt, or .csv): {selected_input}")
+    elif os.path.isdir(selected_input):
+        if not any(Path(selected_input).glob("*.tif")):
+            errors.append(f"No '.tif' images were found in: {selected_input}")
+    else:
+        errors.append(f"Input path does not exist: {selected_input}")
 
     if errors:
         raise ValueError("Invalid CLI inputs:\n- " + "\n- ".join(errors) + f"\n{CLI_USAGE}")
@@ -135,7 +145,7 @@ def format_predictions(models, metadata, X):
     return pd.DataFrame(results_list)
 
 
-def generate_features_for_images(images_dir, temp_dir):
+def generate_features_for_images(images_dir, temp_dir, include_label=False):
     """Generate features for all .tif images in the given directory."""
     logger.info(f"Generating features for images in {images_dir}")
 
@@ -205,6 +215,8 @@ def generate_features_for_images(images_dir, temp_dir):
     data_file = os.path.join(temp_dir, "inference_data.tsv")
     try:
         cmd = ["python", os.path.join(src_dir, "create_final_df_from_results.py"), analysis_dir, data_file]
+        if not include_label:
+            cmd.append("--unlabeled")
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             logger.error(f"Final dataframe creation failed: {result.stderr}")
@@ -218,6 +230,19 @@ def generate_features_for_images(images_dir, temp_dir):
 
     logger.info(f"Features generated and saved to {data_file}")
     return data_file
+
+
+def resolve_features_file(input_path, temp_dir, features_file=None):
+    """Return a feature datafile, generating one from images when needed."""
+    selected_input = features_file or input_path
+    if os.path.isfile(selected_input):
+        logger.info(f"Using pre-generated feature datafile: {selected_input}")
+        logger.info(FEATURE_DATAFILE_FORMAT)
+        return selected_input
+
+    logger.info("Generating features for input images...")
+    os.makedirs(temp_dir, exist_ok=True)
+    return generate_features_for_images(selected_input, temp_dir, include_label=False)
 
 
 def run_inference(models, metadata, features_file, output_dir):
@@ -441,6 +466,11 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
         output_dir: Directory to save SHAP explanations
     """
     logger.info("Generating SHAP explanations...")
+    try:
+        import shap
+    except ImportError:
+        logger.warning("SHAP is not installed; skipping explanation generation")
+        return
 
     # Create explanations subdirectory
     explanations_dir = os.path.join(output_dir, "explanations")
@@ -722,14 +752,15 @@ def main():
         description="Run inference on biofilm images using pre-trained models", formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     parser.add_argument("models_dir", help="Directory containing trained models")
-    parser.add_argument("images_dir", help="Directory containing .tif images for inference")
+    parser.add_argument("input_path", help="Directory containing .tif images or a pre-generated feature datafile")
     parser.add_argument("output_dir", help="Directory to save inference results")
+    parser.add_argument("--features_file", help="Pre-generated TSV feature datafile for inference")
     parser.add_argument("--temp_dir", default="/tmp/inference", help="Temporary directory for feature generation")
 
     args = parser.parse_args()
 
     try:
-        validate_cli_inputs(args.models_dir, args.images_dir)
+        validate_cli_inputs(args.models_dir, args.input_path, args.features_file)
     except ValueError as e:
         logger.error(str(e))
         sys.exit(1)
@@ -740,10 +771,7 @@ def main():
         models, metadata = load_models(args.models_dir)
         logger.info(f"Loaded {len(models)} models")
 
-        # Generate features for input images
-        logger.info("Generating features for input images...")
-        os.makedirs(args.temp_dir, exist_ok=True)
-        features_file = generate_features_for_images(args.images_dir, args.temp_dir)
+        features_file = resolve_features_file(args.input_path, args.temp_dir, args.features_file)
 
         # Run inference
         logger.info("Running inference...")

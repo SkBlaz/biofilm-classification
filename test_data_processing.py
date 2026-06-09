@@ -13,6 +13,7 @@ import pandas as pd
 # Add src directory to path
 sys.path.insert(0, "src")
 
+from create_final_df_from_results import create_final_dataframe
 from create_joint_df import extract_data
 
 
@@ -159,6 +160,47 @@ class TestDataProcessingUtilities(unittest.TestCase):
         self.assertEqual(pivoted.shape, (2, 2))
         self.assertEqual(pivoted.loc["A", "x"], 1)
         self.assertEqual(pivoted.loc["B", "y"], 4)
+
+    def test_create_final_dataframe_without_labels(self):
+        """Test final feature datafile creation for unknown inference images."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            analysis_dir = os.path.join(temp_dir, "analysis")
+            os.makedirs(analysis_dir)
+            outfile = os.path.join(temp_dir, "unknown_features.tsv")
+
+            pd.DataFrame(
+                {
+                    "sampleName": ["unknown_sample"],
+                    "feature_a": [1.5],
+                    "feature_b": [2.5],
+                }
+            ).to_csv(os.path.join(analysis_dir, "SUMMARYCustomAlgos.tsv_mean.txt"), sep="\t", index=False)
+
+            result = create_final_dataframe(analysis_dir, outfile, include_label=False)
+
+            self.assertTrue(os.path.exists(outfile))
+            self.assertEqual(result.index.tolist(), ["unknown_sample"])
+            self.assertNotIn("label", result.columns)
+            self.assertIn("feature_a-SUMMARYCustomAlgos.tsv_mean.txt", result.columns)
+
+    def test_create_final_dataframe_with_labels_preserves_training_format(self):
+        """Test final feature datafile creation still includes labels by default."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            analysis_dir = os.path.join(temp_dir, "analysis")
+            os.makedirs(analysis_dir)
+            outfile = os.path.join(temp_dir, "training_features.tsv")
+
+            pd.DataFrame(
+                {
+                    "sampleName": ["2023--s--Lm--st--L1323--p"],
+                    "feature_a": [1.5],
+                }
+            ).to_csv(os.path.join(analysis_dir, "SUMMARYCustomAlgos.tsv_mean.txt"), sep="\t", index=False)
+
+            result = create_final_dataframe(analysis_dir, outfile)
+
+            self.assertIn("label", result.columns)
+            self.assertEqual(result.loc["2023--s--Lm--st--L1323--p", "label"], "L1323")
 
     def test_string_operations(self):
         """Test string operations used in data processing."""

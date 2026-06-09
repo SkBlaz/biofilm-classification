@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import joblib
 import numpy as np
@@ -17,7 +18,7 @@ from sklearn.ensemble import RandomForestClassifier
 # Add src directory to path
 sys.path.insert(0, "src")
 
-from inference import format_predictions, load_models, validate_cli_inputs
+from inference import format_predictions, load_models, resolve_features_file, run_inference, validate_cli_inputs
 
 
 class TestLoadModels(unittest.TestCase):
@@ -217,6 +218,75 @@ class TestValidateCliInputs(unittest.TestCase):
             self._create_test_file(models_dir, "demo_model.joblib")
             self._create_test_file(images_dir, "sample.tif")
             validate_cli_inputs(models_dir, images_dir)
+
+    def test_valid_feature_datafile_input(self):
+        with tempfile.TemporaryDirectory() as models_dir, tempfile.NamedTemporaryFile(suffix=".tsv") as features_file:
+            self._create_test_file(models_dir, "demo_model.joblib")
+            validate_cli_inputs(models_dir, features_file.name)
+
+    def test_features_file_argument_overrides_input_path_validation(self):
+        with tempfile.TemporaryDirectory() as models_dir, tempfile.NamedTemporaryFile(suffix=".tsv") as features_file:
+            self._create_test_file(models_dir, "demo_model.joblib")
+            validate_cli_inputs(models_dir, "/does/not/exist", features_file.name)
+
+
+class TestResolveFeaturesFile(unittest.TestCase):
+    """Test feature input resolution for inference."""
+
+    def test_uses_pregenerated_feature_file(self):
+        with tempfile.NamedTemporaryFile(suffix=".tsv") as features_file, tempfile.TemporaryDirectory() as temp_dir:
+            resolved = resolve_features_file("/does/not/matter", temp_dir, features_file.name)
+            self.assertEqual(resolved, features_file.name)
+
+    @patch("inference.generate_features_for_images")
+    def test_generates_features_for_image_directory(self, mock_generate_features):
+        mock_generate_features.return_value = "/tmp/inference/inference_data.tsv"
+        with tempfile.TemporaryDirectory() as images_dir, tempfile.TemporaryDirectory() as temp_dir:
+            resolved = resolve_features_file(images_dir, temp_dir)
+            self.assertEqual(resolved, "/tmp/inference/inference_data.tsv")
+            mock_generate_features.assert_called_once_with(images_dir, temp_dir, include_label=False)
+
+
+class TestRunInference(unittest.TestCase):
+    """Test inference from prepared feature datafiles."""
+
+    def test_run_inference_with_pregenerated_feature_datafile(self):
+        model = RandomForestClassifier(n_estimators=4, random_state=42)
+        X_train = np.array([[1, 2], [3, 4], [5, 6], [7, 8]])
+        y_train = np.array([0, 1, 0, 1])
+        model.fit(X_train, y_train)
+
+        features = pd.DataFrame(
+            {
+                "feature1": [1.5, 6.5],
+                "feature2": [2.5, 7.5],
+                "extra_non_microics_feature": [10, 20],
+                "label": ["unknown", "unknown"],
+            },
+            index=["unknown_sample_1", "unknown_sample_2"],
+        )
+        metadata = {"model1": {"feature_names": ["feature1", "feature2"], "target_mapping": {0: "class_a", 1: "class_b"}}}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            features_file = os.path.join(temp_dir, "unknown_features.tsv")
+            output_dir = os.path.join(temp_dir, "predictions")
+            features.to_csv(features_file, sep="\t")
+
+            with patch("inference.generate_shap_explanations"):
+                num_models = run_inference({"model1": model}, metadata, features_file, output_dir)
+
+            self.assertEqual(num_models, 1)
+            predictions_file = os.path.join(output_dir, "model1_predictions.tsv")
+            processed_features_file = os.path.join(output_dir, "model1_features.tsv")
+            self.assertTrue(os.path.exists(predictions_file))
+            self.assertTrue(os.path.exists(processed_features_file))
+
+            predictions = pd.read_csv(predictions_file, sep="\t")
+            self.assertEqual(predictions["sample_name"].tolist(), ["unknown_sample_1", "unknown_sample_2"])
+            self.assertIn("prediction", predictions.columns)
+
+            processed_features = pd.read_csv(processed_features_file, sep="\t", index_col=0)
+            self.assertEqual(processed_features.columns.tolist(), ["feature1", "feature2"])
 
 
 if __name__ == "__main__":

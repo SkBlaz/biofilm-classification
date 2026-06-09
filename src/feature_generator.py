@@ -4,7 +4,6 @@ import os.path
 import warnings
 
 import matplotlib.pyplot as plt
-import multipagetiff as mtif
 import numba
 import numpy as np
 import pandas as pd
@@ -214,6 +213,8 @@ def gpt_calculate_texture_features(image_stack: np.ndarray, distances=[1], angle
 
 
 def segment(filepath, outfolder):
+    import multipagetiff as mtif
+
     image = mtif.read_stack(filepath, units="um")
 
     actual_final_df = []

@@ -27,10 +27,11 @@ if [ $# -lt 4 ]; then
   echo
   echo "For inference task (environment variable mode):"
   echo "Set IMAGINE_INFERENCE_INPUTS and IMAGINE_INFERENCE_OUTPUTS in .env file"
+  echo "Optionally set IMAGINE_INFERENCE_DATAFILE to use a pre-generated feature TSV"
   echo -e "=> docker compose run --rm imagine 4 - 10 inference"
   echo
   echo "For inference task (parameter mode):"
-  echo -e "=> docker compose run --rm imagine 4 - 10 inference <models_path> <images_path> <output_path>"
+  echo -e "=> docker compose run --rm imagine 4 - 10 inference <models_path> <images_or_features_path> <output_path>"
   echo
   echo
   echo "If you are running the script directly:"
@@ -47,18 +48,31 @@ OUTPUT_RESULTS_FOLDER='/imagine/results'
 
 # Check for optional --all_learners flag in any position after the required parameters
 ALL_LEARNERS_FLAG=""
+UNLABELED_FLAG=""
 for arg in "$@"; do
     if [ "$arg" = "--all_learners" ]; then
         ALL_LEARNERS_FLAG="--all_learners"
         echo "All learners flag enabled - will use all machine learning algorithms"
-        break
+    fi
+    if [ "$arg" = "--unlabeled" ]; then
+        UNLABELED_FLAG="--unlabeled"
+        echo "Unlabeled feature generation enabled - final datafile will not include a label column"
     fi
 done
 
 # Handle special case for inference task
 if [ "$LEARNING_TASK" = "inference" ]; then
 	# Use environment variables if available, otherwise require parameters
-	if [ -n "$IMAGINE_INFERENCE_INPUTS" ] && [ -n "$IMAGINE_INFERENCE_OUTPUTS" ]; then
+	if [ -n "$IMAGINE_INFERENCE_DATAFILE" ] && [ -n "$IMAGINE_INFERENCE_OUTPUTS" ]; then
+		# Environment variable mode with pre-generated feature datafile
+		MODELS_PATH="$OUTPUT_RESULTS_FOLDER/models"
+		IMAGES_PATH="$IMAGINE_INFERENCE_DATAFILE"
+		INFERENCE_OUTPUT_PATH="$IMAGINE_INFERENCE_OUTPUTS"
+		echo "Using environment variables for inference:"
+		echo "Models path: $MODELS_PATH (from IMAGINE_RESULTS/models)"
+		echo "Feature datafile: $IMAGES_PATH (from IMAGINE_INFERENCE_DATAFILE)"
+		echo "Output path: $INFERENCE_OUTPUT_PATH (from IMAGINE_INFERENCE_OUTPUTS)"
+	elif [ -n "$IMAGINE_INFERENCE_INPUTS" ] && [ -n "$IMAGINE_INFERENCE_OUTPUTS" ]; then
 		# Environment variable mode
 		MODELS_PATH="$OUTPUT_RESULTS_FOLDER/models"
 		IMAGES_PATH="$IMAGINE_INFERENCE_INPUTS"
@@ -82,11 +96,12 @@ if [ "$LEARNING_TASK" = "inference" ]; then
 			echo ""
 			echo "Environment variable mode:"
 			echo "Set IMAGINE_INFERENCE_INPUTS and IMAGINE_INFERENCE_OUTPUTS in .env file"
+			echo "Or set IMAGINE_INFERENCE_DATAFILE and IMAGINE_INFERENCE_OUTPUTS for feature-TSV inference"
 			echo "=> docker compose run --rm imagine 4 - 10 inference"
 			echo ""
 			echo "Parameter mode:"
-			echo "=> docker compose run --rm imagine 4 - 10 inference <models_path> <images_path> <output_path>"
-			echo "=> docker compose run --rm imagine 4 - 10 inference <models_path> <images_path> <output_path> --all_learners"
+			echo "=> docker compose run --rm imagine 4 - 10 inference <models_path> <images_or_features_path> <output_path>"
+			echo "=> docker compose run --rm imagine 4 - 10 inference <models_path> <images_or_features_path> <output_path> --all_learners"
 			exit 1
 		fi
 		MODELS_PATH="${INFERENCE_PARAMS[4]}"
@@ -191,7 +206,7 @@ if [ $LEARNING_TASK = "generate_features" ]; then
 	run_step "compute aggregated features" python analysis.py "${RESULTS_FOLDER_RAW}" "${RESULTS_FOLDER_ANALYSIS}"
 
 	# Create the final DF
-	run_step "create final dataframe" python create_final_df_from_results.py "${RESULTS_FOLDER_ANALYSIS}" "${RESULTS_CREATE_DF}"
+	run_step "create final dataframe" python create_final_df_from_results.py "${RESULTS_FOLDER_ANALYSIS}" "${RESULTS_CREATE_DF}" ${UNLABELED_FLAG}
 fi
 
 if [ $LEARNING_TASK = "learning_benchmark" ]; then
@@ -251,7 +266,7 @@ if [ $LEARNING_TASK = "inference" ]; then
 	# run inference on new images using pre-trained models
 	echo "Running inference..."
 	echo "Models: $MODELS_PATH"
-	echo "Images: $IMAGES_PATH" 
+	echo "Images or feature datafile: $IMAGES_PATH" 
 	echo "Output: $INFERENCE_OUTPUT_PATH"
 	
 	run_step "run inference pipeline" python inference.py "$MODELS_PATH" "$IMAGES_PATH" "$INFERENCE_OUTPUT_PATH"

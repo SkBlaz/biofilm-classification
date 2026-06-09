@@ -163,6 +163,14 @@ This task has the following parameters:
 docker compose run --rm imagine 4 datafile.tsv 10 generate_features
 ```
 
+For unknown/unlabeled images that will be used only for inference, generate a feature datafile without a `label` column:
+
+```sh
+docker compose run --rm imagine 4 unknown_features.tsv 10 generate_features --unlabeled
+```
+
+The generated feature datafile is tab-separated. The first column is the sample name/index, and each remaining column is a feature. Training datafiles include a `label` column; unlabeled inference datafiles omit it. Inference also accepts files with a `label` column and ignores that column.
+
 The results of this task will be in the folder, that is mapped to the `/imagine/results` within the container (`/c/my_folder/test_results` in this case).
 
 ### Task: Learning benchmark
@@ -253,6 +261,8 @@ IMAGINE_RESULTS=./training_results
 
 # Inference-specific paths
 IMAGINE_INFERENCE_INPUTS=./new_images_to_classify
+# Optional: use this instead of IMAGINE_INFERENCE_INPUTS to classify from a feature TSV
+# IMAGINE_INFERENCE_DATAFILE=./unknown_features.tsv
 IMAGINE_INFERENCE_OUTPUTS=./inference_results
 ```
 
@@ -264,7 +274,7 @@ docker compose run --rm imagine 4 - 10 inference
 
 The inference task will use:
 - Models from `${IMAGINE_RESULTS}/models` (where training models are stored)
-- Input images from `${IMAGINE_INFERENCE_INPUTS}`
+- Input images from `${IMAGINE_INFERENCE_INPUTS}`, or features from `${IMAGINE_INFERENCE_DATAFILE}` when set
 - Output results to `${IMAGINE_INFERENCE_OUTPUTS}`
 
 ### Parameter Mode (Backward Compatible)
@@ -273,6 +283,7 @@ You can also specify paths directly as parameters:
 
 ```sh
 docker compose run --rm imagine 4 - 10 inference /path/to/models /path/to/images /path/to/output
+docker compose run --rm imagine 4 - 10 inference /path/to/models /path/to/unknown_features.tsv /path/to/output
 ```
 
 ### Example workflow:
@@ -299,6 +310,9 @@ docker compose run --rm imagine 4 - 10 inference
 
 # Or use direct parameters (backward compatible)
 docker compose run --rm imagine 4 - 10 inference ./my_training_results/models ./new_images ./inference_results
+
+# Or run from a pre-generated feature datafile
+docker compose run --rm imagine 4 - 10 inference ./my_training_results/models ./unknown_features.tsv ./inference_results
 ```
 
 The inference results will include:
@@ -307,3 +321,4 @@ The inference results will include:
 - `inference_summary.tsv`: Summary of predictions from all models
 
 **Note**: The inference mode automatically handles feature extraction from .tif images using the same pipeline as training, ensuring consistency between training and inference.
+When a feature datafile is provided, inference skips image feature extraction and uses the supplied columns, aligning them to each model's saved training feature metadata. Extra columns can be present for custom non-MicroICS features; models that were not trained with those columns will ignore them.

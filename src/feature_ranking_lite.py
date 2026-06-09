@@ -436,7 +436,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                             continue
 
                         model_for_fold = model
-                        if isinstance(model, (RandomizedSearchCV, GridSearchCV)):
+                        if isinstance(model, RandomizedSearchCV | GridSearchCV):
                             cv_inner, n_splits_inner, min_class_count_inner, inner_cv_strategy, inner_cv_reason = get_adaptive_cv(
                                 y_train, max_splits=5
                             )
