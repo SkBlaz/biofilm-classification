@@ -37,9 +37,14 @@ services:
       - type: bind
         source: '${IMAGINE_INFERENCE_OUTPUTS:-.}'
         target: /imagine/inference_outputs
+      - type: bind
+        source: '${IMAGINE_INFERENCE_DATAFILE:-.}'
+        target: /imagine/inference_datafile
+        read_only: true
     environment:
       - IMAGINE_INFERENCE_INPUTS=/imagine/inference_inputs
       - IMAGINE_INFERENCE_OUTPUTS=/imagine/inference_outputs
+      - IMAGINE_INFERENCE_DATAFILE=/imagine/inference_datafile
 
   imagine-test-generate-features:
     <<: *base-test-config

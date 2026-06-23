@@ -57,16 +57,33 @@ done
 
 # Handle special case for inference task
 if [ "$LEARNING_TASK" = "inference" ]; then
+	FEATURES_FILE=""
 	# Use environment variables if available, otherwise require parameters
 	if [ -n "$IMAGINE_INFERENCE_INPUTS" ] && [ -n "$IMAGINE_INFERENCE_OUTPUTS" ]; then
 		# Environment variable mode
 		MODELS_PATH="$OUTPUT_RESULTS_FOLDER/models"
 		IMAGES_PATH="$IMAGINE_INFERENCE_INPUTS"
 		INFERENCE_OUTPUT_PATH="$IMAGINE_INFERENCE_OUTPUTS"
+		if [ "$INPUT_DATASETNAME" != "-" ]; then
+			FEATURES_FILE="$INPUT_DATASETNAME"
+			if [ ! -f "$FEATURES_FILE" ]; then
+				features_basename=$(basename "$INPUT_DATASETNAME")
+				if [ -n "$IMAGINE_INFERENCE_DATAFILE" ] && [ -f "$IMAGINE_INFERENCE_DATAFILE/$features_basename" ]; then
+					FEATURES_FILE="$IMAGINE_INFERENCE_DATAFILE/$features_basename"
+				elif [ -f "$OUTPUT_RESULTS_FOLDER/$features_basename" ]; then
+					FEATURES_FILE="$OUTPUT_RESULTS_FOLDER/$features_basename"
+				fi
+			fi
+		elif [ -n "$IMAGINE_INFERENCE_DATAFILE" ] && [ -f "$IMAGINE_INFERENCE_DATAFILE" ]; then
+			FEATURES_FILE="$IMAGINE_INFERENCE_DATAFILE"
+		fi
 		echo "Using environment variables for inference:"
 		echo "Models path: $MODELS_PATH (from IMAGINE_RESULTS/models)"
 		echo "Images path: $IMAGES_PATH (from IMAGINE_INFERENCE_INPUTS)"
 		echo "Output path: $INFERENCE_OUTPUT_PATH (from IMAGINE_INFERENCE_OUTPUTS)"
+		if [ -n "$FEATURES_FILE" ]; then
+			echo "Features file: $FEATURES_FILE"
+		fi
 	else
 		# Parameter mode (backward compatibility)
 		# Filter out --all_learners flag from inference parameters
@@ -92,10 +109,18 @@ if [ "$LEARNING_TASK" = "inference" ]; then
 		MODELS_PATH="${INFERENCE_PARAMS[4]}"
 		IMAGES_PATH="${INFERENCE_PARAMS[5]}"  
 		INFERENCE_OUTPUT_PATH="${INFERENCE_PARAMS[6]}"
+		if [ ${#INFERENCE_PARAMS[@]} -ge 8 ]; then
+			FEATURES_FILE="${INFERENCE_PARAMS[7]}"
+		elif [ "$INPUT_DATASETNAME" != "-" ]; then
+			FEATURES_FILE="$INPUT_DATASETNAME"
+		fi
 		echo "Using parameters for inference:"
 		echo "Models path: $MODELS_PATH"
 		echo "Images path: $IMAGES_PATH"
 		echo "Output path: $INFERENCE_OUTPUT_PATH"
+		if [ -n "$FEATURES_FILE" ]; then
+			echo "Features file: $FEATURES_FILE"
+		fi
 	fi
 fi
 
@@ -253,6 +278,10 @@ if [ $LEARNING_TASK = "inference" ]; then
 	echo "Models: $MODELS_PATH"
 	echo "Images: $IMAGES_PATH" 
 	echo "Output: $INFERENCE_OUTPUT_PATH"
-	
-	run_step "run inference pipeline" python inference.py "$MODELS_PATH" "$IMAGES_PATH" "$INFERENCE_OUTPUT_PATH"
+	if [ -n "$FEATURES_FILE" ]; then
+		echo "Features: $FEATURES_FILE"
+		run_step "run inference pipeline" python inference.py "$MODELS_PATH" "$IMAGES_PATH" "$INFERENCE_OUTPUT_PATH" --features_file "$FEATURES_FILE"
+	else
+		run_step "run inference pipeline" python inference.py "$MODELS_PATH" "$IMAGES_PATH" "$INFERENCE_OUTPUT_PATH"
+	fi
 fi 

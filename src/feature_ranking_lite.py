@@ -182,6 +182,23 @@ def load_data(path_to_data: str):
 #    return data
 
 
+def validate_target_labels(data: pd.DataFrame, target_col: str, source_file: str):
+    """Fail early if the supervised target contains missing labels."""
+    if target_col not in data.columns:
+        raise ValueError(f"Target column '{target_col}' not found in {source_file}. Available columns: {list(data.columns)}")
+
+    target = data[target_col]
+    missing_mask = target.isna() | (target.astype(str).str.strip().str.lower() == "missing")
+    if missing_mask.any():
+        missing_samples = data.index[missing_mask].astype(str).tolist()
+        preview = ", ".join(missing_samples[:10])
+        more = "" if len(missing_samples) <= 10 else f", ... ({len(missing_samples)} total)"
+        raise ValueError(
+            f"Target column '{target_col}' in {source_file} contains missing labels for: {preview}{more}. "
+            "Fix or remove these rows before training; missing labels must not become a learned class."
+        )
+
+
 def compute_rankings(data: str, path_to_data: str, target_col="label", skip: bool = False, fout: str = ""):
     """
     Computes feature rankings for the data found at ``path_to_data``,
@@ -190,6 +207,8 @@ def compute_rankings(data: str, path_to_data: str, target_col="label", skip: boo
     Saves the rankings into files (csv and pdf) to the output directory
     (see ``get_out_dir``).
     """
+    validate_target_labels(data, target_col, path_to_data)
+
     # Handle case where path_to_data has no directory separator
     path_parts = path_to_data.split("/")[:-1]
     if path_parts:
@@ -436,7 +455,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                             continue
 
                         model_for_fold = model
-                        if isinstance(model, (RandomizedSearchCV, GridSearchCV)):
+                        if isinstance(model, RandomizedSearchCV | GridSearchCV):
                             cv_inner, n_splits_inner, min_class_count_inner, inner_cv_strategy, inner_cv_reason = get_adaptive_cv(
                                 y_train, max_splits=5
                             )

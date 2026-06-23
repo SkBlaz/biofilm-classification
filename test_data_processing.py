@@ -14,6 +14,7 @@ import pandas as pd
 sys.path.insert(0, "src")
 
 from create_joint_df import extract_data
+from feature_ranking_lite import validate_target_labels
 
 
 class TestExtractData(unittest.TestCase):
@@ -105,6 +106,23 @@ class TestExtractData(unittest.TestCase):
 
 class TestDataProcessingUtilities(unittest.TestCase):
     """Test additional data processing utilities."""
+
+    def test_validate_target_labels_rejects_missing_labels(self):
+        df = pd.DataFrame({"feature": [1, 2], "label": ["L1323", None]}, index=["sample1", "sample2"])
+
+        with self.assertRaises(ValueError) as context:
+            validate_target_labels(df, "label", "training.tsv")
+
+        self.assertIn("contains missing labels", str(context.exception))
+        self.assertIn("sample2", str(context.exception))
+
+    def test_validate_target_labels_rejects_literal_missing_class(self):
+        df = pd.DataFrame({"feature": [1, 2], "label": ["L1323", "missing"]}, index=["sample1", "sample2"])
+
+        with self.assertRaises(ValueError) as context:
+            validate_target_labels(df, "label", "training.tsv")
+
+        self.assertIn("missing labels", str(context.exception))
 
     def test_dataframe_groupby_operations(self):
         """Test that pandas groupby operations work as expected."""
