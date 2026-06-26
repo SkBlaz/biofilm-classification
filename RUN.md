@@ -267,6 +267,31 @@ The inference task will use:
 - Input images from `${IMAGINE_INFERENCE_INPUTS}`
 - Output results to `${IMAGINE_INFERENCE_OUTPUTS}`
 
+### Generate features for unlabelled prediction images
+
+If you want to prepare features for images that do not have labels in their filenames, set `IMAGINE_INFERENCE_INPUTS` to the image folder and `IMAGINE_INFERENCE_DATAFILE` to the folder where generated features should be written:
+
+```env
+IMAGINE_INFERENCE_INPUTS=/c/Users/nika/Desktop/E8_images_for_prediction_unlabelled
+IMAGINE_INFERENCE_DATAFILE=/c/Users/nika/Desktop/E8_images_for_prediction_unlabelled_results
+```
+
+Then run:
+
+```sh
+docker compose run --rm imagine 4 datafile.tsv 10 generate_features --unlabelled
+```
+
+The command will read `.tif` images from `${IMAGINE_INFERENCE_INPUTS}` and write the feature-generation outputs to `${IMAGINE_INFERENCE_DATAFILE}`. The final feature table will be `${IMAGINE_INFERENCE_DATAFILE}/datafile.tsv`.
+
+To run inference using that saved feature table, pass its basename instead of `-`:
+
+```sh
+docker compose run --rm imagine 4 datafile.tsv 10 inference
+```
+
+When inference generates features internally, its temporary feature table is `/tmp/inference/inference_data.tsv` inside the container. That path is not a host folder by default and disappears when the container is removed. Use `generate_features --unlabelled` when you need a persistent, easy-to-find feature table on the host machine.
+
 ### Parameter Mode (Backward Compatible)
 
 You can also specify paths directly as parameters:

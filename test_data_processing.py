@@ -4,6 +4,7 @@ Unit tests for data processing utilities.
 """
 
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -177,6 +178,26 @@ class TestDataProcessingUtilities(unittest.TestCase):
         self.assertEqual(pivoted.shape, (2, 2))
         self.assertEqual(pivoted.loc["A", "x"], 1)
         self.assertEqual(pivoted.loc["B", "y"], 4)
+
+    def test_create_final_df_supports_unlabelled_samples(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            analysis_dir = os.path.join(temp_dir, "analysis")
+            os.makedirs(analysis_dir)
+            outfile = os.path.join(temp_dir, "datafile.tsv")
+
+            pd.DataFrame({"sampleName": ["E8_image_001"], "mean": [1.5]}).to_csv(
+                os.path.join(analysis_dir, "SUMMARYCustomAlgos.tsv_mean.txt"), sep="\t", index=False
+            )
+
+            subprocess.run(
+                [sys.executable, "src/create_final_df_from_results.py", analysis_dir, outfile, "--unlabelled"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            result = pd.read_csv(outfile, sep="\t", index_col=0)
+            self.assertEqual(result.loc["E8_image_001", "label"], "unlabelled")
 
     def test_string_operations(self):
         """Test string operations used in data processing."""

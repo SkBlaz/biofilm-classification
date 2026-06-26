@@ -47,13 +47,29 @@ OUTPUT_RESULTS_FOLDER='/imagine/results'
 
 # Check for optional --all_learners flag in any position after the required parameters
 ALL_LEARNERS_FLAG=""
+UNLABELLED_FLAG=""
 for arg in "$@"; do
     if [ "$arg" = "--all_learners" ]; then
         ALL_LEARNERS_FLAG="--all_learners"
         echo "All learners flag enabled - will use all machine learning algorithms"
-        break
+    fi
+    if [ "$arg" = "--unlabelled" ] || [ "$arg" = "--unlabeled" ]; then
+        UNLABELLED_FLAG="--unlabelled"
+        echo "Unlabelled feature generation enabled"
     fi
 done
+
+if [ "$LEARNING_TASK" = "generate_features" ] && [ -n "$UNLABELLED_FLAG" ]; then
+	if [ -z "$IMAGINE_INFERENCE_INPUTS" ] || [ -z "$IMAGINE_INFERENCE_DATAFILE" ]; then
+		echo "generate_features --unlabelled requires IMAGINE_INFERENCE_INPUTS and IMAGINE_INFERENCE_DATAFILE"
+		echo "Example:"
+		echo "IMAGINE_INFERENCE_INPUTS=/c/Users/nika/Desktop/E8_images_for_prediction_unlabelled"
+		echo "IMAGINE_INFERENCE_DATAFILE=/c/Users/nika/Desktop/E8_images_for_prediction_unlabelled_results"
+		exit 1
+	fi
+	INPUT_IMAGE_FOLDER="$IMAGINE_INFERENCE_INPUTS"
+	OUTPUT_RESULTS_FOLDER="$IMAGINE_INFERENCE_DATAFILE"
+fi
 
 # Handle special case for inference task
 if [ "$LEARNING_TASK" = "inference" ]; then
@@ -202,7 +218,7 @@ echo "Task: $LEARNING_TASK"
 
 
 if [ $LEARNING_TASK = "generate_features" ]; then
-	rm -rvf "${OUTPUT_RESULTS_FOLDER}/*"
+	rm -rvf "${OUTPUT_RESULTS_FOLDER:?}/"*
 	mkdir -p "${OUTPUT_RESULTS_FOLDER}"/{feature_generator,raw,analysis,visualizations}
 
 	run_step "validate input .tif files" validate_tif_inputs "${INPUT_IMAGE_FOLDER}"
@@ -216,7 +232,7 @@ if [ $LEARNING_TASK = "generate_features" ]; then
 	run_step "compute aggregated features" python analysis.py "${RESULTS_FOLDER_RAW}" "${RESULTS_FOLDER_ANALYSIS}"
 
 	# Create the final DF
-	run_step "create final dataframe" python create_final_df_from_results.py "${RESULTS_FOLDER_ANALYSIS}" "${RESULTS_CREATE_DF}"
+	run_step "create final dataframe" python create_final_df_from_results.py "${RESULTS_FOLDER_ANALYSIS}" "${RESULTS_CREATE_DF}" ${UNLABELLED_FLAG}
 fi
 
 if [ $LEARNING_TASK = "learning_benchmark" ]; then

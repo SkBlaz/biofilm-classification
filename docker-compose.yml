@@ -40,7 +40,6 @@ services:
       - type: bind
         source: '${IMAGINE_INFERENCE_DATAFILE:-.}'
         target: /imagine/inference_datafile
-        read_only: true
     environment:
       - IMAGINE_INFERENCE_INPUTS=/imagine/inference_inputs
       - IMAGINE_INFERENCE_OUTPUTS=/imagine/inference_outputs

@@ -11,6 +11,7 @@ logging.getLogger(__name__).setLevel(logging.INFO)
 if __name__ == "__main__":
     results_folder_analysis = sys.argv[1]
     outfile = sys.argv[2]
+    unlabelled = "--unlabelled" in sys.argv[3:] or "--unlabeled" in sys.argv[3:]
 
     all_dfs = []
 
@@ -32,7 +33,10 @@ if __name__ == "__main__":
 
     df_final = pd.concat(all_dfs)
     df_final = df_final.reset_index().pivot(index="sampleName", columns="variable", values="value")
-    df_final["label"] = [x.split("--")[4] for x in df_final.index.tolist()]
+    if unlabelled:
+        df_final["label"] = "unlabelled"
+    else:
+        df_final["label"] = [x.split("--")[4] for x in df_final.index.tolist()]
     ubound = df_final.isnull().sum(axis=1) / df_final.shape[1]
     df_final = df_final[ubound < 0.8]
     #    df_final.to_csv(f"../prepared_data/{date.today()}-{tag}.tsv", sep="\t")
