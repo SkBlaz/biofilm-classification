@@ -69,6 +69,7 @@ if [ "$LEARNING_TASK" = "generate_features" ] && [ -n "$UNLABELLED_FLAG" ]; then
 	fi
 	INPUT_IMAGE_FOLDER="$IMAGINE_INFERENCE_INPUTS"
 	OUTPUT_RESULTS_FOLDER="$IMAGINE_INFERENCE_DATAFILE"
+	INPUT_DATASETNAME="unknown_features.tsv"
 fi
 
 # Handle special case for inference task

@@ -199,6 +199,60 @@ class TestDataProcessingUtilities(unittest.TestCase):
             result = pd.read_csv(outfile, sep="\t", index_col=0)
             self.assertEqual(result.loc["E8_image_001", "label"], "unlabelled")
 
+    def test_run_analysis_writes_unlabelled_features_to_unknown_features(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bin_dir = os.path.join(temp_dir, "bin")
+            images_dir = os.path.join(temp_dir, "images")
+            results_dir = os.path.join(temp_dir, "results")
+            log_file = os.path.join(temp_dir, "python_args.log")
+            os.makedirs(bin_dir)
+            os.makedirs(images_dir)
+            os.makedirs(results_dir)
+            open(os.path.join(images_dir, "image_001.tif"), "w").close()
+
+            python_stub = os.path.join(bin_dir, "python")
+            with open(python_stub, "w") as f:
+                f.write(
+                    "#!/bin/sh\n"
+                    'printf \'%s\\n\' "$*" >> "$PYTHON_ARGS_LOG"\n'
+                    'if [ "$1" = "create_final_df_from_results.py" ]; then\n'
+                    '  mkdir -p "$(dirname "$3")"\n'
+                    '  : > "$3"\n'
+                    "fi\n"
+                )
+            os.chmod(python_stub, 0o755)
+
+            parallel_stub = os.path.join(bin_dir, "parallel")
+            with open(parallel_stub, "w") as f:
+                f.write("#!/bin/sh\nexit 0\n")
+            os.chmod(parallel_stub, 0o755)
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "IMAGINE_INFERENCE_INPUTS": images_dir,
+                    "IMAGINE_INFERENCE_DATAFILE": results_dir,
+                    "PATH": f"{bin_dir}:{env['PATH']}",
+                    "PYTHON_ARGS_LOG": log_file,
+                }
+            )
+
+            subprocess.run(
+                ["bash", "src/run_analysis.sh", "4", "datafile.tsv", "10", "generate_features", "--unlabelled"],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+
+            self.assertTrue(os.path.exists(os.path.join(results_dir, "unknown_features.tsv")))
+            self.assertFalse(os.path.exists(os.path.join(results_dir, "datafile.tsv")))
+            with open(log_file) as f:
+                python_args = f.read()
+            self.assertIn(
+                f"create_final_df_from_results.py {results_dir}/analysis {results_dir}/unknown_features.tsv --unlabelled", python_args
+            )
+
     def test_string_operations(self):
         """Test string operations used in data processing."""
         # Test string split and join operations
