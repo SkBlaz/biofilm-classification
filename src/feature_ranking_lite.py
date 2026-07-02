@@ -159,11 +159,18 @@ def load_data(path_to_data: str):
     # inf --> max + 3.14
     # nan --> -666
     for c in data.columns:
-        max_val = data[c].replace(np.inf, np.nan).max()
-        if isinstance(max_val, str):
-            data[c] = data[c].fillna("missing")
-        else:
+        if pd.api.types.is_numeric_dtype(data[c]):
+            max_val = data[c].replace(np.inf, np.nan).max()
             data[c] = data[c].replace(np.inf, max_val + 3.14).fillna(-666)
+        else:
+            data[c] = data[c].fillna("missing")
+
+    if "label" in data.columns:
+        missing_label_mask = data["label"].isna() | (data["label"].astype(str).str.strip().str.lower() == "missing")
+        if missing_label_mask.any():
+            dropped_count = int(missing_label_mask.sum())
+            logger.warning(f"Dropping {dropped_count} rows with missing 'label' from {path_to_data}")
+            data = data.loc[~missing_label_mask].copy()
 
     data = data.copy()
 

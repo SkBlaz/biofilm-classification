@@ -15,7 +15,7 @@ import pandas as pd
 sys.path.insert(0, "src")
 
 from create_joint_df import extract_data
-from feature_ranking_lite import validate_target_labels
+from feature_ranking_lite import load_data, validate_target_labels
 
 
 class TestExtractData(unittest.TestCase):
@@ -124,6 +124,22 @@ class TestDataProcessingUtilities(unittest.TestCase):
             validate_target_labels(df, "label", "training.tsv")
 
         self.assertIn("missing labels", str(context.exception))
+
+    def test_load_data_drops_rows_with_missing_labels(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = os.path.join(temp_dir, "datafile.tsv")
+            pd.DataFrame(
+                {
+                    "sampleName": ["sample--pos001", "sample--pos002", "sample--pos003"],
+                    "feature": [1.0, 2.0, 3.0],
+                    "label": ["L1323", None, "missing"],
+                }
+            ).to_csv(data_path, sep="\t", index=False)
+
+            data = load_data(data_path)
+
+            self.assertEqual(data.index.tolist(), ["sample--pos001"])
+            self.assertEqual(data.loc["sample--pos001", "label"], "L1323")
 
     def test_dataframe_groupby_operations(self):
         """Test that pandas groupby operations work as expected."""
