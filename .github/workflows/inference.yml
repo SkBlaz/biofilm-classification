@@ -9,7 +9,7 @@ on:
 jobs:
   inference:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 150
     
     steps:
     - name: Checkout code
@@ -34,7 +34,7 @@ jobs:
         mkdir -p examples/test_images_results
         
     - name: Setup models for inference testing
-      timeout-minutes: 45
+      timeout-minutes: 90
       run: |
         echo "Setting up models for inference testing..."
         docker compose run --rm imagine-test-learning-benchmark-save-models
