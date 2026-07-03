@@ -227,7 +227,7 @@ def generate_features_for_images(images_dir, temp_dir):
     return data_file
 
 
-def run_inference(models, metadata, features_file, output_dir):
+def run_inference(models, metadata, features_file, output_dir, generate_explanations=True):
     """Run inference on the prepared features using the loaded models."""
     logger.info(f"Running inference on {features_file}")
 
@@ -428,11 +428,12 @@ def run_inference(models, metadata, features_file, output_dir):
         logger.info(f"Saved inference summary to {summary_file}")
 
     # Generate SHAP explanations
-    try:
-        generate_shap_explanations(models, metadata, all_predictions, output_dir)
-    except Exception as e:
-        logger.error(f"Failed to generate SHAP explanations: {e}")
-        logger.warning("Continuing without SHAP explanations")
+    if generate_explanations:
+        try:
+            generate_shap_explanations(models, metadata, all_predictions, output_dir)
+        except Exception as e:
+            logger.error(f"Failed to generate SHAP explanations: {e}")
+            logger.warning("Continuing without SHAP explanations")
 
     logger.info(f"Inference complete. Results saved to {output_dir}")
     return len(all_predictions)
