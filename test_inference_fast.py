@@ -23,7 +23,7 @@ def test_inference_with_pregenerated_features():
     """Test inference using pre-generated features from datafile.tsv."""
 
     models_dir = "/imagine/results/models"
-    features_file = "/imagine/results/datafile.tsv"
+    features_file = "/imagine/results/ci_datafile.tsv"
     temp_output_dir = "/tmp/inference_test_output"
 
     # Create temporary output directory

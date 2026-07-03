@@ -56,25 +56,25 @@ services:
   imagine-test-learning-benchmark:
     <<: *base-test-config
     command:
-      - '4'
-      - datafile.tsv
-      - '15'
+      - '2'
+      - ci_datafile.tsv
+      - '5'
       - learning_benchmark
 
   imagine-test-data-visualization:
     <<: *base-test-config
     command:
-      - '4'
-      - datafile.tsv
-      - '15'
+      - '2'
+      - ci_datafile.tsv
+      - '5'
       - data_visualization
 
   imagine-test-learning-benchmark-save-models:
     <<: *base-test-config
     command:
-      - '4'
-      - datafile.tsv
-      - '15'
+      - '2'
+      - ci_datafile.tsv
+      - '5'
       - learning_benchmark_save_models
 
   imagine-test-inference:
