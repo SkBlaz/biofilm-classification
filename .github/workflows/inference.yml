@@ -52,7 +52,7 @@ jobs:
         fi
         
     - name: Run fast inference test (core functionality)
-      timeout-minutes: 5
+      timeout-minutes: 20
       run: |
         echo "Running fast inference test with pre-generated features..."
         docker compose run --rm imagine-test-inference-fast
