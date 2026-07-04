@@ -47,26 +47,60 @@ OUTPUT_RESULTS_FOLDER='/imagine/results'
 
 # Check for optional --all_learners flag in any position after the required parameters
 ALL_LEARNERS_FLAG=""
+UNLABELLED_FLAG=""
 for arg in "$@"; do
     if [ "$arg" = "--all_learners" ]; then
         ALL_LEARNERS_FLAG="--all_learners"
         echo "All learners flag enabled - will use all machine learning algorithms"
-        break
+    fi
+    if [ "$arg" = "--unlabelled" ] || [ "$arg" = "--unlabeled" ]; then
+        UNLABELLED_FLAG="--unlabelled"
+        echo "Unlabelled feature generation enabled"
     fi
 done
 
+if [ "$LEARNING_TASK" = "generate_features" ] && [ -n "$UNLABELLED_FLAG" ]; then
+	if [ -z "$IMAGINE_INFERENCE_INPUTS" ] || [ -z "$IMAGINE_INFERENCE_DATAFILE" ]; then
+		echo "generate_features --unlabelled requires IMAGINE_INFERENCE_INPUTS and IMAGINE_INFERENCE_DATAFILE"
+		echo "Example:"
+		echo "IMAGINE_INFERENCE_INPUTS=/c/Users/nika/Desktop/E8_images_for_prediction_unlabelled"
+		echo "IMAGINE_INFERENCE_DATAFILE=/c/Users/nika/Desktop/E8_images_for_prediction_unlabelled_results"
+		exit 1
+	fi
+	INPUT_IMAGE_FOLDER="$IMAGINE_INFERENCE_INPUTS"
+	OUTPUT_RESULTS_FOLDER="$IMAGINE_INFERENCE_DATAFILE"
+	INPUT_DATASETNAME="unknown_features.tsv"
+fi
+
 # Handle special case for inference task
 if [ "$LEARNING_TASK" = "inference" ]; then
+	FEATURES_FILE=""
 	# Use environment variables if available, otherwise require parameters
 	if [ -n "$IMAGINE_INFERENCE_INPUTS" ] && [ -n "$IMAGINE_INFERENCE_OUTPUTS" ]; then
 		# Environment variable mode
 		MODELS_PATH="$OUTPUT_RESULTS_FOLDER/models"
 		IMAGES_PATH="$IMAGINE_INFERENCE_INPUTS"
 		INFERENCE_OUTPUT_PATH="$IMAGINE_INFERENCE_OUTPUTS"
+		if [ "$INPUT_DATASETNAME" != "-" ]; then
+			FEATURES_FILE="$INPUT_DATASETNAME"
+			if [ ! -f "$FEATURES_FILE" ]; then
+				features_basename=$(basename "$INPUT_DATASETNAME")
+				if [ -n "$IMAGINE_INFERENCE_DATAFILE" ] && [ -f "$IMAGINE_INFERENCE_DATAFILE/$features_basename" ]; then
+					FEATURES_FILE="$IMAGINE_INFERENCE_DATAFILE/$features_basename"
+				elif [ -f "$OUTPUT_RESULTS_FOLDER/$features_basename" ]; then
+					FEATURES_FILE="$OUTPUT_RESULTS_FOLDER/$features_basename"
+				fi
+			fi
+		elif [ -n "$IMAGINE_INFERENCE_DATAFILE" ] && [ -f "$IMAGINE_INFERENCE_DATAFILE" ]; then
+			FEATURES_FILE="$IMAGINE_INFERENCE_DATAFILE"
+		fi
 		echo "Using environment variables for inference:"
 		echo "Models path: $MODELS_PATH (from IMAGINE_RESULTS/models)"
 		echo "Images path: $IMAGES_PATH (from IMAGINE_INFERENCE_INPUTS)"
 		echo "Output path: $INFERENCE_OUTPUT_PATH (from IMAGINE_INFERENCE_OUTPUTS)"
+		if [ -n "$FEATURES_FILE" ]; then
+			echo "Features file: $FEATURES_FILE"
+		fi
 	else
 		# Parameter mode (backward compatibility)
 		# Filter out --all_learners flag from inference parameters
@@ -92,10 +126,18 @@ if [ "$LEARNING_TASK" = "inference" ]; then
 		MODELS_PATH="${INFERENCE_PARAMS[4]}"
 		IMAGES_PATH="${INFERENCE_PARAMS[5]}"  
 		INFERENCE_OUTPUT_PATH="${INFERENCE_PARAMS[6]}"
+		if [ ${#INFERENCE_PARAMS[@]} -ge 8 ]; then
+			FEATURES_FILE="${INFERENCE_PARAMS[7]}"
+		elif [ "$INPUT_DATASETNAME" != "-" ]; then
+			FEATURES_FILE="$INPUT_DATASETNAME"
+		fi
 		echo "Using parameters for inference:"
 		echo "Models path: $MODELS_PATH"
 		echo "Images path: $IMAGES_PATH"
 		echo "Output path: $INFERENCE_OUTPUT_PATH"
+		if [ -n "$FEATURES_FILE" ]; then
+			echo "Features file: $FEATURES_FILE"
+		fi
 	fi
 fi
 
@@ -177,7 +219,7 @@ echo "Task: $LEARNING_TASK"
 
 
 if [ $LEARNING_TASK = "generate_features" ]; then
-	rm -rvf "${OUTPUT_RESULTS_FOLDER}/*"
+	rm -rvf "${OUTPUT_RESULTS_FOLDER:?}/"*
 	mkdir -p "${OUTPUT_RESULTS_FOLDER}"/{feature_generator,raw,analysis,visualizations}
 
 	run_step "validate input .tif files" validate_tif_inputs "${INPUT_IMAGE_FOLDER}"
@@ -191,7 +233,7 @@ if [ $LEARNING_TASK = "generate_features" ]; then
 	run_step "compute aggregated features" python analysis.py "${RESULTS_FOLDER_RAW}" "${RESULTS_FOLDER_ANALYSIS}"
 
 	# Create the final DF
-	run_step "create final dataframe" python create_final_df_from_results.py "${RESULTS_FOLDER_ANALYSIS}" "${RESULTS_CREATE_DF}"
+	run_step "create final dataframe" python create_final_df_from_results.py "${RESULTS_FOLDER_ANALYSIS}" "${RESULTS_CREATE_DF}" ${UNLABELLED_FLAG}
 fi
 
 if [ $LEARNING_TASK = "learning_benchmark" ]; then
@@ -253,6 +295,10 @@ if [ $LEARNING_TASK = "inference" ]; then
 	echo "Models: $MODELS_PATH"
 	echo "Images: $IMAGES_PATH" 
 	echo "Output: $INFERENCE_OUTPUT_PATH"
-	
-	run_step "run inference pipeline" python inference.py "$MODELS_PATH" "$IMAGES_PATH" "$INFERENCE_OUTPUT_PATH"
+	if [ -n "$FEATURES_FILE" ]; then
+		echo "Features: $FEATURES_FILE"
+		run_step "run inference pipeline" python inference.py "$MODELS_PATH" "$IMAGES_PATH" "$INFERENCE_OUTPUT_PATH" --features_file "$FEATURES_FILE"
+	else
+		run_step "run inference pipeline" python inference.py "$MODELS_PATH" "$IMAGES_PATH" "$INFERENCE_OUTPUT_PATH"
+	fi
 fi 

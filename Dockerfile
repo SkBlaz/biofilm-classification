@@ -39,5 +39,6 @@ RUN dos2unix run_analysis.sh && \
 	
 # test data for CI
 COPY datafile.tsv ./
+COPY ci_datafile.tsv ./
 
 ENTRYPOINT [ "bash", "run_analysis.sh" ]

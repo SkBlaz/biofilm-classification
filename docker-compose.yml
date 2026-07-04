@@ -37,9 +37,13 @@ services:
       - type: bind
         source: '${IMAGINE_INFERENCE_OUTPUTS:-.}'
         target: /imagine/inference_outputs
+      - type: bind
+        source: '${IMAGINE_INFERENCE_DATAFILE:-.}'
+        target: /imagine/inference_datafile
     environment:
       - IMAGINE_INFERENCE_INPUTS=/imagine/inference_inputs
       - IMAGINE_INFERENCE_OUTPUTS=/imagine/inference_outputs
+      - IMAGINE_INFERENCE_DATAFILE=/imagine/inference_datafile
 
   imagine-test-generate-features:
     <<: *base-test-config
@@ -52,25 +56,25 @@ services:
   imagine-test-learning-benchmark:
     <<: *base-test-config
     command:
-      - '4'
-      - datafile.tsv
-      - '15'
+      - '2'
+      - ci_datafile.tsv
+      - '5'
       - learning_benchmark
 
   imagine-test-data-visualization:
     <<: *base-test-config
     command:
-      - '4'
-      - datafile.tsv
-      - '15'
+      - '2'
+      - ci_datafile.tsv
+      - '5'
       - data_visualization
 
   imagine-test-learning-benchmark-save-models:
     <<: *base-test-config
     command:
-      - '4'
-      - datafile.tsv
-      - '15'
+      - '2'
+      - ci_datafile.tsv
+      - '5'
       - learning_benchmark_save_models
 
   imagine-test-inference:

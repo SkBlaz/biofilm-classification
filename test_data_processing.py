@@ -4,6 +4,7 @@ Unit tests for data processing utilities.
 """
 
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -14,6 +15,7 @@ import pandas as pd
 sys.path.insert(0, "src")
 
 from create_joint_df import extract_data
+from feature_ranking_lite import load_data, validate_target_labels
 
 
 class TestExtractData(unittest.TestCase):
@@ -106,6 +108,39 @@ class TestExtractData(unittest.TestCase):
 class TestDataProcessingUtilities(unittest.TestCase):
     """Test additional data processing utilities."""
 
+    def test_validate_target_labels_rejects_missing_labels(self):
+        df = pd.DataFrame({"feature": [1, 2], "label": ["L1323", None]}, index=["sample1", "sample2"])
+
+        with self.assertRaises(ValueError) as context:
+            validate_target_labels(df, "label", "training.tsv")
+
+        self.assertIn("contains missing labels", str(context.exception))
+        self.assertIn("sample2", str(context.exception))
+
+    def test_validate_target_labels_rejects_literal_missing_class(self):
+        df = pd.DataFrame({"feature": [1, 2], "label": ["L1323", "missing"]}, index=["sample1", "sample2"])
+
+        with self.assertRaises(ValueError) as context:
+            validate_target_labels(df, "label", "training.tsv")
+
+        self.assertIn("missing labels", str(context.exception))
+
+    def test_load_data_drops_rows_with_missing_labels(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = os.path.join(temp_dir, "datafile.tsv")
+            pd.DataFrame(
+                {
+                    "sampleName": ["sample--pos001", "sample--pos002", "sample--pos003"],
+                    "feature": [1.0, 2.0, 3.0],
+                    "label": ["L1323", None, "missing"],
+                }
+            ).to_csv(data_path, sep="\t", index=False)
+
+            data = load_data(data_path)
+
+            self.assertEqual(data.index.tolist(), ["sample--pos001"])
+            self.assertEqual(data.loc["sample--pos001", "label"], "L1323")
+
     def test_dataframe_groupby_operations(self):
         """Test that pandas groupby operations work as expected."""
         # This tests the operations used in analysis.py
@@ -159,6 +194,80 @@ class TestDataProcessingUtilities(unittest.TestCase):
         self.assertEqual(pivoted.shape, (2, 2))
         self.assertEqual(pivoted.loc["A", "x"], 1)
         self.assertEqual(pivoted.loc["B", "y"], 4)
+
+    def test_create_final_df_supports_unlabelled_samples(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            analysis_dir = os.path.join(temp_dir, "analysis")
+            os.makedirs(analysis_dir)
+            outfile = os.path.join(temp_dir, "datafile.tsv")
+
+            pd.DataFrame({"sampleName": ["E8_image_001"], "mean": [1.5]}).to_csv(
+                os.path.join(analysis_dir, "SUMMARYCustomAlgos.tsv_mean.txt"), sep="\t", index=False
+            )
+
+            subprocess.run(
+                [sys.executable, "src/create_final_df_from_results.py", analysis_dir, outfile, "--unlabelled"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            result = pd.read_csv(outfile, sep="\t", index_col=0)
+            self.assertEqual(result.loc["E8_image_001", "label"], "unlabelled")
+
+    def test_run_analysis_writes_unlabelled_features_to_unknown_features(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bin_dir = os.path.join(temp_dir, "bin")
+            images_dir = os.path.join(temp_dir, "images")
+            results_dir = os.path.join(temp_dir, "results")
+            log_file = os.path.join(temp_dir, "python_args.log")
+            os.makedirs(bin_dir)
+            os.makedirs(images_dir)
+            os.makedirs(results_dir)
+            open(os.path.join(images_dir, "image_001.tif"), "w").close()
+
+            python_stub = os.path.join(bin_dir, "python")
+            with open(python_stub, "w") as f:
+                f.write(
+                    "#!/bin/sh\n"
+                    'printf \'%s\\n\' "$*" >> "$PYTHON_ARGS_LOG"\n'
+                    'if [ "$1" = "create_final_df_from_results.py" ]; then\n'
+                    '  mkdir -p "$(dirname "$3")"\n'
+                    '  : > "$3"\n'
+                    "fi\n"
+                )
+            os.chmod(python_stub, 0o755)
+
+            parallel_stub = os.path.join(bin_dir, "parallel")
+            with open(parallel_stub, "w") as f:
+                f.write("#!/bin/sh\nexit 0\n")
+            os.chmod(parallel_stub, 0o755)
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "IMAGINE_INFERENCE_INPUTS": images_dir,
+                    "IMAGINE_INFERENCE_DATAFILE": results_dir,
+                    "PATH": f"{bin_dir}:{env['PATH']}",
+                    "PYTHON_ARGS_LOG": log_file,
+                }
+            )
+
+            subprocess.run(
+                ["bash", "src/run_analysis.sh", "4", "datafile.tsv", "10", "generate_features", "--unlabelled"],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+
+            self.assertTrue(os.path.exists(os.path.join(results_dir, "unknown_features.tsv")))
+            self.assertFalse(os.path.exists(os.path.join(results_dir, "datafile.tsv")))
+            with open(log_file) as f:
+                python_args = f.read()
+            self.assertIn(
+                f"create_final_df_from_results.py {results_dir}/analysis {results_dir}/unknown_features.tsv --unlabelled", python_args
+            )
 
     def test_string_operations(self):
         """Test string operations used in data processing."""

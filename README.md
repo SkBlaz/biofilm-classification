@@ -1,4 +1,8 @@
 
+<p align="center">
+  <img src="logo.png" alt="MicroICS logo" width="240">
+</p>
+
 # Image classification suite MicroICS
 
 ![Feature Generation](https://github.com/SkBlaz/biofilm-classification/actions/workflows/feature-generation.yml/badge.svg)

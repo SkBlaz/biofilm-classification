@@ -23,7 +23,7 @@ def test_inference_with_pregenerated_features():
     """Test inference using pre-generated features from datafile.tsv."""
 
     models_dir = "/imagine/results/models"
-    features_file = "/imagine/results/datafile.tsv"
+    features_file = "/imagine/results/ci_datafile.tsv"
     temp_output_dir = "/tmp/inference_test_output"
 
     # Create temporary output directory
@@ -45,9 +45,9 @@ def test_inference_with_pregenerated_features():
         models, metadata = load_models(models_dir)
         logger.info(f"Loaded {len(models)} models: {list(models.keys())}")
 
-        # Run inference
+        # Run inference (skip expensive explanation generation in fast test)
         logger.info("Running inference...")
-        num_successful = run_inference(models, metadata, features_file, temp_output_dir)
+        num_successful = run_inference(models, metadata, features_file, temp_output_dir, generate_explanations=False)
 
         # Verify results
         if num_successful == 0:

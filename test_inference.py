@@ -218,6 +218,20 @@ class TestValidateCliInputs(unittest.TestCase):
             self._create_test_file(images_dir, "sample.tif")
             validate_cli_inputs(models_dir, images_dir)
 
+    def test_valid_precomputed_features_without_tif_files(self):
+        with tempfile.TemporaryDirectory() as models_dir, tempfile.TemporaryDirectory() as images_dir:
+            self._create_test_file(models_dir, "demo_model.joblib")
+            features_file = Path(images_dir, "features.tsv")
+            features_file.write_text("sampleName\tfeature1\nsample1\t1\n")
+            validate_cli_inputs(models_dir, images_dir, str(features_file))
+
+    def test_missing_precomputed_features_file(self):
+        with tempfile.TemporaryDirectory() as models_dir, tempfile.TemporaryDirectory() as images_dir:
+            self._create_test_file(models_dir, "demo_model.joblib")
+            with self.assertRaises(ValueError) as context:
+                validate_cli_inputs(models_dir, images_dir, str(Path(images_dir, "missing.tsv")))
+            self.assertIn("Features file does not exist", str(context.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

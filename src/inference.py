@@ -17,12 +17,16 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-import shap
+
+try:
+    import shap
+except ImportError:
+    shap = None
 
 logging.basicConfig(format="%(asctime)s - %(message)s", datefmt="%d-%b-%y %H:%M:%S")
 logging.getLogger(__name__).setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
-CLI_USAGE = "Usage: python inference.py <models_dir> <images_dir> <output_dir>"
+CLI_USAGE = "Usage: python inference.py <models_dir> <images_dir> <output_dir> [--features_file FEATURES.tsv]"
 
 
 def load_models(models_dir):
@@ -61,7 +65,7 @@ def load_models(models_dir):
     return models, metadata
 
 
-def validate_cli_inputs(models_dir, images_dir):
+def validate_cli_inputs(models_dir, images_dir, features_file=None):
     """Validate CLI input paths and provide actionable error messages."""
     errors = []
 
@@ -73,7 +77,10 @@ def validate_cli_inputs(models_dir, images_dir):
             "Run learning_benchmark_save_models first or verify model naming."
         )
 
-    if not os.path.isdir(images_dir):
+    if features_file:
+        if not os.path.isfile(features_file):
+            errors.append(f"Features file does not exist: {features_file}")
+    elif not os.path.isdir(images_dir):
         errors.append(f"Images directory does not exist: {images_dir}")
     elif not any(Path(images_dir).glob("*.tif")):
         errors.append(f"No '.tif' images were found in: {images_dir}")
@@ -220,7 +227,7 @@ def generate_features_for_images(images_dir, temp_dir):
     return data_file
 
 
-def run_inference(models, metadata, features_file, output_dir):
+def run_inference(models, metadata, features_file, output_dir, generate_explanations=True):
     """Run inference on the prepared features using the loaded models."""
     logger.info(f"Running inference on {features_file}")
 
@@ -421,11 +428,12 @@ def run_inference(models, metadata, features_file, output_dir):
         logger.info(f"Saved inference summary to {summary_file}")
 
     # Generate SHAP explanations
-    try:
-        generate_shap_explanations(models, metadata, all_predictions, output_dir)
-    except Exception as e:
-        logger.error(f"Failed to generate SHAP explanations: {e}")
-        logger.warning("Continuing without SHAP explanations")
+    if generate_explanations:
+        try:
+            generate_shap_explanations(models, metadata, all_predictions, output_dir)
+        except Exception as e:
+            logger.error(f"Failed to generate SHAP explanations: {e}")
+            logger.warning("Continuing without SHAP explanations")
 
     logger.info(f"Inference complete. Results saved to {output_dir}")
     return len(all_predictions)
@@ -440,6 +448,10 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
         all_predictions: Dictionary of prediction results including processed features
         output_dir: Directory to save SHAP explanations
     """
+    if shap is None:
+        logger.warning("SHAP is not installed; skipping SHAP explanations")
+        return
+
     logger.info("Generating SHAP explanations...")
 
     # Create explanations subdirectory
@@ -725,11 +737,12 @@ def main():
     parser.add_argument("images_dir", help="Directory containing .tif images for inference")
     parser.add_argument("output_dir", help="Directory to save inference results")
     parser.add_argument("--temp_dir", default="/tmp/inference", help="Temporary directory for feature generation")
+    parser.add_argument("--features_file", help="Precomputed feature TSV to use instead of generating features from images_dir")
 
     args = parser.parse_args()
 
     try:
-        validate_cli_inputs(args.models_dir, args.images_dir)
+        validate_cli_inputs(args.models_dir, args.images_dir, args.features_file)
     except ValueError as e:
         logger.error(str(e))
         sys.exit(1)
@@ -740,10 +753,14 @@ def main():
         models, metadata = load_models(args.models_dir)
         logger.info(f"Loaded {len(models)} models")
 
-        # Generate features for input images
-        logger.info("Generating features for input images...")
-        os.makedirs(args.temp_dir, exist_ok=True)
-        features_file = generate_features_for_images(args.images_dir, args.temp_dir)
+        if args.features_file:
+            logger.info(f"Using precomputed features from {args.features_file}")
+            features_file = args.features_file
+        else:
+            # Generate features for input images
+            logger.info("Generating features for input images...")
+            os.makedirs(args.temp_dir, exist_ok=True)
+            features_file = generate_features_for_images(args.images_dir, args.temp_dir)
 
         # Run inference
         logger.info("Running inference...")

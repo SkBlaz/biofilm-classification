@@ -3,6 +3,7 @@ examples/test_images_results/
 models/
 *.tsv
 !datafile.tsv
+!ci_datafile.tsv
 inference_inputs/
 inference_outputs/
 src/ranking_results/
