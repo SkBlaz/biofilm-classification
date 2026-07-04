@@ -1,6 +1,10 @@
 
 <p align="center">
-  <img src="logo.png" alt="MicroICS logo" width="240">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="logo_dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="logo.png">
+    <img src="logo.png" alt="MicroICS logo" width="240">
+  </picture>
 </p>
 
 # Image classification suite MicroICS
