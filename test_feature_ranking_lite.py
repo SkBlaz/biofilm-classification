@@ -8,12 +8,13 @@ import unittest
 from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
 from sklearn.model_selection import KFold, StratifiedKFold
 
 # Add src directory to path
 sys.path.insert(0, "src")
 
-from feature_ranking_lite import get_adaptive_cv, get_benchmark_runtime_config
+from feature_ranking_lite import convert_to_one_hot, get_adaptive_cv, get_benchmark_runtime_config
 
 
 class TestAdaptiveCV(unittest.TestCase):
@@ -72,6 +73,26 @@ class TestBenchmarkRuntimeConfig(unittest.TestCase):
         self.assertEqual(config["n_iter"], 10)
         self.assertEqual(config["repetitions"], 3)
         self.assertEqual(config["n_components"], [16, 32, 64, 128, 256, 512, "all"])
+
+
+class TestConvertToOneHot(unittest.TestCase):
+    """Test categorical preprocessing for feature ranking."""
+
+    def test_expands_low_cardinality_categorical_columns(self):
+        data = pd.DataFrame({"numeric": [1, 2, 3], "strain": ["A", "A", "B"]})
+
+        converted, feature_groups = convert_to_one_hot(data)
+
+        self.assertListEqual(list(converted.columns), ["numeric", "strain_A", "strain_B"])
+        self.assertDictEqual(feature_groups, {"numeric": ["numeric"], "strain": ["strain_A", "strain_B"]})
+
+    def test_skips_high_cardinality_categorical_columns(self):
+        data = pd.DataFrame({"numeric": [1, 2, 3], "sample_id": ["A", "B", "C"]})
+
+        converted, feature_groups = convert_to_one_hot(data)
+
+        self.assertListEqual(list(converted.columns), ["numeric"])
+        self.assertDictEqual(feature_groups, {"numeric": ["numeric"]})
 
 
 if __name__ == "__main__":
