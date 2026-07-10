@@ -23,6 +23,8 @@ Welcome to Image classification suite MicroICS, a Python-based software for effi
 
 3. [Continuous Integration](.github/CI.md)
 
+# Citation
+Official paper can be found at
 ```
 TY  - JOUR
 AU  - Janež, Nika
