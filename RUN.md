@@ -24,6 +24,27 @@ The only software that one must install in order to create Docker containers for
 Each image can also expose parameters, that the user of the image can specify during the creation of a container. In our 
 case, an example of such parameter is the path to the image folder.
 
+## Using the local GUI
+
+The repository includes a small local GUI for the Docker pipeline. It needs only Python 3 and Docker; the browser interface
+does not add another Python dependency. From the repository root, run:
+
+```sh
+bash run_gui.sh
+```
+
+Windows users can double-click `run_gui.bat`. To create a desktop shortcut with the MicroICS icon, double-click
+`install_microics_gui.bat` once; it creates **MicroICS GUI** on the desktop. Both launchers require Python 3 and Docker Desktop.
+
+The GUI opens at `http://127.0.0.1:8765`. Choose **Train + classify** to run the same three-stage workflow as
+`run_all_e2e.sh`: generate features, train and save models, then classify new images. **Train models** runs the first two
+stages, while **Classify images** uses models already present in the selected results folder.
+
+The first stage of a training workflow clears the selected results folder, so the GUI asks for confirmation when it is not
+empty. The live pipeline shows the active Docker step with a green glow. Generated TSV files, plots, images, and HTML
+visualizations can be selected in the output browser while or after a run. Use the **Stop** button to terminate a running
+Docker step. Pass `--no-browser` to start the server without opening a browser automatically.
+
 ## Generating and running the containers
 In order to use the containers, one must first build them locally. 
 Container(s) should be build only the very first time or after changes have been made to the actual pipeline.

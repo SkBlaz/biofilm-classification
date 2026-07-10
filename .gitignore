@@ -6,6 +6,7 @@ models/
 !ci_datafile.tsv
 inference_inputs/
 inference_outputs/
+.gui_uploads/
 src/ranking_results/
 
 # Python

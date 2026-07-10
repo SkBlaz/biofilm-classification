@@ -12,6 +12,7 @@ Use this repository to process 3D biofilm images and run feature generation, ran
 - `src/visualizations/`: visualization modules
 - `test_*.py`: unit tests
 - `run_tests.py`: test runner
+- `run_gui.sh` / `run_gui.bat`: local GUI launchers for Unix-like systems and Windows
 - `src/requirements.docker.txt`: runtime Python dependencies used in Docker
 - `.github/workflows/`: CI workflows (Docker workflows + Ruff)
 - `RUN.md`: usage and Docker execution guide
@@ -59,5 +60,5 @@ Keep newest entry at the top.
 
 | Date (UTC) | Bot/Agent | PR/Commit | AGENTS.md update summary |
 |---|---|---|---|
+| 2026-07-10 | Codex | current change | Windows GUI launcher and icon shortcut workflow documented. |
 | 2026-05-15 | @copilot | current PR | Initial detailed onboarding guide added. |
-
