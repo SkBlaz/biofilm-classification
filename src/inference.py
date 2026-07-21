@@ -19,6 +19,11 @@ import numpy as np
 import pandas as pd
 
 try:
+    from input_validation import validate_feature_table, write_json_report
+except ImportError:  # Package import from the repository root.
+    from .input_validation import validate_feature_table, write_json_report
+
+try:
     import shap
 except ImportError:
     shap = None
@@ -245,6 +250,13 @@ def run_inference(models, metadata, features_file, output_dir, generate_explanat
     except Exception as e:
         logger.error(f"Failed to load features file: {e}")
         raise
+
+    feature_validation = validate_feature_table(features_file, require_label=False)
+    validation_path = os.path.join(output_dir, "validation", "feature_validation.json")
+    os.makedirs(os.path.dirname(validation_path), exist_ok=True)
+    write_json_report(feature_validation, validation_path)
+    if not feature_validation["ok"]:
+        raise ValueError("Feature validation failed: " + "; ".join(feature_validation["errors"]))
 
     # Prepare results storage
     all_predictions = {}
@@ -506,54 +518,11 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
                     df_x = pd.DataFrame(X_values, columns=feature_names)
                     explainer = shap.TreeExplainer(model)
                     shap_values = explainer.shap_values(df_x)
-                    explanation = explainer(df_x)
 
                     import matplotlib
 
                     matplotlib.use("Agg")  # Use non-interactive backend
                     import matplotlib.pyplot as plt
-
-                    # Generate explanations for each example
-                    for i, (idx, row) in enumerate(X.iterrows()):
-                        logger.info(f"Generating explanation for model {model_name} and example {idx}")
-
-                        row_dir = os.path.join(explanations_dir, idx)
-                        os.makedirs(row_dir, exist_ok=True)
-                        for class_idx in range(shap_values.shape[2]):
-                            class_name = class_idx
-                            if "target_mapping" in meta:
-                                class_name = meta["target_mapping"].get(class_idx, class_idx)
-
-                            flag = "_true" if class_name in idx else ""
-                            flag += "_predicted" if results["predictions"][i] == class_name else ""
-
-                            plt.figure(figsize=(10, 6))
-                            shap.plots.decision(
-                                explainer.expected_value[class_idx],
-                                shap_values[i, :, class_idx],
-                                feature_display_range=slice(None, -16, -1),
-                                feature_names=list(df_x.columns),
-                                show=False,
-                            )
-
-                            decision_plot_file = os.path.join(row_dir, f"{model_name}_{class_name}_decision{flag}.png")
-                            plt.savefig(decision_plot_file, bbox_inches="tight", dpi=150)
-                            plt.close()
-
-                            plt.figure(figsize=(10, 6))
-                            shap.plots.waterfall(explanation[i, :, class_idx], max_display=15, show=False)
-
-                            waterfall_plot_file = os.path.join(row_dir, f"{model_name}_{class_name}_waterfall{flag}.png")
-                            plt.savefig(waterfall_plot_file, bbox_inches="tight", dpi=150)
-                            plt.close()
-
-                    # TreeExplainer might return a list for multi-class or 3D array for binary
-                    # Handle 3D array case (binary classification)
-                    if isinstance(shap_values, np.ndarray) and shap_values.ndim == 3:
-                        logger.info("Converting 3D SHAP values to 2D (taking positive class)")
-                        # For binary classification, take the values for the positive class (index 1)
-                        # This is shape (n_samples, n_features, n_classes) -> (n_samples, n_features)
-                        shap_values = shap_values[:, :, 1]
 
                 except Exception as e:
                     logger.warning(f"TreeExplainer failed for {model_name}: {e}")
@@ -586,11 +555,6 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
                     n_samples = min(50, X_values.shape[0])
                     shap_values = explainer.shap_values(X_values[:n_samples])
 
-                    # Handle 3D array case (binary classification) for KernelExplainer too
-                    if isinstance(shap_values, np.ndarray) and shap_values.ndim == 3:
-                        logger.info("Converting 3D SHAP values to 2D (taking positive class)")
-                        shap_values = shap_values[:, :, 1]
-
                     # Adjust X_values and related data to match
                     if n_samples < X_values.shape[0]:
                         logger.warning(f"Limited SHAP computation to {n_samples} samples due to computational cost")
@@ -606,14 +570,16 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
                 logger.error(f"Could not generate SHAP values for {model_name}")
                 continue
 
-            # Handle multi-class case - shap_values might be a list
-            if isinstance(shap_values, list):
-                # For multi-class, take the class with highest probability for each sample
-                # Or we can save explanations for each class
-                logger.info(f"Multi-class model detected with {len(shap_values)} classes")
+            # Handle multi-class values returned either as a list or a 3-D array.
+            if isinstance(shap_values, list) or (isinstance(shap_values, np.ndarray) and shap_values.ndim == 3):
+                class_values = (
+                    shap_values
+                    if isinstance(shap_values, list)
+                    else [shap_values[:, :, class_idx] for class_idx in range(shap_values.shape[2])]
+                )
+                logger.info(f"Multi-class model detected with {len(class_values)} classes")
 
-                # Save SHAP values for each class
-                for class_idx, class_shap in enumerate(shap_values):
+                for class_idx, class_shap in enumerate(class_values):
                     class_name = class_idx
                     if "target_mapping" in meta:
                         class_name = meta["target_mapping"].get(class_idx, class_idx)
@@ -626,10 +592,11 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
                     shap_df.to_csv(shap_file)
                     logger.info(f"Saved SHAP values for {model_name} class {class_name}")
 
-                # For summary, use the first class
-                shap_values_summary = shap_values[0]
+                shap_values_summary = class_values[0]
+                class_summary_values = class_values
             else:
                 shap_values_summary = shap_values
+                class_summary_values = [shap_values]
 
                 # Create DataFrame with SHAP values
                 shap_df = pd.DataFrame(shap_values_summary, index=results["sample_names"], columns=feature_names)
@@ -663,6 +630,17 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
                 importance_file = os.path.join(explanations_dir, f"{model_name}_feature_importance.csv")
                 importance_df.to_csv(importance_file, index=False)
                 logger.info(f"Saved feature importance for {model_name}")
+
+                for class_idx, class_shap in enumerate(class_summary_values):
+                    class_name = class_idx
+                    if "target_mapping" in meta:
+                        class_name = meta["target_mapping"].get(class_idx, class_idx)
+                    shap.summary_plot(class_shap, X_values, feature_names=feature_names, show=False)
+                    class_plot = os.path.join(explanations_dir, f"{model_name}_summary_plot_class_{class_name}.png")
+                    plt.gcf().set_size_inches(56, 12)
+                    plt.savefig(class_plot, bbox_inches="tight", dpi=150)
+                    plt.close()
+                    logger.info(f"Saved class-specific summary plot for {model_name}, class {class_name}")
 
             except Exception as e:
                 logger.warning(f"Could not generate plots for {model_name}: {e}")

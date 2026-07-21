@@ -17,9 +17,19 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.exceptions import DataConversionWarning
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score, make_scorer
-from sklearn.model_selection import GridSearchCV, KFold, RandomizedSearchCV, StratifiedKFold
+from sklearn.model_selection import GridSearchCV, GroupKFold, KFold, RandomizedSearchCV, StratifiedKFold
+
+try:
+    from sklearn.model_selection import StratifiedGroupKFold
+except ImportError:  # pragma: no cover - only older scikit-learn versions
+    StratifiedGroupKFold = None
 from sklearn.neighbors import KNeighborsClassifier
 from xgboost import XGBClassifier
+
+try:
+    from benchmark_outputs import write_confusion_matrices, write_feature_boxplots, write_feature_correlation
+except ImportError:  # Package import from the repository root.
+    from .benchmark_outputs import write_confusion_matrices, write_feature_boxplots, write_feature_correlation
 
 warnings.simplefilter(action="ignore", category=DataConversionWarning)
 
@@ -296,7 +306,7 @@ def name_manipulator_date(value: str):
     return (value[:8], re.search(r"st--([^-_]+)-", value).group(1))
 
 
-def get_adaptive_cv(y, max_splits=5):
+def get_adaptive_cv(y, max_splits=5, groups=None):
     """Build an adaptive CV splitter for classification targets.
 
     Returns a tuple ``(cv_splitter, n_splits, min_class_count, strategy, reason)``.
@@ -308,9 +318,36 @@ def get_adaptive_cv(y, max_splits=5):
     if n_samples < MIN_CV_SPLITS:
         raise ValueError(f"Cannot create cross-validation splitter: at least {MIN_CV_SPLITS} samples are required, got {n_samples}")
 
+    group_values = np.asarray(groups) if groups is not None else None
+    if group_values is not None and len(group_values) != n_samples:
+        raise ValueError("Replication groups must have one value per sample")
+    unique_groups = np.unique(group_values) if group_values is not None else None
+    if unique_groups is not None and len(unique_groups) < MIN_CV_SPLITS:
+        raise ValueError(f"Cannot create grouped cross-validation splitter: at least {MIN_CV_SPLITS} groups are required")
     target_splits = min(max_splits, max(MIN_CV_SPLITS, n_samples // 2))
+    if unique_groups is not None:
+        target_splits = min(target_splits, len(unique_groups))
     _, class_counts = np.unique(y, return_counts=True)
     min_class_count = class_counts.min()
+
+    if unique_groups is not None:
+        n_splits = min(target_splits, len(unique_groups))
+        if StratifiedGroupKFold is not None and min_class_count >= MIN_CV_SPLITS:
+            class_count_info = ", ".join(str(count) for count in sorted(class_counts))
+            reason = (
+                f"StratifiedGroupKFold enabled for {len(unique_groups)} replication groups; selected {n_splits} folds "
+                f"(class counts: {class_count_info})"
+            )
+            return (
+                StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=42),
+                n_splits,
+                min_class_count,
+                "stratified-group",
+                reason,
+            )
+        reason = f"GroupKFold enabled for {len(unique_groups)} replication groups; selected {n_splits} folds"
+        logger.warning(reason)
+        return GroupKFold(n_splits=n_splits), n_splits, min_class_count, "group", reason
 
     if min_class_count >= MIN_CV_SPLITS:
         class_count_info = ", ".join(str(count) for count in sorted(class_counts))
@@ -330,8 +367,11 @@ def get_adaptive_cv(y, max_splits=5):
     return KFold(n_splits=target_splits, shuffle=True, random_state=42), target_splits, min_class_count, "kfold", reason
 
 
-def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models=False, all_learners=False):
+def do_classification_simple(
+    X, ys, path_to_data, filter_mode="all", save_models=False, all_learners=False, replication_unit=None, learner="rf"
+):
     all_cols = X.columns
+    sample_names = X.index.astype(str).tolist()
     thr_indices = []
     for enx, x in enumerate(all_cols):
         if "Threshold" in x:
@@ -356,7 +396,15 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
     # Create tuned RandomForest using RandomizedSearchCV
     # Adapt CV folds and iterations based on dataset and class size
     n_samples = X.shape[0]
-    cv_rf, n_splits, min_class_count, cv_strategy, cv_reason = get_adaptive_cv(y, max_splits=5)
+    group_ids = None
+    if replication_unit:
+        try:
+            from input_validation import replication_group
+        except ImportError:
+            from .input_validation import replication_group
+
+        group_ids = np.array([replication_group(name, replication_unit) for name in sample_names])
+    cv_rf, n_splits, min_class_count, cv_strategy, cv_reason = get_adaptive_cv(y, max_splits=5, groups=group_ids)
     runtime_config = get_benchmark_runtime_config()
     n_iter = runtime_config["n_iter"]
     logger.info(
@@ -400,9 +448,17 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
             )
     else:
         # Default behavior: only RandomForest (fast)
-        models = {
+        learner_models = {
             "rf": tuned_rf,
+            "dummy": DummyClassifier(),
+            "decisiontree": tree.DecisionTreeClassifier(),
+            "logistic": LogisticRegression(),
+            "xgb": XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective="binary:logistic"),
+            "gridsearch": GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM),
         }
+        if learner not in learner_models:
+            raise ValueError(f"Unsupported learner: {learner}")
+        models = {learner: learner_models[learner]}
 
     # Add autogluon model only if available
     if AUTOGLUON_AVAILABLE:
@@ -421,8 +477,9 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
 
     # Store CV results to find best hyperparameters for final model training
     cv_results = []
+    failed_models = []
 
-    skf, outer_n_splits, outer_min_class_count, outer_cv_strategy, outer_cv_reason = get_adaptive_cv(y, max_splits=3)
+    skf, outer_n_splits, outer_min_class_count, outer_cv_strategy, outer_cv_reason = get_adaptive_cv(y, max_splits=3, groups=group_ids)
     logger.info(
         f"Outer evaluation uses {outer_n_splits} folds (strategy: {outer_cv_strategy}, "
         f"minimum class count: {outer_min_class_count}). {outer_cv_reason}"
@@ -438,11 +495,13 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                 continue
 
             for thr_features in [True, False]:
-                for i, (train_index, test_index) in enumerate(skf.split(X, y)):
+                split_iterator = skf.split(X, y, group_ids) if group_ids is not None else skf.split(X, y)
+                for i, (train_index, test_index) in enumerate(split_iterator):
                     x_train = X[train_index]
                     x_test = X[test_index]
                     y_train = y[train_index]
                     y_test = y[test_index]
+                    groups_train = group_ids[train_index] if group_ids is not None else None
 
                     if not thr_features and desc_components == "all" and len(thr_indices) > 0:
                         x_train = x_train[:, thr_indices]
@@ -457,14 +516,28 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                         if os.path.isfile(partial_path):
                             with open(partial_path) as f:
                                 output = f.read().strip().split("\t")
+                            if len(output) == 8:  # partials written by pre-resume versions
+                                output.append("")
                             outputs.append(output)
+                            if save_models:
+                                cv_results.append(
+                                    {
+                                        "model_name": model_name,
+                                        "repetition": repetition,
+                                        "n_components": desc_components,
+                                        "thr_features": thr_features,
+                                        "fold": i,
+                                        "accuracy": float(output[5]),
+                                        "svd_transformer": None,
+                                    }
+                                )
                             logger.info(f"Loaded existing partial evaluation from {partial_path}, skipping model evaluation")
                             continue
 
                         model_for_fold = model
                         if isinstance(model, RandomizedSearchCV | GridSearchCV):
                             cv_inner, n_splits_inner, min_class_count_inner, inner_cv_strategy, inner_cv_reason = get_adaptive_cv(
-                                y_train, max_splits=5
+                                y_train, max_splits=5, groups=groups_train
                             )
                             logger.info(
                                 f"Using {n_splits_inner} inner CV folds for {model_name} on fold {i} "
@@ -488,6 +561,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                         else:
                             n_components = x_train_model.shape[1]
 
+                        model_failed = False
                         if "TabularPredictor" in str(model_for_fold) and AUTOGLUON_AVAILABLE:
                             # if desc_components == "all":
                             #    continue
@@ -522,15 +596,25 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                             try:
                                 with warnings.catch_warnings():
                                     warnings.simplefilter("ignore")
-                                    model_for_fold.fit(x_train_model, y_train)
+                                    fit_kwargs = (
+                                        {"groups": groups_train}
+                                        if groups_train is not None and isinstance(model_for_fold, RandomizedSearchCV | GridSearchCV)
+                                        else {}
+                                    )
+                                    model_for_fold.fit(x_train_model, y_train, **fit_kwargs)
                                     y_hat = model_for_fold.predict(x_test_model)
                             except Exception as e:
+                                model_failed = True
+                                failed_models.append(f"{model_name} fold {i}: {e}")
                                 logger.warning(
                                     f"Repetition {repetition} with {desc_components} components (THR: {thr_features}) model {model_name} fold {i} raised {e} (filter mode {filter_mode})"
                                 )
                                 y_hat = np.ones(len(x_test_model))
 
                             acc = accuracy_score(y_test, y_hat)
+
+                        if model_failed:
+                            continue
 
                         # Store CV results for later use in final model training
                         if save_models:
@@ -546,7 +630,8 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                                 }
                             )
 
-                        test_map = ",".join([catmap[x] for x in y_test])
+                        test_map = ",".join([str(catmap[x]) for x in y_test])
+                        prediction_map = ",".join([str(catmap.get(int(x), x)) for x in np.asarray(y_hat)])
                         output = [
                             "RESULT",
                             re.sub(r"\s+", " ", str(model_for_fold)),
@@ -556,16 +641,31 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                             acc,
                             test_map,
                             thr_features,
+                            prediction_map,
                         ]
                         with open(partial_path, "w") as f:
                             f.write("\t".join([str(x) for x in output]))
                             logger.info(f"Stored partial evaluation to {partial_path}")
                         outputs.append([str(x) for x in output])
+    if failed_models:
+        details = "; ".join(failed_models[:5])
+        logger.error(f"Benchmark incomplete; retaining {partial_dir} for resume. Failures: {details}")
+        raise RuntimeError(f"Benchmark incomplete ({len(failed_models)} failed evaluations). Re-run to resume from partial results.")
     if os.path.isdir(partial_dir):
         shutil.rmtree(partial_dir)
         logger.info("All model evaluation complete, deleted partial results")
     dfx = pd.DataFrame(outputs)
-    dfx.columns = ["tag", "model", "upsampling", "n_components", "fold", "accuracy", "test_set", "thr_features"]
+    dfx.columns = [
+        "tag",
+        "model",
+        "upsampling",
+        "n_components",
+        "fold",
+        "accuracy",
+        "test_set",
+        "thr_features",
+        "predicted_set",
+    ]
     # Handle case where path_to_data has no directory separator
     path_parts = path_to_data.split("/")[:-1]
     if path_parts:
@@ -638,7 +738,9 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                     final_model = LogisticRegression()
                 elif model_name == "rf":
                     # Use tuned RandomForest for final model with adaptive CV folds
-                    cv_final, n_splits_final, min_class_count_final, final_cv_strategy, final_cv_reason = get_adaptive_cv(y, max_splits=5)
+                    cv_final, n_splits_final, min_class_count_final, final_cv_strategy, final_cv_reason = get_adaptive_cv(
+                        y, max_splits=5, groups=group_ids
+                    )
                     n_iter_final = runtime_config["n_iter"]
                     logger.info(
                         f"Using {n_splits_final} CV folds and {n_iter_final} iterations for final model training with {X_final.shape[0]} samples "
@@ -692,7 +794,12 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                     # Train final model on all data
                     with warnings.catch_warnings():
                         warnings.simplefilter("ignore")
-                        final_model.fit(X_final, y)
+                        fit_kwargs = (
+                            {"groups": group_ids}
+                            if group_ids is not None and isinstance(final_model, RandomizedSearchCV | GridSearchCV)
+                            else {}
+                        )
+                        final_model.fit(X_final, y, **fit_kwargs)
 
                     # For RandomizedSearchCV models, log the best parameters and use best estimator
                     if hasattr(final_model, "best_params_"):
@@ -816,6 +923,25 @@ if __name__ == "__main__":
         action="store_true",
         help="Enable all machine learning algorithms (default: False, only RandomForest)",
     )
+    parser.add_argument(
+        "--replication_unit",
+        "--replication-unit",
+        choices=["well", "plate", "date"],
+        default=None,
+        help="Keep all samples from the selected replication unit in one CV fold",
+    )
+    parser.add_argument(
+        "--learner",
+        choices=["rf", "dummy", "decisiontree", "logistic", "xgb", "gridsearch"],
+        default="rf",
+        help="Single learner to benchmark when --all_learners is not used",
+    )
+    parser.add_argument(
+        "--correlation-threshold",
+        type=float,
+        default=0.8,
+        help="Absolute correlation threshold used to group redundant top features",
+    )
 
     try:
         arguments = parser.parse_args()
@@ -824,6 +950,8 @@ if __name__ == "__main__":
         exit(999)
 
     PARALLELISM = int(arguments.parallelism)
+    if not 0 < arguments.correlation_threshold <= 1:
+        parser.error("--correlation-threshold must be between 0 and 1")
     save_models = arguments.save_models
     all_learners = arguments.all_learners
 
@@ -847,13 +975,38 @@ if __name__ == "__main__":
 
         assert "date" not in xs.columns
 
-        do_classification_simple(xs, y, file, save_models=save_models, all_learners=all_learners)
+        do_classification_simple(
+            xs,
+            y,
+            file,
+            save_models=save_models,
+            all_learners=all_learners,
+            replication_unit=arguments.replication_unit,
+            learner=arguments.learner,
+        )
 
         xs_cols = [x for x in xs.columns.tolist() if "counts" not in x]
         xs_no_counts = xs[xs_cols]
 
-        do_classification_simple(xs_no_counts, y, file, "no_counts_features", save_models=save_models, all_learners=all_learners)
+        do_classification_simple(
+            xs_no_counts,
+            y,
+            file,
+            "no_counts_features",
+            save_models=save_models,
+            all_learners=all_learners,
+            replication_unit=arguments.replication_unit,
+            learner=arguments.learner,
+        )
         do_classification_rfe(xs, y, file)
+
+        output_dir = os.path.join(os.path.dirname(file), "visualizations")
+        write_confusion_matrices(os.path.join(os.path.dirname(file), "classification_all.tsv"), output_dir)
+        write_confusion_matrices(os.path.join(os.path.dirname(file), "classification_no_counts_features.tsv"), output_dir)
+        rankings_file = os.path.join(os.path.dirname(file), "rankings_label.tsv")
+        if os.path.isfile(rankings_file):
+            write_feature_correlation(file, rankings_file, output_dir, threshold=arguments.correlation_threshold)
+            write_feature_boxplots(file, rankings_file, output_dir)
 
 # Ref run
 # conda activate imagine; python feature_ranking_lite.py --files ../results_30_12_2023_2/data.tsv --fout ../benchmark

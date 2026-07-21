@@ -12,6 +12,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -22,8 +23,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+try:
+    from src.input_validation import validate_feature_table, validate_image_directory
+except ModuleNotFoundError:  # Running gui/app.py directly puts gui/, not the repository root, on sys.path.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from src.input_validation import validate_feature_table, validate_image_directory
+
 ROOT = Path(__file__).resolve().parents[1]
 GUI_DIR = Path(__file__).resolve().parent
+VERSION = "0.4.0"
 MAX_LOG_LINES = 500
 MAX_ARTIFACTS = 450
 UPLOAD_ROOT = ROOT / ".gui_uploads"
@@ -38,6 +46,7 @@ state = {
     "started_at": None,
     "finished_at": None,
     "error": None,
+    "validation": None,
     "config": None,
     "steps": [],
     "progress": {"completed": 0, "total": 0, "percent": 0, "label": "Ready"},
@@ -148,16 +157,34 @@ def default_config() -> dict[str, object]:
     test_images = ROOT / "test_images"
     return {
         "workflow": "full",
+        "feature_mode": "labelled",
         "training_images": str(test_images if test_images.is_dir() else ROOT),
         "results_dir": str(ROOT / "results"),
         "inference_images": str(test_images if test_images.is_dir() else ROOT),
         "inference_output": str(ROOT / "inference_results"),
         "workers": 4,
         "top_features": 10,
+        "correlation_threshold": 0.8,
         "all_learners": False,
+        "learner": "rf",
         "confirm_cleanup": False,
         "cpu_limit": None,
         "memory_limit": None,
+        "replication_unit": "date",
+        "feature_file": "",
+    }
+
+
+def demo_config() -> dict[str, str]:
+    """Return absolute paths for the built-in installation check."""
+    demo_images = ROOT / "examples" / "test_images"
+    if not demo_images.is_dir():
+        demo_images = ROOT / "test_images"
+    demo_results = ROOT / ".gui_demo_results"
+    return {
+        "images": str(demo_images),
+        "results": str(demo_results),
+        "inference_output": str(demo_results / "inference"),
     }
 
 
@@ -296,15 +323,19 @@ def estimate_model_work(config: dict) -> int:
 def progress_context(config: dict, steps: list[tuple[str, str, list[str]]]) -> dict:
     step_ids = [step[0] for step in steps]
     if config["workflow"] == "full":
-        weights = {"prepare": 0.08, "features": 0.42, "models": 0.35, "inference": 0.15}
+        weights = {"prepare": 0.07, "features": 0.39, "validate": 0.06, "models": 0.33, "inference": 0.15}
     elif config["workflow"] == "train":
-        weights = {"prepare": 0.08, "features": 0.52, "models": 0.40}
+        weights = {"prepare": 0.07, "features": 0.48, "validate": 0.06, "models": 0.39}
+    elif config["workflow"] in {"features_labelled", "features_unlabelled"}:
+        weights = {"prepare": 0.10, "features": 0.82, "validate": 0.08}
     else:
         weights = {"prepare": 0.12, "inference": 0.88}
     weights = {step_id: weights[step_id] for step_id in step_ids}
     weight_total = sum(weights.values()) or 1
     weights = {step_id: weight / weight_total for step_id, weight in weights.items()}
-    image_directory = config["inference_images"] if config["workflow"] == "inference" else config["training_images"]
+    image_directory = (
+        config["inference_images"] if config["workflow"] in {"inference", "features_unlabelled"} else config["training_images"]
+    )
     return {
         "weights": weights,
         "image_total": max(1, tif_count(image_directory)),
@@ -457,12 +488,12 @@ def validate_config(raw: dict) -> dict:
     config = default_config()
     config.update(raw)
     workflow = config.get("workflow")
-    if workflow not in {"full", "train", "inference"}:
+    if workflow not in {"full", "train", "inference", "features_labelled", "features_unlabelled"}:
         raise ValueError("Choose a supported workflow")
 
     results_dir = safe_path(config.get("results_dir"), "Results folder", workflow == "inference")
-    if workflow == "inference":
-        training_images = safe_path(config.get("inference_images"), "Inference images")
+    if workflow in {"inference", "features_unlabelled"}:
+        training_images = safe_path(config.get("inference_images"), "Inference images", True)
     else:
         training_images = safe_path(config.get("training_images"), "Training images", True)
     if workflow in {"full", "inference"}:
@@ -481,6 +512,12 @@ def validate_config(raw: dict) -> dict:
         raise ValueError("Workers must be between 1 and 64")
     if not 1 <= top_features <= 500:
         raise ValueError("Top features must be between 1 and 500")
+    try:
+        correlation_threshold = float(config.get("correlation_threshold", 0.8))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Correlation threshold must be a number") from exc
+    if not 0 < correlation_threshold <= 1:
+        raise ValueError("Correlation threshold must be between 0 and 1")
 
     cpu_limit = config.get("cpu_limit")
     if cpu_limit is None or cpu_limit == "":
@@ -500,29 +537,65 @@ def validate_config(raw: dict) -> dict:
     elif not isinstance(memory_limit, str) or not re.fullmatch(r"[1-9][0-9]*(?:m|g)", memory_limit.lower()):
         raise ValueError("Memory limit must use megabytes or gigabytes, for example 4096m")
 
-    if workflow in {"full", "train"} and results_dir.exists() and any(results_dir.iterdir()) and not config.get("confirm_cleanup"):
+    resume = workflow in {"full", "train"} and (results_dir / "partial").is_dir() and (results_dir / "datafile.tsv").is_file()
+    if (
+        workflow in {"full", "train", "features_labelled", "features_unlabelled"}
+        and results_dir.exists()
+        and any(results_dir.iterdir())
+        and not config.get("confirm_cleanup")
+        and not resume
+    ):
         raise ValueError("The results folder is not empty. Confirm cleanup before starting.")
+
+    replication_unit = config.get("replication_unit", "date")
+    if replication_unit not in {"well", "plate", "date"}:
+        raise ValueError("Replication unit must be well, plate, or date")
+    feature_file = config.get("feature_file") or ""
+    if feature_file:
+        feature_file = str(safe_path(feature_file, "Feature table", True))
+    learner = str(config.get("learner", "rf"))
+    if learner not in {"rf", "dummy", "decisiontree", "logistic", "xgb", "gridsearch"}:
+        raise ValueError("Choose a supported learner")
 
     results_dir.mkdir(parents=True, exist_ok=True)
     inference_output.mkdir(parents=True, exist_ok=True)
     return {
         "workflow": workflow,
+        "feature_mode": "unlabelled" if workflow == "features_unlabelled" else "labelled",
         "training_images": str(training_images),
         "results_dir": str(results_dir),
         "inference_images": str(inference_images),
         "inference_output": str(inference_output),
         "workers": workers,
         "top_features": top_features,
+        "correlation_threshold": correlation_threshold,
         "all_learners": bool(config.get("all_learners")),
+        "learner": learner,
         "confirm_cleanup": bool(config.get("confirm_cleanup")),
         "cpu_limit": cpu_limit,
         "memory_limit": memory_limit.lower() if memory_limit else None,
+        "replication_unit": replication_unit,
+        "feature_file": feature_file,
+        "resume": resume,
     }
+
+
+def preflight_config(config: dict) -> dict:
+    image_path = config["inference_images"] if config["workflow"] in {"inference", "features_unlabelled"} else config["training_images"]
+    labelled = config["workflow"] not in {"inference", "features_unlabelled"}
+    report = {"images": validate_image_directory(image_path, labelled=labelled)}
+    if config.get("feature_file"):
+        report["features"] = validate_feature_table(config["feature_file"], require_label=labelled)
+    report["ok"] = all(section.get("ok", False) for section in report.values())
+    return report
 
 
 def create_env(config: dict) -> str:
     values = {
-        "IMAGINE_IMAGES": config["training_images"] if config["workflow"] != "inference" else config["inference_images"],
+        "IMAGINE_IMAGES": config["training_images"]
+        if config["workflow"] not in {"inference", "features_unlabelled"}
+        else config["inference_images"],
+        "IMAGINE_REPLICATION_UNIT": config.get("replication_unit", "date"),
         "IMAGINE_RESULTS": config["results_dir"],
         "IMAGINE_INFERENCE_INPUTS": config["inference_images"],
         "IMAGINE_INFERENCE_OUTPUTS": config["inference_output"],
@@ -632,6 +705,12 @@ def refresh_artifacts(config: dict | None):
                 size = path.stat().st_size
             except OSError:
                 continue
+            parts = relative.parts
+            visible = len(parts) == 1 or parts[0] in {"visualizations", "validation"}
+            if parts and parts[0] == "explanations":
+                visible = len(parts) <= 2 and ("summary" in path.name or "shap" in path.name or "importance" in path.name)
+            if not visible:
+                continue
             artifacts.append(
                 {
                     "root": root_id,
@@ -668,16 +747,28 @@ refresh_artifacts(default_config())
 def run_pipeline(config: dict):
     env_file = create_env(config)
     try:
-        add_log("Pipeline started")
+        if config.get("feature_file") and config["workflow"] in {"full", "train", "inference"}:
+            destination = Path(config["results_dir"]) / "datafile.tsv"
+            shutil.copy2(config["feature_file"], destination)
+            add_log(f"Using validated feature table: {destination}")
+        add_log("Resuming benchmark from saved partial evaluations" if config.get("resume") else "Pipeline started")
         steps = [("prepare", "Prepare Docker image", ["docker", "compose", "--env-file", env_file, "build", "imagine"])]
-        if config["workflow"] in {"full", "train"}:
+        if config["workflow"] in {"full", "train", "features_labelled", "features_unlabelled"}:
             steps.extend(
                 [
                     (
                         "features",
                         "Generate features",
                         command_for(
-                            env_file, [str(config["workers"]), "datafile.tsv", str(config["top_features"]), "generate_features"], config
+                            env_file,
+                            [
+                                str(config["workers"]),
+                                "datafile.tsv",
+                                str(config["top_features"]),
+                                "generate_features",
+                                *(["--unlabelled"] if config["workflow"] == "features_unlabelled" else []),
+                            ],
+                            config,
                         ),
                     ),
                     (
@@ -690,6 +781,10 @@ def run_pipeline(config: dict):
                                 "datafile.tsv",
                                 str(config["top_features"]),
                                 "learning_benchmark_save_models",
+                                "--learner",
+                                config.get("learner", "rf"),
+                                "--correlation-threshold",
+                                str(config.get("correlation_threshold", 0.8)),
                                 *(["--all_learners"] if config["all_learners"] else []),
                             ],
                             config,
@@ -697,12 +792,40 @@ def run_pipeline(config: dict):
                     ),
                 ]
             )
+            if (config.get("feature_file") or config.get("resume")) and config["workflow"] in {"full", "train"}:
+                steps.pop(1)  # Use the supplied, already validated feature table.
+            elif config["workflow"] in {"features_labelled", "features_unlabelled"}:
+                steps = steps[:2]  # Feature generation is an independent GUI module.
+            if config["workflow"] in {"full", "train", "features_labelled", "features_unlabelled"}:
+                validation_command = [
+                    sys.executable,
+                    str(ROOT / "src" / "validate_inputs.py"),
+                    "--images",
+                    config["training_images"],
+                    "--features",
+                    str(Path(config["results_dir"]) / "datafile.tsv"),
+                    "--output",
+                    str(Path(config["results_dir"]) / "validation" / "feature_validation.json"),
+                ]
+                if config["workflow"] == "features_unlabelled":
+                    validation_command.append("--unlabelled")
+                validation_index = next((index for index, step in enumerate(steps) if step[0] == "models"), len(steps))
+                steps.insert(validation_index, ("validate", "Validate generated features", validation_command))
         if config["workflow"] in {"full", "inference"}:
             steps.append(
                 (
                     "inference",
                     "Classify new images",
-                    command_for(env_file, [str(config["workers"]), "-", str(config["top_features"]), "inference"], config),
+                    command_for(
+                        env_file,
+                        [
+                            str(config["workers"]),
+                            "/imagine/inference_datafile/datafile.tsv" if config.get("feature_file") else "-",
+                            str(config["top_features"]),
+                            "inference",
+                        ],
+                        config,
+                    ),
                 )
             )
 
@@ -712,10 +835,26 @@ def run_pipeline(config: dict):
             runtime["progress_context"] = progress_context(config, steps)
         for step_id, label, command in steps:
             if not execute_step(step_id, label, command):
+                report_path = Path(config["results_dir"]) / "validation" / "feature_validation.json"
+                try:
+                    report = json.loads(report_path.read_text(encoding="utf-8"))
+                    with state_lock:
+                        state["validation"] = {**(state.get("validation") or {}), **report}
+                except (OSError, json.JSONDecodeError):
+                    pass
+                refresh_artifacts(config)
                 with state_lock:
                     cancelled = runtime["stop_requested"]
                 add_log("Pipeline stopped" if cancelled else "Pipeline stopped after an error")
                 break
+            if step_id == "validate":
+                report_path = Path(config["results_dir"]) / "validation" / "feature_validation.json"
+                try:
+                    report = json.loads(report_path.read_text(encoding="utf-8"))
+                    with state_lock:
+                        state["validation"] = {**(state.get("validation") or {}), **report}
+                except (OSError, json.JSONDecodeError) as exc:
+                    add_log(f"Could not load feature validation report: {exc}")
             refresh_artifacts(config)
         else:
             add_log("Pipeline complete")
@@ -750,6 +889,16 @@ def start_pipeline(raw_config: dict) -> tuple[bool, str | None]:
             return False, "A pipeline is already running"
     try:
         config = validate_config(raw_config)
+        preflight = preflight_config(config)
+        if not preflight["ok"]:
+            errors = []
+            image_report = preflight.get("images", {})
+            if image_report.get("invalid_filenames"):
+                errors.append("Malformed image filenames: " + ", ".join(image_report["invalid_filenames"][:5]))
+            for section in preflight.values():
+                if isinstance(section, dict):
+                    errors.extend(section.get("errors", []))
+            return False, "Preflight validation failed. " + "; ".join(errors or [image_report.get("message", "Check the input data")])
     except ValueError as exc:
         return False, str(exc)
     with state_lock:
@@ -761,6 +910,7 @@ def start_pipeline(raw_config: dict) -> tuple[bool, str | None]:
                 "started_at": now(),
                 "finished_at": None,
                 "error": None,
+                "validation": preflight,
                 "config": config,
                 "steps": [],
                 "progress": {"completed": 0, "total": 0, "percent": 0, "label": "Preparing pipeline"},
@@ -800,6 +950,7 @@ def snapshot(refresh=False) -> dict:
                 "started_at",
                 "finished_at",
                 "error",
+                "validation",
                 "config",
                 "steps",
                 "progress",
@@ -837,7 +988,7 @@ class Handler(BaseHTTPRequestHandler):
             json_response(self, snapshot(parse_qs(parsed.query).get("refresh") == ["1"]))
             return
         if parsed.path == "/api/defaults":
-            json_response(self, {"config": default_config()})
+            json_response(self, {"version": VERSION, "config": default_config(), "demo": demo_config()})
             return
         if parsed.path == "/api/hardware-defaults":
             json_response(self, hardware_defaults())
@@ -884,10 +1035,35 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/logo.png":
             self.serve_file(ROOT / "logo.png")
             return
+        if parsed.path == "/logo_dark.png":
+            self.serve_file(ROOT / "logo_dark.png")
+            return
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_POST(self):  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path == "/api/open-folder":
+            try:
+                payload = read_json(self)
+                folder = safe_path(payload.get("path"), "Output folder")
+                folder.mkdir(parents=True, exist_ok=True)
+                if os.name == "nt":
+                    os.startfile(str(folder))  # type: ignore[attr-defined]
+                elif shutil.which("xdg-open"):
+                    subprocess.Popen(["xdg-open", str(folder)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    raise ValueError("No desktop folder opener is available")
+                json_response(self, {"path": str(folder)})
+            except (OSError, ValueError) as exc:
+                json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        if parsed.path == "/api/preflight":
+            try:
+                config = validate_config(read_json(self))
+                json_response(self, {"config": config, "report": preflight_config(config)})
+            except ValueError as exc:
+                json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
         if parsed.path == "/api/upload":
             try:
                 json_response(self, receive_upload(self), HTTPStatus.CREATED)

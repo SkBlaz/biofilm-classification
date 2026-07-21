@@ -22,3 +22,9 @@ Welcome to Image classification suite MicroICS, a Python-based software for effi
 2. [Approach overview](APPROACH.md)
 
 3. [Continuous Integration](.github/CI.md)
+
+## Citation
+
+Nika Janež et al., “MicroICS: predictive phenotyping of *Listeria monocytogenes* biofilms from three-dimensional structural features,” *npj Biofilms and Microbiomes* (2026). DOI: [10.1038/s41522-026-01083-8](https://doi.org/10.1038/s41522-026-01083-8).
+
+The repository also includes a machine-readable [CITATION.cff](CITATION.cff) file for GitHub’s “Cite this repository” feature.

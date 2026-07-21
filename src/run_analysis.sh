@@ -48,6 +48,9 @@ OUTPUT_RESULTS_FOLDER='/imagine/results'
 # Check for optional --all_learners flag in any position after the required parameters
 ALL_LEARNERS_FLAG=""
 UNLABELLED_FLAG=""
+REPLICATION_UNIT="${IMAGINE_REPLICATION_UNIT:-date}"
+LEARNER="${IMAGINE_LEARNER:-rf}"
+CORRELATION_THRESHOLD="${IMAGINE_CORRELATION_THRESHOLD:-0.8}"
 for arg in "$@"; do
     if [ "$arg" = "--all_learners" ]; then
         ALL_LEARNERS_FLAG="--all_learners"
@@ -57,7 +60,36 @@ for arg in "$@"; do
         UNLABELLED_FLAG="--unlabelled"
         echo "Unlabelled feature generation enabled"
     fi
+    if [ "$arg" = "--replication_unit" ] || [ "$arg" = "--replication-unit" ]; then
+        NEXT_IS_REPLICATION_UNIT=1
+        continue
+    fi
+    if [ "${NEXT_IS_REPLICATION_UNIT:-0}" = "1" ]; then
+        REPLICATION_UNIT="$arg"
+        NEXT_IS_REPLICATION_UNIT=0
+    fi
+    if [ "$arg" = "--learner" ]; then
+        NEXT_IS_LEARNER=1
+        continue
+    fi
+    if [ "${NEXT_IS_LEARNER:-0}" = "1" ]; then
+        LEARNER="$arg"
+        NEXT_IS_LEARNER=0
+    fi
+    if [ "$arg" = "--correlation-threshold" ]; then
+        NEXT_IS_CORRELATION_THRESHOLD=1
+        continue
+    fi
+    if [ "${NEXT_IS_CORRELATION_THRESHOLD:-0}" = "1" ]; then
+        CORRELATION_THRESHOLD="$arg"
+        NEXT_IS_CORRELATION_THRESHOLD=0
+    fi
 done
+
+case "$REPLICATION_UNIT" in
+    well|plate|date) ;;
+    *) echo "ERROR: replication unit must be well, plate, or date"; exit 1 ;;
+esac
 
 if [ "$LEARNING_TASK" = "generate_features" ] && [ -n "$UNLABELLED_FLAG" ]; then
 	if [ -z "$IMAGINE_INFERENCE_INPUTS" ] || [ -z "$IMAGINE_INFERENCE_DATAFILE" ]; then
@@ -180,9 +212,8 @@ run_step() {
 	}
 	echo "Running step: ${step_name}"
 
-	"$@" >"$log_file" 2>&1
-	local status=$?
-	cat "$log_file"
+	"$@" 2>&1 | tee "$log_file"
+	local status=${PIPESTATUS[0]}
 
 	if [ "$status" -ne 0 ]; then
 		echo ""
@@ -220,8 +251,9 @@ echo "Task: $LEARNING_TASK"
 
 if [ $LEARNING_TASK = "generate_features" ]; then
 	rm -rvf "${OUTPUT_RESULTS_FOLDER:?}/"*
-	mkdir -p "${OUTPUT_RESULTS_FOLDER}"/{feature_generator,raw,analysis,visualizations}
+	mkdir -p "${OUTPUT_RESULTS_FOLDER}"/{feature_generator,raw,analysis,visualizations,validation}
 
+	run_step "validate image names and labels" python validate_inputs.py --images "${INPUT_IMAGE_FOLDER}" ${UNLABELLED_FLAG} --output "${OUTPUT_RESULTS_FOLDER}/validation/image_validation.json"
 	run_step "validate input .tif files" validate_tif_inputs "${INPUT_IMAGE_FOLDER}"
 	run_step "feature generation for all input images" parallel --halt now,fail=1 --verbose -j"${INPUT_PARALLELISM}" \
 		python feature_generator.py --outfolder "${RESULTS_FOLDER_FEATURE_GENERATOR}" --file {} ::: "${INPUT_IMAGE_FOLDER}"/*.tif
@@ -244,9 +276,10 @@ if [ $LEARNING_TASK = "learning_benchmark" ]; then
 		cp "${INPUT_DATASETNAME}" "${RESULTS_CREATE_DF}"
 	fi
 	# Ensure visualizations directory exists
-	mkdir -p "${RESULTS_FOLDER_VISUALIZATIONS}"
+	mkdir -p "${RESULTS_FOLDER_VISUALIZATIONS}" "${OUTPUT_RESULTS_FOLDER}/validation"
+	run_step "validate training features" python validate_inputs.py --images "${INPUT_IMAGE_FOLDER}" --features "${RESULTS_CREATE_DF}" --output "${OUTPUT_RESULTS_FOLDER}/validation/feature_validation.json"
 	# calculating feature rankings + intermediary frames etc.
-	run_step "run learning benchmark" python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" ${ALL_LEARNERS_FLAG}
+	run_step "run learning benchmark" python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" --replication_unit "${REPLICATION_UNIT}" --learner "${LEARNER}" --correlation-threshold "${CORRELATION_THRESHOLD}" ${ALL_LEARNERS_FLAG}
 	run_step "visualize benchmark results" python visualize_benchmark.py
 fi
 
@@ -258,9 +291,10 @@ if [ $LEARNING_TASK = "learning_benchmark_save_models" ]; then
 		cp "${INPUT_DATASETNAME}" "${RESULTS_CREATE_DF}"
 	fi
 	# Ensure visualizations directory exists
-	mkdir -p "${RESULTS_FOLDER_VISUALIZATIONS}"
+	mkdir -p "${RESULTS_FOLDER_VISUALIZATIONS}" "${OUTPUT_RESULTS_FOLDER}/validation"
+	run_step "validate training features" python validate_inputs.py --images "${INPUT_IMAGE_FOLDER}" --features "${RESULTS_CREATE_DF}" --output "${OUTPUT_RESULTS_FOLDER}/validation/feature_validation.json"
 	# calculating feature rankings + intermediary frames etc. + save models for inference
-	run_step "run learning benchmark and save models" python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" --save_models ${ALL_LEARNERS_FLAG}
+	run_step "run learning benchmark and save models" python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" --save_models --replication_unit "${REPLICATION_UNIT}" --learner "${LEARNER}" --correlation-threshold "${CORRELATION_THRESHOLD}" ${ALL_LEARNERS_FLAG}
 	run_step "visualize benchmark results" python visualize_benchmark.py
 fi
 

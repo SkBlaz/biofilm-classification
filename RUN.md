@@ -33,8 +33,11 @@ does not add another Python dependency. From the repository root, run:
 bash run_gui.sh
 ```
 
-Windows users can double-click `run_gui.bat`. To create a desktop shortcut with the MicroICS icon, double-click
-`install_microics_gui.bat` once; it creates **MicroICS GUI** on the desktop. Both launchers require Python 3 and Docker Desktop.
+Run it as your normal user, not with `sudo`. On Linux, if Docker reports a socket permission error, run
+`sudo usermod -aG docker "$USER"`, sign out and in, and then retry the command.
+
+Windows users can double-click `MicroICS GUI.bat` (or `run_gui.bat`). To create a desktop shortcut with the MicroICS icon, double-click
+`install_microics_gui.bat` once; it creates **MicroICS GUI** on the desktop. The launchers require Python 3 and Docker Desktop to be running.
 
 The GUI opens at `http://127.0.0.1:8765`. Choose **Train + classify** to run the same three-stage workflow as
 `run_all_e2e.sh`: generate features, train and save models, then classify new images. **Train models** runs the first two

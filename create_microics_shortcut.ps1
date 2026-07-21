@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$target = Join-Path $root 'run_gui.bat'
+$target = Join-Path $root 'MicroICS GUI.bat'
 $icon = Join-Path $root 'MicroICS.ico'
 $desktop = [Environment]::GetFolderPath('Desktop')
 $shortcutPath = Join-Path $desktop 'MicroICS GUI.lnk'

@@ -20,6 +20,9 @@ RUN pip install \
 # processing, ranking and util
 COPY src/create_final_df_from_results.py \
 	 src/feature_generator.py \
+	 src/benchmark_outputs.py \
+	 src/input_validation.py \
+	 src/validate_inputs.py \
 	 src/create_joint_df.py \
 	 src/analysis.py \
 	 src/run_analysis.sh \

@@ -37,6 +37,13 @@ const cleanupFolderSummary = document.querySelector('#cleanupFolderSummary');
 const closeCleanupModalButton = document.querySelector('#closeCleanupModal');
 const cancelCleanupButton = document.querySelector('#cancelCleanupButton');
 const confirmCleanupButton = document.querySelector('#confirmCleanupButton');
+const validationPanel = document.querySelector('#validationPanel');
+const validationMessage = document.querySelector('#validationMessage');
+const validationDetails = document.querySelector('#validationDetails');
+const versionLabel = document.querySelector('#versionLabel');
+const demoButton = document.querySelector('#demoButton');
+const openOutputButton = document.querySelector('#openOutputButton');
+const statusWarning = document.querySelector('#statusWarning');
 let latestState = null;
 let pollTimer = null;
 let syncedConfigKey = null;
@@ -48,6 +55,7 @@ let helpReturnFocus = null;
 let cleanupReturnFocus = null;
 let runStartedAt = null;
 let previousRunStatus = null;
+let demoPaths = null;
 
 const stepIcons = { prepare: '◆', features: '1', models: '2', inference: '3' };
 
@@ -71,11 +79,11 @@ function updateDocumentTitle(status, progress) {
 
 function setWorkflow(workflow) {
   document.querySelectorAll('.workflow-option').forEach((option) => option.classList.toggle('active', option.dataset.workflow === workflow));
-  const training = workflow !== 'inference';
-  document.querySelector('#trainingImagesField').classList.toggle('hidden', !training);
-  document.querySelector('#inferenceFields').classList.toggle('hidden', workflow === 'train');
-  document.querySelector('#resultsDir').closest('.field-group').querySelector('small').textContent = training ? 'Training starts by clearing this folder.' : 'Models are read from this folder/models.';
-  cleanupConfirm.classList.toggle('hidden', !training);
+  const labelledWorkflow = !['inference', 'features_unlabelled'].includes(workflow);
+  document.querySelector('#trainingImagesField').classList.toggle('hidden', !labelledWorkflow);
+  document.querySelector('#inferenceFields').classList.toggle('hidden', !['full', 'inference', 'features_unlabelled'].includes(workflow));
+  document.querySelector('#resultsDir').closest('.field-group').querySelector('small').textContent = workflow !== 'inference' ? 'This workflow may replace existing results after confirmation.' : 'Models are read from this folder/models.';
+  cleanupConfirm.classList.toggle('hidden', workflow === 'inference');
 }
 
 function syncForm(config) {
@@ -89,7 +97,11 @@ function syncForm(config) {
   document.querySelector('#inferenceOutput').value = config.inference_output || '';
   document.querySelector('#workers').value = config.workers ?? 4;
   document.querySelector('#topFeatures').value = config.top_features ?? 10;
+  document.querySelector('#correlationThreshold').value = config.correlation_threshold ?? 0.8;
+  document.querySelector('#replicationUnit').value = config.replication_unit || 'date';
+  document.querySelector('#featureFile').value = config.feature_file || '';
   document.querySelector('#allLearners').checked = Boolean(config.all_learners);
+  document.querySelector('#learner').value = config.learner || 'rf';
   hardwareDefaults = config.cpu_limit && config.memory_limit ? { cpu_limit: config.cpu_limit, memory_limit: config.memory_limit } : null;
 }
 
@@ -100,12 +112,16 @@ async function loadDefaults() {
     const response = await fetch('/api/defaults');
     const payload = await response.json();
     const config = payload.config;
+    demoPaths = payload.demo || null;
+    versionLabel.textContent = `v${payload.version || '—'}`;
     document.querySelector('#trainingImages').value = config.training_images;
     document.querySelector('#resultsDir').value = config.results_dir;
     document.querySelector('#inferenceImages').value = config.inference_images;
     document.querySelector('#inferenceOutput').value = config.inference_output;
     document.querySelector('#workers').value = config.workers;
     document.querySelector('#topFeatures').value = config.top_features;
+    document.querySelector('#correlationThreshold').value = config.correlation_threshold || 0.8;
+    document.querySelector('#learner').value = config.learner || 'rf';
   } catch (error) {
     formMessage.textContent = 'Could not connect to the local GUI server.';
   }
@@ -250,11 +266,35 @@ function configFromForm() {
     inference_output: value('inferenceOutput'),
     workers: Number(value('workers')),
     top_features: Number(value('topFeatures')),
+    correlation_threshold: Number(value('correlationThreshold')),
+    replication_unit: document.querySelector('#replicationUnit').value,
+    feature_file: value('featureFile'),
     all_learners: document.querySelector('#allLearners').checked,
+    learner: document.querySelector('#learner').value,
     confirm_cleanup: document.querySelector('input[name="confirm_cleanup"]').checked,
     cpu_limit: hardwareDefaults?.cpu_limit ?? null,
     memory_limit: hardwareDefaults?.memory_limit ?? null,
   };
+}
+
+function renderValidation(report) {
+  if (!report) return;
+  const images = report.images || {};
+  const features = report.features || {};
+  validationPanel.classList.toggle('is-invalid', report.ok === false);
+  validationPanel.classList.toggle('is-valid', report.ok === true);
+  validationMessage.textContent = images.message || (report.ok ? 'Preflight passed.' : 'Preflight needs attention.');
+  const labelCounts = Object.entries(images.images_per_label || {}).map(([label, count]) => `${escapeHtml(label)}: ${count}`).join(' · ') || 'none';
+  const dateRows = Object.entries(images.images_per_label_per_date || {}).map(([date, counts]) => `<tr><th>${escapeHtml(date)}</th><td>${Object.entries(counts).map(([label, count]) => `${escapeHtml(label)}: ${count}`).join(' · ')}</td></tr>`).join('');
+  const featureSummary = features.features_read === undefined ? '' : `<p><strong>Features:</strong> ${features.features_read} read (${features.microics_features} MicroICS, ${features.external_features} external); ${features.nan_cells || 0} NaN/empty cells.</p><p><strong>Unparsed:</strong> ${features.unparsed_feature_names?.length ? escapeHtml(features.unparsed_feature_names.join(', ')) : 'none'}</p>`;
+  validationDetails.innerHTML = `<p><strong>Images:</strong> ${images.valid_images || 0}/${images.total_images || 0} filenames valid. <strong>Labels:</strong> ${labelCounts}</p>${dateRows ? `<table class="validation-table"><thead><tr><th>Date</th><th>Images per label</th></tr></thead><tbody>${dateRows}</tbody></table>` : ''}${featureSummary}`;
+}
+
+async function preflight(config) {
+  const payload = await post('/api/preflight', config);
+  renderValidation(payload.report);
+  if (!payload.report.ok) throw new Error('Preflight validation failed. Review the report before running.');
+  return payload;
 }
 
 document.querySelector('#trainingFilePicker').addEventListener('change', (event) => uploadSelectedFiles(event.target, document.querySelector('#trainingImages'), document.querySelector('#trainingFileStatus')));
@@ -286,6 +326,7 @@ async function post(path, body = {}) {
 }
 
 async function startConfiguredPipeline(config) {
+  await preflight(config);
   await post('/api/run', config);
   await poll();
 }
@@ -434,6 +475,9 @@ function renderState(nextState) {
   renderSteps(nextState.steps);
   renderProgress(nextState.progress, nextState.steps, nextState.status);
   renderResources(nextState.resources);
+  renderValidation(nextState.validation);
+  statusWarning.classList.toggle('hidden', !['failed', 'cancelled'].includes(nextState.status));
+  statusWarning.title = nextState.error || 'The run did not complete. Open the run log for details.';
   renderFiles(nextState.artifacts);
   logOutput.textContent = (nextState.logs || []).join('\n') || 'No run started.';
   logOutput.scrollTop = logOutput.scrollHeight;
@@ -468,7 +512,7 @@ form.addEventListener('submit', async (event) => {
   try {
     if (pendingUploads) throw new Error('Please wait for selected files to finish uploading.');
     const config = configFromForm();
-    const needsCleanupCheck = ['full', 'train'].includes(config.workflow) && config.results_dir && !config.confirm_cleanup;
+    const needsCleanupCheck = ['full', 'train', 'features_labelled', 'features_unlabelled'].includes(config.workflow) && config.results_dir && !config.confirm_cleanup;
     if (needsCleanupCheck) {
       const status = await inspectResultsFolder(config.results_dir);
       if (status.item_count > 0) {
@@ -477,6 +521,29 @@ form.addEventListener('submit', async (event) => {
       }
     }
     await startConfiguredPipeline(config);
+  } catch (error) {
+    formMessage.textContent = error.message;
+  }
+});
+
+demoButton.addEventListener('click', () => {
+  const images = demoPaths?.images || document.querySelector('#trainingImages').value;
+  const results = demoPaths?.results || document.querySelector('#resultsDir').value;
+  const inferenceOutput = demoPaths?.inference_output || `${results}/inference`;
+  document.querySelector('#trainingImages').value = images;
+  document.querySelector('#inferenceImages').value = images;
+  document.querySelector('#resultsDir').value = results;
+  document.querySelector('#inferenceOutput').value = inferenceOutput;
+  document.querySelector('input[name="workflow"][value="train"]').checked = true;
+  setWorkflow('train');
+  document.querySelector('input[name="confirm_cleanup"]').checked = true;
+  formMessage.textContent = 'Sample configuration loaded. Press Run pipeline to verify the installation.';
+});
+
+openOutputButton.addEventListener('click', async () => {
+  try {
+    const folder = document.querySelector('input[name="workflow"]:checked').value === 'inference' ? value('inferenceOutput') : value('resultsDir');
+    await post('/api/open-folder', { path: folder });
   } catch (error) {
     formMessage.textContent = error.message;
   }

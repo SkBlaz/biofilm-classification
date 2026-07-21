@@ -257,3 +257,17 @@ h1 { margin-bottom:10px; font-size:31px; letter-spacing:-.035em; }
 .danger-button { background:linear-gradient(135deg,#c65f47,#a94331)!important; box-shadow:0 8px 18px rgba(169,67,49,.2)!important; }
 .danger-button:hover { background:linear-gradient(135deg,#b4523d,#923a2b)!important; }
 @media (max-width:620px) { .cleanup-modal-dialog { padding:20px; } .cleanup-modal-actions { display:grid; grid-template-columns:1fr; } .cleanup-modal-actions .button { width:100%; } }
+.validation-panel {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--line, #d9e1ec);
+  border-radius: 12px;
+  background: var(--panel, #f7f9fc);
+}
+
+.validation-panel.is-invalid { border-color: #c85b5b; background: #fff6f6; }
+.validation-panel.is-valid { border-color: #5ca47a; background: #f4fbf6; }
+.status-warning { display: inline-grid; place-items: center; width: 1.25rem; height: 1.25rem; margin-left: .35rem; border-radius: 50%; color: #fff; background: #c85b5b; font-size: .8rem; }
+.status-warning.hidden { display: none; }
+.validation-table { width: 100%; border-collapse: collapse; font-size: .84rem; }
+.validation-table th, .validation-table td { padding: .35rem .5rem; border-top: 1px solid var(--line, #d9e1ec); text-align: left; }

@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+title: "MicroICS: predictive phenotyping of Listeria monocytogenes biofilms from three-dimensional structural features"
+message: "If you use MicroICS, please cite the associated paper."
+type: software
+authors:
+  - family-names: Janež
+    given-names: Nika
+  - family-names: Škrlj
+    given-names: Blaž
+  - family-names: Osojnik
+    given-names: Aljaž
+  - family-names: Ladányi
+    given-names: Márta
+  - family-names: Breskvar
+    given-names: Martin
+  - family-names: Petković
+    given-names: Matej
+  - family-names: Kokot
+    given-names: Boštjan
+  - family-names: Čotar
+    given-names: Petra
+  - family-names: Papić
+    given-names: Bojan
+  - family-names: Golob
+    given-names: Majda
+  - family-names: Peternel
+    given-names: Tjaša
+  - family-names: Sabotič
+    given-names: Jerica
+doi: 10.1038/s41522-026-01083-8
+url: https://github.com/SkBlaz/biofilm-classification
+repository-code: https://github.com/SkBlaz/biofilm-classification
