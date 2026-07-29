@@ -14,6 +14,7 @@ import pandas as pd
 # Add src directory to path
 sys.path.insert(0, "src")
 
+from create_final_df_from_results import drop_nonfinite_feature_columns
 from create_joint_df import extract_data
 from feature_ranking_lite import load_data, validate_target_labels
 
@@ -107,6 +108,23 @@ class TestExtractData(unittest.TestCase):
 
 class TestDataProcessingUtilities(unittest.TestCase):
     """Test additional data processing utilities."""
+
+    def test_generated_table_drops_nonfinite_feature_columns(self):
+        frame = pd.DataFrame(
+            {
+                "valid": [1.0, 2.0],
+                "all_nan_std": [float("nan"), float("nan")],
+                "one_infinite": [3.0, float("inf")],
+                "Unnamed: 0-index": [0, 1],
+                "label": ["A", "B"],
+            },
+            index=["sample1", "sample2"],
+        )
+
+        cleaned, removed = drop_nonfinite_feature_columns(frame)
+
+        self.assertEqual(removed, ["all_nan_std", "one_infinite", "Unnamed: 0-index"])
+        self.assertEqual(cleaned.columns.tolist(), ["valid", "label"])
 
     def test_validate_target_labels_rejects_missing_labels(self):
         df = pd.DataFrame({"feature": [1, 2], "label": ["L1323", None]}, index=["sample1", "sample2"])

@@ -39,14 +39,26 @@ Run it as your normal user, not with `sudo`. On Linux, if Docker reports a socke
 Windows users can double-click `MicroICS GUI.bat` (or `run_gui.bat`). To create a desktop shortcut with the MicroICS icon, double-click
 `install_microics_gui.bat` once; it creates **MicroICS GUI** on the desktop. The launchers require Python 3 and Docker Desktop to be running.
 
-The GUI opens at `http://127.0.0.1:8765`. Choose **Train + classify** to run the same three-stage workflow as
-`run_all_e2e.sh`: generate features, train and save models, then classify new images. **Train models** runs the first two
-stages, while **Classify images** uses models already present in the selected results folder.
+The GUI opens at `http://127.0.0.1:8765`. Its options follow the normal analysis order:
 
-The first stage of a training workflow clears the selected results folder, so the GUI asks for confirmation when it is not
-empty. The live pipeline shows the active Docker step with a green glow. Generated TSV files, plots, images, and HTML
+1. **Generate features** creates either a labelled `datafile.tsv` for training or an unlabelled
+   `unknown_features.tsv` for inference.
+2. **Train models** reads a complete table selected in **Complete feature table**, or
+   `datafile.tsv` already in the results folder. It can run one learner or all learners.
+3. **Inference** uses models already present in the selected results folder.
+4. **All together** generates labelled features, trains and saves models, and classifies new images.
+
+An imported complete feature table is used as-is. MicroICS does not run extraction and join a separate external-only
+file by image name. The table must contain `sampleName`, a `label` column for training, and every MicroICS and external
+feature column to use. To add external features, append them to a generated MicroICS datafile yourself, matching rows
+by `sampleName`, and select that merged file.
+
+Feature generation clears the selected results folder, so the GUI asks for confirmation when it is not empty.
+Model training reuses the complete table and does not clear the folder. The live pipeline shows the active Docker step
+with a green glow. Generated TSV files, plots, images, and HTML
 visualizations can be selected in the output browser while or after a run. Use the **Stop** button to terminate a running
-Docker step. Pass `--no-browser` to start the server without opening a browser automatically.
+Docker step. Pass `--no-browser` to start the server without opening a browser automatically. On Windows, the launcher
+keeps its terminal open when the GUI stops and the latest pipeline output remains available in `microics-gui.log`.
 
 ## Generating and running the containers
 In order to use the containers, one must first build them locally. 

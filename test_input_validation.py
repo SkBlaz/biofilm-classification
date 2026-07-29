@@ -77,6 +77,34 @@ class TestInputValidation(unittest.TestCase):
         self.assertEqual(replication_group(sample, "date"), "04072023")
         self.assertEqual(replication_group(sample, "plate"), "L1323")
         self.assertEqual(replication_group(sample, "well"), "C06")
+        self.assertEqual(replication_group(sample, "position"), "004")
+
+    def test_feature_report_requires_sample_name(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "features.tsv"
+            pd.DataFrame({"label": ["A"], "external_score": [1.0]}).to_csv(path, sep="\t", index=False)
+
+            report = validate_feature_table(path)
+
+            self.assertFalse(report["ok"])
+            self.assertIn("Required sampleName column is missing", report["errors"])
+
+    def test_complete_feature_table_rejects_duplicate_samples_and_missing_labels(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "features.tsv"
+            pd.DataFrame(
+                {
+                    "sampleName": ["same", "same"],
+                    "label": ["A", "missing"],
+                    "external_score": [1.0, 2.0],
+                }
+            ).to_csv(path, sep="\t", index=False)
+
+            report = validate_feature_table(path)
+
+            self.assertFalse(report["ok"])
+            self.assertIn("2 rows have duplicate sampleName values", report["errors"])
+            self.assertIn("1 missing/unknown label values found", report["errors"])
 
 
 if __name__ == "__main__":

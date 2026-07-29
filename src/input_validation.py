@@ -168,8 +168,25 @@ def validate_feature_table(path: str | Path, require_label: bool = True) -> dict
     errors = []
     if not feature_columns:
         errors.append("No feature columns were found")
+    if "sampleName" not in frame.columns:
+        errors.append("Required sampleName column is missing")
+    else:
+        sample_names = frame["sampleName"]
+        missing_sample_names = sample_names.isna() | sample_names.astype(str).str.strip().eq("")
+        if missing_sample_names.any():
+            errors.append(f"{int(missing_sample_names.sum())} missing sampleName values found")
+        duplicate_sample_names = sample_names.duplicated(keep=False)
+        if duplicate_sample_names.any():
+            errors.append(f"{int(duplicate_sample_names.sum())} rows have duplicate sampleName values")
     if require_label and "label" not in frame.columns:
         errors.append("Required label column is missing")
+    elif require_label:
+        labels = frame["label"]
+        missing_labels = labels.isna() | labels.astype(str).str.strip().str.lower().isin(
+            {"", "unknown", "missing", "unlabelled", "unlabeled"}
+        )
+        if missing_labels.any():
+            errors.append(f"{int(missing_labels.sum())} missing/unknown label values found")
     if empty_cells:
         errors.append(f"{empty_cells} empty/NaN feature cells found")
     if infinite_cells:
@@ -198,8 +215,8 @@ def validate_feature_table(path: str | Path, require_label: bool = True) -> dict
 
 def replication_group(sample_name: str, unit: str) -> str:
     """Return the user-selected replication unit from a sample name."""
-    if unit not in {"well", "plate", "date"}:
-        raise ValueError("Replication unit must be well, plate, or date")
+    if unit not in {"position", "well", "plate", "date"}:
+        raise ValueError("Replication unit must be position, well, plate, or date")
     fields = sample_fields(sample_name)
     if not fields:
         raise ValueError(f"Could not parse replication fields from sample name: {sample_name}")

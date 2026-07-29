@@ -15,6 +15,14 @@ h1,h2,p { margin-top:0; } h1 { margin-bottom:8px; font-size:27px; line-height:1.
 .workflow-option+.workflow-option { border-top:0; } .workflow-option:first-of-type { border-radius:7px 7px 0 0; } .workflow-option:last-of-type { border-radius:0 0 7px 7px; }
 .workflow-option.active { border-color:var(--green); background:var(--green-pale); box-shadow:inset 3px 0 var(--green); } .workflow-option input { accent-color:var(--green); margin:0; }
 .workflow-copy { display:grid; gap:1px; } .workflow-copy b { font-size:13px; } .workflow-copy small,.field-group small,.check-row small { color:var(--muted); font-size:11px; }
+.workflow-stage { display:flex; gap:10px; padding:11px 12px; border:1px solid #d9e5de; border-radius:11px; background:#fff; }
+.workflow-stage-content { min-width:0; flex:1; display:grid; gap:3px; }
+.workflow-stage-content > strong { font-size:12px; }
+.workflow-stage-content > small { color:var(--muted); font-size:10px; }
+.workflow-feature-choices { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:7px; }
+.workflow-feature-choices .workflow-option { min-height:48px; margin:0; padding:8px 9px; }
+.stage-number { flex:0 0 24px; display:grid; place-items:center; width:24px; height:24px; border-radius:50%; background:#e5f4ec; color:var(--green); font-size:11px; font-weight:850; }
+.workflow-stage-option { display:grid; grid-template-columns:24px 16px minmax(0,1fr); }
 .field-group { display:grid; gap:5px; margin-top:17px; } .field-group label { font-size:11px; font-weight:750; }
 .field-group input { width:100%; min-height:38px; padding:9px 10px; border:1px solid #cfd8d3; border-radius:5px; outline:0; background:#fff; color:var(--ink); }
 .path-picker { display:flex; min-width:0; }
@@ -271,3 +279,9 @@ h1 { margin-bottom:10px; font-size:31px; letter-spacing:-.035em; }
 .status-warning.hidden { display: none; }
 .validation-table { width: 100%; border-collapse: collapse; font-size: .84rem; }
 .validation-table th, .validation-table td { padding: .35rem .5rem; border-top: 1px solid var(--line, #d9e1ec); text-align: left; }
+.validation-section { margin-top:.75rem; }
+.validation-section > strong { display:block; margin-bottom:.35rem; font-size:.82rem; }
+.validation-secondary { margin-top:.75rem; }
+.validation-secondary summary { cursor:pointer; color:var(--green); font-size:.82rem; font-weight:700; }
+.learner-picker select:disabled { opacity:.55; }
+@media (max-width:620px) { .workflow-feature-choices { grid-template-columns:1fr; } }

@@ -60,6 +60,7 @@ Keep newest entry at the top.
 
 | Date (UTC) | Bot/Agent | PR/Commit | AGENTS.md update summary |
 |---|---|---|---|
+| 2026-07-29 | Codex | current change | Sequential GUI workflow, complete external-table contract, imaging-position replication, Windows diagnostics, and generated-feature validation documented. |
 | 2026-07-21 | Codex | current change | Unix GUI launcher now diagnoses sudo misuse and Docker socket access. |
 | 2026-07-21 | Codex | current change | GUI preflight validation, grouped replication-aware benchmarking, resumable learner runs, organized reports, demo workflow, citation metadata, and UTF-8 Windows launcher documented. |
 | 2026-07-10 | Codex | current change | Windows GUI launcher and icon shortcut workflow documented. |

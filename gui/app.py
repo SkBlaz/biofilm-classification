@@ -31,15 +31,14 @@ except ModuleNotFoundError:  # Running gui/app.py directly puts gui/, not the re
 
 ROOT = Path(__file__).resolve().parents[1]
 GUI_DIR = Path(__file__).resolve().parent
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 MAX_LOG_LINES = 500
 MAX_ARTIFACTS = 450
 UPLOAD_ROOT = ROOT / ".gui_uploads"
+GUI_LOG = ROOT / "microics-gui.log"
 
 state_lock = threading.RLock()
-resource_lock = threading.Lock()
 runtime = {"process": None, "stop_requested": False, "progress_context": None}
-resource_sample = {"total": None, "idle": None}
 state = {
     "status": "idle",
     "current_step": None,
@@ -50,7 +49,6 @@ state = {
     "config": None,
     "steps": [],
     "progress": {"completed": 0, "total": 0, "percent": 0, "label": "Ready"},
-    "resources": {},
     "logs": [],
     "artifacts": [],
     "artifact_roots": {},
@@ -59,36 +57,6 @@ state = {
 
 def now() -> str:
     return time.strftime("%H:%M:%S")
-
-
-def read_cpu_percent() -> float | None:
-    """Return host CPU usage from Linux's cumulative CPU counters."""
-    try:
-        with open("/proc/stat", encoding="utf-8") as proc_stat:
-            fields = proc_stat.readline().split()[1:]
-        counters = [int(value) for value in fields]
-    except (FileNotFoundError, OSError, ValueError):
-        try:
-            load = os.getloadavg()[0]
-            return round(min(100.0, load / (os.cpu_count() or 1) * 100), 1)
-        except (AttributeError, OSError):
-            return None
-
-    if len(counters) < 4:
-        return None
-    total = sum(counters)
-    idle = counters[3] + (counters[4] if len(counters) > 4 else 0)
-    with resource_lock:
-        previous_total = resource_sample["total"]
-        previous_idle = resource_sample["idle"]
-        resource_sample.update(total=total, idle=idle)
-    if previous_total is None or previous_idle is None:
-        return 0.0
-    total_delta = total - previous_total
-    idle_delta = idle - previous_idle
-    if total_delta <= 0:
-        return 0.0
-    return round(max(0.0, min(100.0, (1 - idle_delta / total_delta) * 100)), 1)
 
 
 def read_memory() -> tuple[int, int] | None:
@@ -104,33 +72,6 @@ def read_memory() -> tuple[int, int] | None:
     except (FileNotFoundError, OSError, ValueError, KeyError):
         return None
     return total - available, total
-
-
-def resource_snapshot() -> dict[str, object]:
-    """Collect lightweight host metrics for the live dashboard."""
-    resources: dict[str, object] = {"updated_at": now()}
-    cpu_percent = read_cpu_percent()
-    if cpu_percent is not None:
-        resources["cpu_percent"] = cpu_percent
-    memory = read_memory()
-    if memory:
-        used, total = memory
-        resources.update(
-            memory_percent=round(used / total * 100, 1) if total else 0,
-            memory_used=used,
-            memory_total=total,
-        )
-    try:
-        disk = shutil.disk_usage(ROOT)
-    except OSError:
-        disk = None
-    if disk:
-        resources.update(
-            disk_percent=round(disk.used / disk.total * 100, 1) if disk.total else 0,
-            disk_used=disk.used,
-            disk_total=disk.total,
-        )
-    return resources
 
 
 def hardware_defaults() -> dict[str, object]:
@@ -156,7 +97,7 @@ def hardware_defaults() -> dict[str, object]:
 def default_config() -> dict[str, object]:
     test_images = ROOT / "test_images"
     return {
-        "workflow": "full",
+        "workflow": "features_labelled",
         "feature_mode": "labelled",
         "training_images": str(test_images if test_images.is_dir() else ROOT),
         "results_dir": str(ROOT / "results"),
@@ -291,9 +232,15 @@ def folder_status(value: str | None) -> dict[str, object]:
 
 
 def add_log(message: str):
+    entry = f"[{now()}] {message}"
     with state_lock:
-        state["logs"].append(f"[{now()}] {message}")
+        state["logs"].append(entry)
         state["logs"] = state["logs"][-MAX_LOG_LINES:]
+    try:
+        with GUI_LOG.open("a", encoding="utf-8") as log_file:
+            log_file.write(entry + "\n")
+    except OSError:
+        pass
 
 
 def tif_count(directory: str) -> int:
@@ -482,6 +429,20 @@ def safe_path(value: object, label: str, must_exist: bool = False) -> Path:
     return path
 
 
+def safe_file(value: object, label: str) -> Path:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} is required")
+    path = Path(value).expanduser().resolve()
+    if not path.is_file():
+        raise ValueError(f"{label} must be an existing file")
+    return path
+
+
+def generated_feature_path(config: dict) -> Path:
+    filename = "unknown_features.tsv" if config["workflow"] == "features_unlabelled" else "datafile.tsv"
+    return Path(config["results_dir"]) / filename
+
+
 def validate_config(raw: dict) -> dict:
     if not isinstance(raw, dict):
         raise ValueError("Request body must be an object")
@@ -539,20 +500,23 @@ def validate_config(raw: dict) -> dict:
 
     resume = workflow in {"full", "train"} and (results_dir / "partial").is_dir() and (results_dir / "datafile.tsv").is_file()
     if (
-        workflow in {"full", "train", "features_labelled", "features_unlabelled"}
+        workflow in {"full", "features_labelled", "features_unlabelled"}
         and results_dir.exists()
         and any(results_dir.iterdir())
         and not config.get("confirm_cleanup")
         and not resume
+        and not (workflow == "full" and config.get("feature_file"))
     ):
         raise ValueError("The results folder is not empty. Confirm cleanup before starting.")
 
     replication_unit = config.get("replication_unit", "date")
-    if replication_unit not in {"well", "plate", "date"}:
-        raise ValueError("Replication unit must be well, plate, or date")
+    if replication_unit not in {"position", "well", "plate", "date"}:
+        raise ValueError("Replication unit must be position, well, plate, or date")
     feature_file = config.get("feature_file") or ""
     if feature_file:
-        feature_file = str(safe_path(feature_file, "Feature table", True))
+        feature_file = str(safe_file(feature_file, "Feature table"))
+    if workflow == "train" and not feature_file and not (results_dir / "datafile.tsv").is_file():
+        raise ValueError("Train models requires a complete feature table. Select one or generate results/datafile.tsv first.")
     learner = str(config.get("learner", "rf"))
     if learner not in {"rf", "dummy", "decisiontree", "logistic", "xgb", "gridsearch"}:
         raise ValueError("Choose a supported learner")
@@ -586,6 +550,11 @@ def preflight_config(config: dict) -> dict:
     report = {"images": validate_image_directory(image_path, labelled=labelled)}
     if config.get("feature_file"):
         report["features"] = validate_feature_table(config["feature_file"], require_label=labelled)
+    elif config["workflow"] == "train":
+        report["features"] = validate_feature_table(
+            Path(config["results_dir"]) / "datafile.tsv",
+            require_label=True,
+        )
     report["ok"] = all(section.get("ok", False) for section in report.values())
     return report
 
@@ -643,6 +612,8 @@ def execute_step(step_id: str, label: str, command: list[str]) -> bool:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
             start_new_session=os.name != "nt",
         )
@@ -749,7 +720,9 @@ def run_pipeline(config: dict):
     try:
         if config.get("feature_file") and config["workflow"] in {"full", "train", "inference"}:
             destination = Path(config["results_dir"]) / "datafile.tsv"
-            shutil.copy2(config["feature_file"], destination)
+            source = Path(config["feature_file"])
+            if source.resolve() != destination.resolve():
+                shutil.copy2(source, destination)
             add_log(f"Using validated feature table: {destination}")
         add_log("Resuming benchmark from saved partial evaluations" if config.get("resume") else "Pipeline started")
         steps = [("prepare", "Prepare Docker image", ["docker", "compose", "--env-file", env_file, "build", "imagine"])]
@@ -792,7 +765,9 @@ def run_pipeline(config: dict):
                     ),
                 ]
             )
-            if (config.get("feature_file") or config.get("resume")) and config["workflow"] in {"full", "train"}:
+            if config["workflow"] == "train":
+                steps.pop(1)  # Train from the complete feature table already in the results folder.
+            elif (config.get("feature_file") or config.get("resume")) and config["workflow"] == "full":
                 steps.pop(1)  # Use the supplied, already validated feature table.
             elif config["workflow"] in {"features_labelled", "features_unlabelled"}:
                 steps = steps[:2]  # Feature generation is an independent GUI module.
@@ -803,7 +778,7 @@ def run_pipeline(config: dict):
                     "--images",
                     config["training_images"],
                     "--features",
-                    str(Path(config["results_dir"]) / "datafile.tsv"),
+                    str(generated_feature_path(config)),
                     "--output",
                     str(Path(config["results_dir"]) / "validation" / "feature_validation.json"),
                 ]
@@ -901,6 +876,10 @@ def start_pipeline(raw_config: dict) -> tuple[bool, str | None]:
             return False, "Preflight validation failed. " + "; ".join(errors or [image_report.get("message", "Check the input data")])
     except ValueError as exc:
         return False, str(exc)
+    try:
+        GUI_LOG.write_text("", encoding="utf-8")
+    except OSError:
+        pass
     with state_lock:
         runtime["stop_requested"] = False
         state.update(
@@ -941,7 +920,6 @@ def snapshot(refresh=False) -> dict:
     if refresh and config:
         refresh_artifacts(config)
     with state_lock:
-        state["resources"] = resource_snapshot()
         return {
             key: state[key]
             for key in (
@@ -954,7 +932,6 @@ def snapshot(refresh=False) -> dict:
                 "config",
                 "steps",
                 "progress",
-                "resources",
                 "logs",
                 "artifacts",
                 "artifact_roots",

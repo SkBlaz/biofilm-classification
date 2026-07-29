@@ -926,7 +926,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--replication_unit",
         "--replication-unit",
-        choices=["well", "plate", "date"],
+        choices=["position", "well", "plate", "date"],
         default=None,
         help="Keep all samples from the selected replication unit in one CV fold",
     )

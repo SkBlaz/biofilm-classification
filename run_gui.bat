@@ -47,10 +47,16 @@ if not defined PYTHON (
 
 echo Starting MicroICS GUI...
 %PYTHON% gui\app.py %*
-if errorlevel 1 (
-    echo.
-    echo MicroICS GUI stopped with an error.
-    pause
+set "GUI_EXIT=%ERRORLEVEL%"
+echo.
+if not "%GUI_EXIT%"=="0" (
+    echo MicroICS GUI stopped with an error. Review the message above.
+) else (
+    echo MicroICS GUI stopped.
 )
+echo The latest pipeline log is saved in:
+echo %~dp0microics-gui.log
+echo.
+pause
 
-endlocal
+endlocal & exit /b %GUI_EXIT%

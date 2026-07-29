@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MicroICS Pipeline</title>
-  <link rel="stylesheet" href="/styles.css?v=20260721-1">
+  <link rel="stylesheet" href="/styles.css?v=20260729-1">
 </head>
 <body>
   <header class="topbar">
@@ -19,16 +19,25 @@
     <section class="setup-panel" aria-labelledby="setupTitle">
       <div class="eyebrow">Pipeline setup</div>
       <h1 id="setupTitle">Run your analysis</h1>
-      <p class="lede">Choose a workflow, point it at your folders, and let Docker handle the processing.</p>
+      <p class="lede">Follow the analysis workflow from feature generation through training and inference.</p>
 
       <form id="pipelineForm">
         <fieldset class="workflow-picker">
-          <legend>Workflow <button class="help-button" data-help-title="Workflow" data-help-text="Train + classify builds features, trains models, and classifies images. Train models stops after model training. Classify images uses models already saved in the results folder." type="button" aria-label="Help for Workflow">?</button></legend>
-          <label class="workflow-option active" data-workflow="full"><input type="radio" name="workflow" value="full" checked><span class="workflow-copy"><b>Train + classify</b><small>Features, models, and inference</small></span></label>
-          <label class="workflow-option" data-workflow="train"><input type="radio" name="workflow" value="train"><span class="workflow-copy"><b>Train models</b><small>Prepare data and save models</small></span></label>
-          <label class="workflow-option" data-workflow="inference"><input type="radio" name="workflow" value="inference"><span class="workflow-copy"><b>Classify images</b><small>Use models already in results</small></span></label>
-          <label class="workflow-option" data-workflow="features_labelled"><input type="radio" name="workflow" value="features_labelled"><span class="workflow-copy"><b>Generate labelled features</b><small>Feature generation for training</small></span></label>
-          <label class="workflow-option" data-workflow="features_unlabelled"><input type="radio" name="workflow" value="features_unlabelled"><span class="workflow-copy"><b>Generate unlabelled features</b><small>Feature generation for inference</small></span></label>
+          <legend>Workflow <button class="help-button" data-help-title="Workflow" data-help-text="Work from top to bottom: generate a complete feature table, train models from that table, then run inference. All together performs the complete labelled workflow in one run." type="button" aria-label="Help for Workflow">?</button></legend>
+          <div class="workflow-stage">
+            <span class="stage-number">1</span>
+            <div class="workflow-stage-content">
+              <strong>Generate features</strong>
+              <small>Choose whether image filenames contain class labels.</small>
+              <div class="workflow-feature-choices">
+                <label class="workflow-option active" data-workflow="features_labelled"><input type="radio" name="workflow" value="features_labelled" checked><span class="workflow-copy"><b>Labelled</b><small>For training images</small></span></label>
+                <label class="workflow-option" data-workflow="features_unlabelled"><input type="radio" name="workflow" value="features_unlabelled"><span class="workflow-copy"><b>Unlabelled</b><small>For inference images</small></span></label>
+              </div>
+            </div>
+          </div>
+          <label class="workflow-option workflow-stage-option" data-workflow="train"><span class="stage-number">2</span><input type="radio" name="workflow" value="train"><span class="workflow-copy"><b>Train models</b><small>Use a complete feature table; run one learner or all</small></span></label>
+          <label class="workflow-option workflow-stage-option" data-workflow="inference"><span class="stage-number">3</span><input type="radio" name="workflow" value="inference"><span class="workflow-copy"><b>Inference</b><small>Classify new images with saved models</small></span></label>
+          <label class="workflow-option workflow-stage-option" data-workflow="full"><span class="stage-number">4</span><input type="radio" name="workflow" value="full"><span class="workflow-copy"><b>All together</b><small>Generate labelled features, train models, and run inference</small></span></label>
         </fieldset>
 
         <div class="field-group" id="trainingImagesField">
@@ -40,7 +49,7 @@
         <div class="field-group">
           <div class="field-label"><label for="resultsDir">Results folder</label><button class="help-button" data-help-title="Results folder" data-help-text="This is where generated features, rankings, models, and other analysis output are stored. Training workflows clear existing contents after you confirm." type="button" aria-label="Help for Results folder">?</button></div>
           <div class="path-picker"><input id="resultsDir" name="results_dir" type="text" spellcheck="false" placeholder="/path/to/results"><button class="file-button" data-folder-target="resultsDir" type="button">Choose folder</button></div>
-          <small class="warning-note">Training starts by clearing this folder.</small>
+          <small class="warning-note">Feature generation starts by clearing this folder.</small>
         </div>
         <div class="field-row" id="inferenceFields">
           <div class="field-group"><div class="field-label"><label for="inferenceImages">Images to classify</label><button class="help-button" data-help-title="Images to classify" data-help-text="Choose a folder containing new .tif images, or select individual .tif files to upload. The saved models will generate predictions for these images." type="button" aria-label="Help for Images to classify">?</button></div><div class="path-picker split-picker"><input id="inferenceImages" name="inference_images" type="text" spellcheck="false" placeholder="/path/to/new_images"><button class="file-button" data-folder-target="inferenceImages" type="button">Choose folder</button><label class="file-button" for="inferenceFilePicker">Choose files</label><input class="hidden" id="inferenceFilePicker" type="file" accept=".tif,image/tiff" multiple></div><small class="file-picker-status" id="inferenceFileStatus"></small></div>
@@ -53,12 +62,12 @@
           <div class="field-group"><div class="field-label"><label for="correlationThreshold">Correlation |r| threshold</label><button class="help-button" data-help-title="Correlation threshold" data-help-text="Features with absolute correlation above this value are grouped in the redundancy report. Default is 0.8." type="button" aria-label="Help for Correlation threshold">?</button></div><input id="correlationThreshold" name="correlation_threshold" type="number" min="0.01" max="1" step="0.01" value="0.8"></div>
         </div>
         <div class="field-row compact-row">
-          <div class="field-group"><div class="field-label"><label for="replicationUnit">Unit of replication</label><button class="help-button" data-help-title="Unit of replication" data-help-text="Keeps all images from one well, plate, or imaging date together during cross-validation. Choose the independent experimental unit decided at the bench." type="button" aria-label="Help for Unit of replication">?</button></div><select id="replicationUnit" name="replication_unit"><option value="date" selected>Date</option><option value="plate">Plate</option><option value="well">Well</option></select></div>
-          <div class="field-group"><div class="field-label"><label for="featureFile">Existing feature table (optional)</label><button class="help-button" data-help-title="Existing feature table" data-help-text="Use this for an imported table with external features. It is checked for empty, NaN, infinite, and non-numeric feature entries before training or inference." type="button" aria-label="Help for Existing feature table">?</button></div><input id="featureFile" name="feature_file" type="text" spellcheck="false" placeholder="/path/to/features.tsv"></div>
+          <div class="field-group"><div class="field-label"><label for="replicationUnit">Unit of replication</label><button class="help-button" data-help-title="Unit of replication" data-help-text="Keeps all images from one imaging position, well, plate, or imaging date together during cross-validation. Choose the independent experimental unit decided at the bench." type="button" aria-label="Help for Unit of replication">?</button></div><select id="replicationUnit" name="replication_unit"><option value="date" selected>Date</option><option value="plate">Plate</option><option value="well">Well</option><option value="position">Imaging position (pos)</option></select></div>
+          <div class="field-group" id="featureFileField"><div class="field-label"><label for="featureFile">Complete feature table (optional)</label><button class="help-button" data-help-title="Complete feature table" data-help-text="MicroICS uses this table as-is and does not extract or join features automatically. It must already contain sampleName, label for training, all desired MicroICS and external feature columns, and one row per image." type="button" aria-label="Help for Complete feature table">?</button></div><input id="featureFile" name="feature_file" type="text" spellcheck="false" placeholder="/path/to/complete_features.tsv"><small>Use a generated MicroICS datafile, optionally with external columns already appended.</small></div>
         </div>
         <div class="hardware-actions"><button class="button tertiary" id="hardwareDefaultsButton" type="button">Suggested hardware defaults</button><button class="help-button" data-help-title="Suggested hardware defaults" data-help-text="Sets a conservative CPU and RAM limit for Docker and chooses a matching worker count. It limits resource use; it does not force the computer to use all of those resources." type="button" aria-label="Help for Suggested hardware defaults">?</button><small id="hardwareDefaultsMessage">Caps Docker at about 70% of available CPU and RAM.</small></div>
-        <div class="check-row"><label><input id="allLearners" name="all_learners" type="checkbox"><span>Run all learners</span></label><label for="learner">Single learner</label><select id="learner" name="learner"><option value="rf" selected>Random Forest</option><option value="dummy">Majority baseline</option><option value="decisiontree">Decision tree</option><option value="logistic">Logistic regression</option><option value="xgb">XGBoost</option><option value="gridsearch">KNN grid search</option></select><button class="help-button" data-help-title="Learner selection" data-help-text="Choose one learner for a focused run, or enable Run all learners to benchmark every available learner." type="button" aria-label="Help for Learner selection">?</button></div>
-        <div class="check-row confirm-row hidden" id="cleanupConfirm"><label><input name="confirm_cleanup" type="checkbox"><span>Clear the existing results folder</span></label><button class="help-button" data-help-title="Clear existing results" data-help-text="Training starts by removing existing contents from the results folder. Check this only when you are sure those outputs can be replaced." type="button" aria-label="Help for Clear existing results">?</button></div>
+        <div class="check-row learner-picker" id="modelFields"><label><input name="learner_mode" type="radio" value="single" checked><span>One learner</span></label><select id="learner" name="learner"><option value="rf" selected>Random Forest</option><option value="dummy">Majority baseline</option><option value="decisiontree">Decision tree</option><option value="logistic">Logistic regression</option><option value="xgb">XGBoost</option><option value="gridsearch">KNN grid search</option></select><label><input name="learner_mode" type="radio" value="all"><span>All learners</span></label><button class="help-button" data-help-title="Learner selection" data-help-text="Choose one learner for a focused run, or select All learners to benchmark every available learner." type="button" aria-label="Help for Learner selection">?</button></div>
+        <div class="check-row confirm-row hidden" id="cleanupConfirm"><label><input name="confirm_cleanup" type="checkbox"><span>Clear the existing results folder</span></label><button class="help-button" data-help-title="Clear existing results" data-help-text="Feature generation starts by removing existing contents from the results folder. Check this only when you are sure those outputs can be replaced." type="button" aria-label="Help for Clear existing results">?</button></div>
 
         <div class="form-actions"><button class="button primary" id="runButton" type="submit"><span class="button-icon">▶</span>Run pipeline</button><button class="button secondary" id="demoButton" type="button">Run sample images</button><button class="button tertiary" id="openOutputButton" type="button">Open output folder</button><button class="button secondary hidden" id="stopButton" type="button"><span class="button-icon">■</span>Stop</button></div>
         <p class="form-message" id="formMessage" role="status"></p>
@@ -74,15 +83,6 @@
         <div class="progress-meta"><span id="progressSteps">No stages started</span><span id="progressDetail">The active stage will appear here.</span></div>
       </div>
       <div class="pipeline-track" id="pipelineTrack"><div class="empty-state"><span class="empty-mark">◌</span><p>Your pipeline is ready.</p><small>Start a run to see each Docker step light up here.</small></div></div>
-
-      <div class="resource-panel">
-        <div class="resource-heading"><div><div class="eyebrow">Host monitor</div><h2>Machine resources</h2></div><span id="resourceUpdated">Waiting for metrics</span></div>
-        <div class="resource-grid">
-          <div class="resource-card"><div class="resource-card-label"><span>CPU</span><strong id="cpuValue">—</strong></div><div class="resource-bar"><span id="cpuBar"></span></div><small id="cpuDetail">Usage unavailable</small></div>
-          <div class="resource-card"><div class="resource-card-label"><span>Memory</span><strong id="memoryValue">—</strong></div><div class="resource-bar"><span id="memoryBar"></span></div><small id="memoryDetail">Usage unavailable</small></div>
-          <div class="resource-card"><div class="resource-card-label"><span>Disk</span><strong id="diskValue">—</strong></div><div class="resource-bar"><span id="diskBar"></span></div><small id="diskDetail">Workspace volume</small></div>
-        </div>
-      </div>
 
       <div class="inspector-heading"><div><div class="eyebrow">Output browser</div><h2>Inspect results</h2></div><span class="file-count" id="fileCount">0 files</span></div>
       <div class="inspector">
@@ -107,7 +107,7 @@
     <div class="cleanup-modal-backdrop" data-close-cleanup-modal></div>
     <div class="cleanup-modal-dialog">
       <div class="cleanup-modal-heading"><span class="cleanup-modal-mark">!</span><div><div class="eyebrow">Before you run</div><h2 id="cleanupModalTitle">Replace existing results?</h2></div><button class="icon-button" id="closeCleanupModal" type="button" aria-label="Close cleanup confirmation">×</button></div>
-      <p id="cleanupModalText">This training run will clear the current results folder before it starts.</p>
+      <p id="cleanupModalText">Feature generation will clear the current results folder before it starts.</p>
       <div class="cleanup-folder-card"><span class="cleanup-folder-icon">▣</span><div><strong id="cleanupFolderPath">/path/to/results</strong><small id="cleanupFolderSummary">Existing files will be replaced.</small></div></div>
       <div class="cleanup-modal-actions"><button class="button secondary" id="cancelCleanupButton" type="button">Go back</button><button class="button primary danger-button" id="confirmCleanupButton" type="button">Clear folder &amp; run</button></div>
     </div>
@@ -120,6 +120,6 @@
       <button class="button primary help-modal-close" id="dismissHelpModal" type="button">Got it</button>
     </div>
   </div>
-  <script src="/app.js?v=20260710-4"></script>
+  <script src="/app.js?v=20260729-1"></script>
 </body>
 </html>

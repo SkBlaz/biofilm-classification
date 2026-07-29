@@ -17,7 +17,6 @@ const progressValue = document.querySelector('#progressValue');
 const progressSteps = document.querySelector('#progressSteps');
 const progressDetail = document.querySelector('#progressDetail');
 const etaLabel = document.querySelector('#etaLabel');
-const resourceUpdated = document.querySelector('#resourceUpdated');
 const hardwareDefaultsButton = document.querySelector('#hardwareDefaultsButton');
 const hardwareDefaultsMessage = document.querySelector('#hardwareDefaultsMessage');
 const folderPicker = document.querySelector('#folderPicker');
@@ -57,7 +56,7 @@ let runStartedAt = null;
 let previousRunStatus = null;
 let demoPaths = null;
 
-const stepIcons = { prepare: '◆', features: '1', models: '2', inference: '3' };
+const stepIcons = { prepare: '◆', features: '1', validate: '✓', models: '2', inference: '3' };
 
 function value(id) { return document.querySelector(`#${id}`).value.trim(); }
 
@@ -82,8 +81,10 @@ function setWorkflow(workflow) {
   const labelledWorkflow = !['inference', 'features_unlabelled'].includes(workflow);
   document.querySelector('#trainingImagesField').classList.toggle('hidden', !labelledWorkflow);
   document.querySelector('#inferenceFields').classList.toggle('hidden', !['full', 'inference', 'features_unlabelled'].includes(workflow));
-  document.querySelector('#resultsDir').closest('.field-group').querySelector('small').textContent = workflow !== 'inference' ? 'This workflow may replace existing results after confirmation.' : 'Models are read from this folder/models.';
-  cleanupConfirm.classList.toggle('hidden', workflow === 'inference');
+  document.querySelector('#resultsDir').closest('.field-group').querySelector('small').textContent = ['full', 'features_labelled', 'features_unlabelled'].includes(workflow) ? 'Feature generation replaces existing contents after confirmation.' : workflow === 'train' ? 'Read datafile.tsv and write models in this folder.' : 'Models are read from this folder/models.';
+  document.querySelector('#featureFileField').classList.toggle('hidden', ['features_labelled', 'features_unlabelled'].includes(workflow));
+  document.querySelector('#modelFields').classList.toggle('hidden', !['full', 'train'].includes(workflow));
+  cleanupConfirm.classList.toggle('hidden', !['full', 'features_labelled', 'features_unlabelled'].includes(workflow));
 }
 
 function syncForm(config) {
@@ -100,8 +101,9 @@ function syncForm(config) {
   document.querySelector('#correlationThreshold').value = config.correlation_threshold ?? 0.8;
   document.querySelector('#replicationUnit').value = config.replication_unit || 'date';
   document.querySelector('#featureFile').value = config.feature_file || '';
-  document.querySelector('#allLearners').checked = Boolean(config.all_learners);
+  document.querySelector(`input[name="learner_mode"][value="${config.all_learners ? 'all' : 'single'}"]`).checked = true;
   document.querySelector('#learner').value = config.learner || 'rf';
+  syncLearnerMode();
   hardwareDefaults = config.cpu_limit && config.memory_limit ? { cpu_limit: config.cpu_limit, memory_limit: config.memory_limit } : null;
 }
 
@@ -122,6 +124,11 @@ async function loadDefaults() {
     document.querySelector('#topFeatures').value = config.top_features;
     document.querySelector('#correlationThreshold').value = config.correlation_threshold || 0.8;
     document.querySelector('#learner').value = config.learner || 'rf';
+    const workflowInput = document.querySelector(`input[name="workflow"][value="${config.workflow}"]`);
+    if (workflowInput) {
+      workflowInput.checked = true;
+      setWorkflow(config.workflow);
+    }
   } catch (error) {
     formMessage.textContent = 'Could not connect to the local GUI server.';
   }
@@ -269,7 +276,7 @@ function configFromForm() {
     correlation_threshold: Number(value('correlationThreshold')),
     replication_unit: document.querySelector('#replicationUnit').value,
     feature_file: value('featureFile'),
-    all_learners: document.querySelector('#allLearners').checked,
+    all_learners: document.querySelector('input[name="learner_mode"]:checked').value === 'all',
     learner: document.querySelector('#learner').value,
     confirm_cleanup: document.querySelector('input[name="confirm_cleanup"]').checked,
     cpu_limit: hardwareDefaults?.cpu_limit ?? null,
@@ -284,10 +291,12 @@ function renderValidation(report) {
   validationPanel.classList.toggle('is-invalid', report.ok === false);
   validationPanel.classList.toggle('is-valid', report.ok === true);
   validationMessage.textContent = images.message || (report.ok ? 'Preflight passed.' : 'Preflight needs attention.');
-  const labelCounts = Object.entries(images.images_per_label || {}).map(([label, count]) => `${escapeHtml(label)}: ${count}`).join(' · ') || 'none';
-  const dateRows = Object.entries(images.images_per_label_per_date || {}).map(([date, counts]) => `<tr><th>${escapeHtml(date)}</th><td>${Object.entries(counts).map(([label, count]) => `${escapeHtml(label)}: ${count}`).join(' · ')}</td></tr>`).join('');
+  const labelRows = Object.entries(images.images_per_label || {}).map(([label, count]) => `<tr><th scope="row">${escapeHtml(label)}</th><td>${count}</td></tr>`).join('');
+  const dateRows = Object.entries(images.images_per_label_per_date || {}).flatMap(([date, counts]) => Object.entries(counts).map(([label, count]) => `<tr><th scope="row">${escapeHtml(date)}</th><td>${escapeHtml(label)}</td><td>${count}</td></tr>`)).join('');
   const featureSummary = features.features_read === undefined ? '' : `<p><strong>Features:</strong> ${features.features_read} read (${features.microics_features} MicroICS, ${features.external_features} external); ${features.nan_cells || 0} NaN/empty cells.</p><p><strong>Unparsed:</strong> ${features.unparsed_feature_names?.length ? escapeHtml(features.unparsed_feature_names.join(', ')) : 'none'}</p>`;
-  validationDetails.innerHTML = `<p><strong>Images:</strong> ${images.valid_images || 0}/${images.total_images || 0} filenames valid. <strong>Labels:</strong> ${labelCounts}</p>${dateRows ? `<table class="validation-table"><thead><tr><th>Date</th><th>Images per label</th></tr></thead><tbody>${dateRows}</tbody></table>` : ''}${featureSummary}`;
+  const primaryTable = labelRows ? `<section class="validation-section"><strong>Images per label</strong><table class="validation-table"><thead><tr><th>Label (class)</th><th>Images</th></tr></thead><tbody>${labelRows}</tbody></table></section>` : '';
+  const dateTable = dateRows ? `<details class="validation-secondary"><summary>Images per label per date</summary><table class="validation-table"><thead><tr><th>Date</th><th>Label</th><th>Images</th></tr></thead><tbody>${dateRows}</tbody></table></details>` : '';
+  validationDetails.innerHTML = `<p><strong>Images:</strong> ${images.valid_images || 0}/${images.total_images || 0} filenames valid.</p>${primaryTable}${dateTable}${featureSummary}`;
 }
 
 async function preflight(config) {
@@ -319,8 +328,18 @@ hardwareDefaultsButton.addEventListener('click', async () => {
 });
 
 async function post(path, body = {}) {
-  const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  const payload = await response.json();
+  let response;
+  try {
+    response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  } catch (error) {
+    throw new Error('Could not reach the local GUI server. Reopen the Windows launcher and check microics-gui.log.');
+  }
+  let payload;
+  try {
+    payload = await response.json();
+  } catch (error) {
+    throw new Error('The local GUI server returned an incomplete response. Check microics-gui.log for the underlying error.');
+  }
   if (!response.ok) throw new Error(payload.error || 'Request failed');
   return payload;
 }
@@ -380,30 +399,6 @@ function renderProgress(progress, steps, status) {
   progressValue.textContent = `${percent}%`;
   progressSteps.textContent = total ? `${completed} of ${total} stages complete` : 'No stages started';
   progressDetail.textContent = current ? current.detail || progress?.detail || 'Working…' : progress?.detail || (status === 'complete' ? 'All requested work finished.' : 'The active stage will appear here.');
-}
-
-function renderResourceMetric(valueId, barId, detailId, percent, detail) {
-  const valueElement = document.querySelector(`#${valueId}`);
-  const barElement = document.querySelector(`#${barId}`);
-  const detailElement = document.querySelector(`#${detailId}`);
-  if (!Number.isFinite(Number(percent))) {
-    valueElement.textContent = '—';
-    barElement.style.width = '0%';
-    detailElement.textContent = 'Usage unavailable';
-    return;
-  }
-  const bounded = Math.max(0, Math.min(100, Number(percent)));
-  valueElement.textContent = `${Math.round(bounded)}%`;
-  barElement.style.width = `${bounded}%`;
-  detailElement.textContent = detail;
-}
-
-function renderResources(resources) {
-  const metrics = resources || {};
-  renderResourceMetric('cpuValue', 'cpuBar', 'cpuDetail', metrics.cpu_percent, 'Current host usage');
-  renderResourceMetric('memoryValue', 'memoryBar', 'memoryDetail', metrics.memory_percent, metrics.memory_total ? `${formatBytes(metrics.memory_used)} of ${formatBytes(metrics.memory_total)}` : 'Usage unavailable');
-  renderResourceMetric('diskValue', 'diskBar', 'diskDetail', metrics.disk_percent, metrics.disk_total ? `${formatBytes(metrics.disk_used)} of ${formatBytes(metrics.disk_total)}` : 'Usage unavailable');
-  resourceUpdated.textContent = metrics.updated_at ? `Updated ${metrics.updated_at}` : 'Waiting for metrics';
 }
 
 function renderSteps(steps) {
@@ -474,7 +469,6 @@ function renderState(nextState) {
   connectionText.textContent = nextState.status === 'running' ? 'Processing' : nextState.status === 'complete' ? 'Complete' : nextState.status === 'failed' ? 'Needs attention' : nextState.status === 'cancelled' ? 'Stopped' : 'Ready';
   renderSteps(nextState.steps);
   renderProgress(nextState.progress, nextState.steps, nextState.status);
-  renderResources(nextState.resources);
   renderValidation(nextState.validation);
   statusWarning.classList.toggle('hidden', !['failed', 'cancelled'].includes(nextState.status));
   statusWarning.title = nextState.error || 'The run did not complete. Open the run log for details.';
@@ -500,6 +494,7 @@ async function poll(refresh = false) {
   } catch (error) {
     connectionText.textContent = 'Offline';
     document.title = 'MicroICS · Offline';
+    if (latestState?.status === 'running') formMessage.textContent = 'Lost connection to the local GUI server. Reopen the Windows launcher and check microics-gui.log.';
   }
   clearTimeout(pollTimer);
   pollTimer = setTimeout(() => poll(false), 900);
@@ -512,7 +507,8 @@ form.addEventListener('submit', async (event) => {
   try {
     if (pendingUploads) throw new Error('Please wait for selected files to finish uploading.');
     const config = configFromForm();
-    const needsCleanupCheck = ['full', 'train', 'features_labelled', 'features_unlabelled'].includes(config.workflow) && config.results_dir && !config.confirm_cleanup;
+    const skipsGeneration = config.workflow === 'full' && Boolean(config.feature_file);
+    const needsCleanupCheck = ['full', 'features_labelled', 'features_unlabelled'].includes(config.workflow) && !skipsGeneration && config.results_dir && !config.confirm_cleanup;
     if (needsCleanupCheck) {
       const status = await inspectResultsFolder(config.results_dir);
       if (status.item_count > 0) {
@@ -569,7 +565,12 @@ stopButton.addEventListener('click', async () => {
 });
 
 document.querySelector('#refreshButton').addEventListener('click', () => poll(true));
-setWorkflow('full');
+function syncLearnerMode() {
+  document.querySelector('#learner').disabled = document.querySelector('input[name="learner_mode"]:checked').value === 'all';
+}
+document.querySelectorAll('input[name="learner_mode"]').forEach((input) => input.addEventListener('change', syncLearnerMode));
+syncLearnerMode();
+setWorkflow('features_labelled');
 
 async function boot() {
   await loadDefaults();

@@ -87,8 +87,8 @@ for arg in "$@"; do
 done
 
 case "$REPLICATION_UNIT" in
-    well|plate|date) ;;
-    *) echo "ERROR: replication unit must be well, plate, or date"; exit 1 ;;
+    position|well|plate|date) ;;
+    *) echo "ERROR: replication unit must be position, well, plate, or date"; exit 1 ;;
 esac
 
 if [ "$LEARNING_TASK" = "generate_features" ] && [ -n "$UNLABELLED_FLAG" ]; then
