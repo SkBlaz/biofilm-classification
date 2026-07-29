@@ -443,6 +443,12 @@ def generated_feature_path(config: dict) -> Path:
     return Path(config["results_dir"]) / filename
 
 
+def gui_feature_validation_path(config: dict) -> Path:
+    # Docker owns files it creates below results/validation on Unix. Keep the
+    # host-side GUI report in the user-created results root so it is writable.
+    return Path(config["results_dir"]) / "gui_feature_validation.json"
+
+
 def validate_config(raw: dict) -> dict:
     if not isinstance(raw, dict):
         raise ValueError("Request body must be an object")
@@ -780,7 +786,7 @@ def run_pipeline(config: dict):
                     "--features",
                     str(generated_feature_path(config)),
                     "--output",
-                    str(Path(config["results_dir"]) / "validation" / "feature_validation.json"),
+                    str(gui_feature_validation_path(config)),
                 ]
                 if config["workflow"] == "features_unlabelled":
                     validation_command.append("--unlabelled")
@@ -810,7 +816,7 @@ def run_pipeline(config: dict):
             runtime["progress_context"] = progress_context(config, steps)
         for step_id, label, command in steps:
             if not execute_step(step_id, label, command):
-                report_path = Path(config["results_dir"]) / "validation" / "feature_validation.json"
+                report_path = gui_feature_validation_path(config)
                 try:
                     report = json.loads(report_path.read_text(encoding="utf-8"))
                     with state_lock:
@@ -823,7 +829,7 @@ def run_pipeline(config: dict):
                 add_log("Pipeline stopped" if cancelled else "Pipeline stopped after an error")
                 break
             if step_id == "validate":
-                report_path = Path(config["results_dir"]) / "validation" / "feature_validation.json"
+                report_path = gui_feature_validation_path(config)
                 try:
                     report = json.loads(report_path.read_text(encoding="utf-8"))
                     with state_lock:

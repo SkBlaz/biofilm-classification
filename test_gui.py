@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gui.app import default_config, folder_status, generated_feature_path, validate_config
+from gui.app import default_config, folder_status, generated_feature_path, gui_feature_validation_path, validate_config
 
 
 class TestFolderStatus(unittest.TestCase):
@@ -159,10 +159,16 @@ class TestCleanupValidation(unittest.TestCase):
 
         self.assertEqual(path.name, "unknown_features.tsv")
 
+    def test_gui_validation_report_avoids_docker_owned_validation_folder(self):
+        path = gui_feature_validation_path({"results_dir": "/tmp/microics-results"})
+
+        self.assertEqual(path, Path("/tmp/microics-results/gui_feature_validation.json"))
+
 
 class TestWorkflowInterface(unittest.TestCase):
     def test_workflow_is_ordered_and_host_monitor_is_removed(self):
         html = (Path(__file__).parent / "gui" / "index.html").read_text(encoding="utf-8")
+        javascript = (Path(__file__).parent / "gui" / "app.js").read_text(encoding="utf-8")
 
         workflows = [
             'class="workflow-stage"',
@@ -173,7 +179,12 @@ class TestWorkflowInterface(unittest.TestCase):
         positions = [html.index(workflow) for workflow in workflows]
         self.assertEqual(positions, sorted(positions))
         self.assertNotIn("Host monitor", html)
+        self.assertNotIn("Host monitor", javascript)
         self.assertIn("Imaging position (pos)", html)
+        self.assertIn("MicroICS uses this table as-is and does not extract or join features automatically.", html)
+        self.assertIn("<strong>Images per label</strong>", javascript)
+        self.assertIn('<details class="validation-secondary">', javascript)
+        self.assertIn("<summary>Images per label per date</summary>", javascript)
         self.assertEqual(default_config()["workflow"], "features_labelled")
 
 
