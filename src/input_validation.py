@@ -93,6 +93,27 @@ def validate_image_directory(directory: str | Path, labelled: bool = True) -> di
     """Return a JSON-friendly filename, label, date, and replication report."""
     root = Path(directory)
     files = sorted(path for path in root.glob("*.tif") if path.is_file()) if root.is_dir() else []
+
+    if not labelled:
+        return {
+            "path": str(root.resolve()),
+            "labelled": False,
+            "total_images": len(files),
+            "valid_images": len(files),
+            "invalid_images": 0,
+            "invalid_filenames": [],
+            "image_filenames": [path.name for path in files],
+            "unique_labels": [],
+            "images_per_label": {},
+            "images_per_label_per_date": {},
+            "ok": bool(files),
+            "message": (
+                f"Found {len(files)} unlabelled .tif image(s); filename convention was not enforced."
+                if files
+                else "No .tif images were found."
+            ),
+        }
+
     invalid: list[str] = []
     parsed: list[tuple[Path, dict[str, str]]] = []
     for path in files:
@@ -118,6 +139,7 @@ def validate_image_directory(directory: str | Path, labelled: bool = True) -> di
         "valid_images": len(parsed),
         "invalid_images": len(invalid),
         "invalid_filenames": invalid[:100],
+        "image_filenames": [path.name for path in files],
         "unique_labels": sorted(labels),
         "images_per_label": dict(sorted(labels.items())),
         "images_per_label_per_date": per_date,
@@ -166,6 +188,7 @@ def validate_feature_table(path: str | Path, require_label: bool = True) -> dict
         infinite_cells += int(infinite)
 
     errors = []
+    warnings = []
     if not feature_columns:
         errors.append("No feature columns were found")
     if "sampleName" not in frame.columns:
@@ -188,9 +211,9 @@ def validate_feature_table(path: str | Path, require_label: bool = True) -> dict
         if missing_labels.any():
             errors.append(f"{int(missing_labels.sum())} missing/unknown label values found")
     if empty_cells:
-        errors.append(f"{empty_cells} empty/NaN feature cells found")
+        warnings.append(f"{empty_cells} empty/NaN feature cells found; the learning and inference pipelines will impute them")
     if infinite_cells:
-        errors.append(f"{infinite_cells} infinite feature values found")
+        warnings.append(f"{infinite_cells} infinite feature values found; the learning and inference pipelines will impute them")
     if unparsed:
         errors.append("Could not parse feature columns: " + ", ".join(unparsed))
 
@@ -208,6 +231,7 @@ def validate_feature_table(path: str | Path, require_label: bool = True) -> dict
         "infinite_cells": infinite_cells,
         "invalid_cells_by_feature": invalid_cells,
         "metadata_columns": [str(value) for value in metadata],
+        "warnings": warnings,
         "errors": errors,
         "ok": not errors,
     }

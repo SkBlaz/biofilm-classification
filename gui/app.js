@@ -264,6 +264,29 @@ async function uploadSelectedFiles(input, pathInput, statusElement) {
   }
 }
 
+async function uploadFeatureFile(input, pathInput, statusElement) {
+  const file = input.files[0];
+  if (!file) return;
+  pendingUploads += 1;
+  statusElement.textContent = `Selecting ${file.name}…`;
+  try {
+    const response = await fetch('/api/upload-feature', {
+      method: 'POST',
+      headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Upload-Name': file.name },
+      body: file,
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'File selection failed');
+    pathInput.value = payload.path;
+    statusElement.textContent = `${file.name} selected.`;
+  } catch (error) {
+    statusElement.textContent = `Could not select file: ${error.message}`;
+  } finally {
+    pendingUploads -= 1;
+    input.value = '';
+  }
+}
+
 function configFromForm() {
   return {
     workflow: document.querySelector('input[name="workflow"]:checked').value,
@@ -293,10 +316,15 @@ function renderValidation(report) {
   validationMessage.textContent = images.message || (report.ok ? 'Preflight passed.' : 'Preflight needs attention.');
   const labelRows = Object.entries(images.images_per_label || {}).map(([label, count]) => `<tr><th scope="row">${escapeHtml(label)}</th><td>${count}</td></tr>`).join('');
   const dateRows = Object.entries(images.images_per_label_per_date || {}).flatMap(([date, counts]) => Object.entries(counts).map(([label, count]) => `<tr><th scope="row">${escapeHtml(date)}</th><td>${escapeHtml(label)}</td><td>${count}</td></tr>`)).join('');
-  const featureSummary = features.features_read === undefined ? '' : `<p><strong>Features:</strong> ${features.features_read} read (${features.microics_features} MicroICS, ${features.external_features} external); ${features.nan_cells || 0} NaN/empty cells.</p><p><strong>Unparsed:</strong> ${features.unparsed_feature_names?.length ? escapeHtml(features.unparsed_feature_names.join(', ')) : 'none'}</p>`;
+  const filenames = (images.image_filenames || []).map((filename) => `<li>${escapeHtml(filename)}</li>`).join('');
+  const filenameList = !images.labelled && filenames ? `<details class="validation-secondary"><summary>Filenames found (${images.total_images})</summary><ul class="validation-filenames">${filenames}</ul></details>` : '';
+  const featureWarnings = (features.warnings || []).map((warning) => `<li>${escapeHtml(warning)}</li>`).join('');
+  const warningList = featureWarnings ? `<p><strong>Handled automatically:</strong></p><ul class="validation-warnings">${featureWarnings}</ul>` : '';
+  const featureSummary = features.features_read === undefined ? '' : `<p><strong>Features:</strong> ${features.features_read} read (${features.microics_features} MicroICS, ${features.external_features} external); ${features.empty_cells || 0} NaN/empty cells.</p><p><strong>Unparsed:</strong> ${features.unparsed_feature_names?.length ? escapeHtml(features.unparsed_feature_names.join(', ')) : 'none'}</p>${warningList}`;
   const primaryTable = labelRows ? `<section class="validation-section"><strong>Images per label</strong><table class="validation-table"><thead><tr><th>Label (class)</th><th>Images</th></tr></thead><tbody>${labelRows}</tbody></table></section>` : '';
   const dateTable = dateRows ? `<details class="validation-secondary"><summary>Images per label per date</summary><table class="validation-table"><thead><tr><th>Date</th><th>Label</th><th>Images</th></tr></thead><tbody>${dateRows}</tbody></table></details>` : '';
-  validationDetails.innerHTML = `<p><strong>Images:</strong> ${images.valid_images || 0}/${images.total_images || 0} filenames valid.</p>${primaryTable}${dateTable}${featureSummary}`;
+  const imageSummary = images.labelled === false ? `<p><strong>Images:</strong> ${images.total_images || 0} files found.</p>` : `<p><strong>Images:</strong> ${images.valid_images || 0}/${images.total_images || 0} filenames valid.</p>`;
+  validationDetails.innerHTML = `${imageSummary}${filenameList}${primaryTable}${dateTable}${featureSummary}`;
 }
 
 async function preflight(config) {
@@ -308,6 +336,7 @@ async function preflight(config) {
 
 document.querySelector('#trainingFilePicker').addEventListener('change', (event) => uploadSelectedFiles(event.target, document.querySelector('#trainingImages'), document.querySelector('#trainingFileStatus')));
 document.querySelector('#inferenceFilePicker').addEventListener('change', (event) => uploadSelectedFiles(event.target, document.querySelector('#inferenceImages'), document.querySelector('#inferenceFileStatus')));
+document.querySelector('#featureFilePicker').addEventListener('change', (event) => uploadFeatureFile(event.target, document.querySelector('#featureFile'), document.querySelector('#featureFileStatus')));
 
 hardwareDefaultsButton.addEventListener('click', async () => {
   hardwareDefaultsButton.disabled = true;
@@ -566,7 +595,9 @@ stopButton.addEventListener('click', async () => {
 
 document.querySelector('#refreshButton').addEventListener('click', () => poll(true));
 function syncLearnerMode() {
-  document.querySelector('#learner').disabled = document.querySelector('input[name="learner_mode"]:checked').value === 'all';
+  const mode = document.querySelector('input[name="learner_mode"]:checked').value;
+  document.querySelector('#learner').disabled = mode === 'all';
+  document.querySelectorAll('.learner-option').forEach((option) => option.classList.toggle('active', option.dataset.learnerMode === mode));
 }
 document.querySelectorAll('input[name="learner_mode"]').forEach((input) => input.addEventListener('change', syncLearnerMode));
 syncLearnerMode();

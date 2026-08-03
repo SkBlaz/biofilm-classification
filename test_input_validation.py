@@ -30,6 +30,24 @@ class TestInputValidation(unittest.TestCase):
             self.assertEqual(report["images_per_label_per_date"]["04072023"]["L1323"], 2)
             self.assertEqual(report["invalid_filenames"], ["bad-name.tif"])
 
+    def test_unlabelled_images_accept_arbitrary_names_and_report_them(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            filenames = [
+                "plain-image.tif",
+                "05032024_s_Lm_st_L1764_p_E02_pos001_tm_24_ch_Syto9_z_21_treat_milkcoat.tif",
+            ]
+            for filename in filenames:
+                (root / filename).touch()
+
+            report = validate_image_directory(root, labelled=False)
+
+            self.assertTrue(report["ok"])
+            self.assertEqual(report["valid_images"], 2)
+            self.assertEqual(report["invalid_filenames"], [])
+            self.assertEqual(report["image_filenames"], sorted(filenames))
+            self.assertIn("filename convention was not enforced", report["message"])
+
     def test_feature_report_stops_on_empty_and_unparsed_values(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             path = Path(temporary_directory) / "features.tsv"
@@ -71,6 +89,42 @@ class TestInputValidation(unittest.TestCase):
             self.assertEqual(report["microics_features"], 5)
             self.assertEqual(report["external_features"], 1)
             self.assertTrue(report["ok"])
+
+    def test_generated_nan_features_are_reported_and_imputed(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "legacy-generated.tsv"
+            pd.DataFrame(
+                {
+                    "sampleName": ["a", "b"],
+                    "label": ["A", "B"],
+                    "CustomAlgos_mean": [1.0, None],
+                    "eigen-SUMMARYDiffGlobal.tsv_var.txt": [None, None],
+                }
+            ).to_csv(path, sep="\t", index=False)
+
+            report = validate_feature_table(path)
+
+            self.assertTrue(report["ok"])
+            self.assertEqual(report["empty_cells"], 3)
+            self.assertEqual(len(report["warnings"]), 1)
+            self.assertIn("will impute them", report["warnings"][0])
+
+    def test_generated_infinite_features_are_reported_and_imputed(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "legacy-generated.tsv"
+            pd.DataFrame(
+                {
+                    "sampleName": ["a", "b"],
+                    "label": ["A", "B"],
+                    "external_score": [float("inf"), float("-inf")],
+                }
+            ).to_csv(path, sep="\t", index=False)
+
+            report = validate_feature_table(path)
+
+            self.assertTrue(report["ok"])
+            self.assertEqual(report["infinite_cells"], 2)
+            self.assertIn("infinite feature values", report["warnings"][0])
 
     def test_replication_group_is_explicit(self):
         sample = "04072023--s--Lm--st--L1323--p--C06--pos004--tm--24--ch--Syto9--z--21"

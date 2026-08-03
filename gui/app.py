@@ -31,7 +31,7 @@ except ModuleNotFoundError:  # Running gui/app.py directly puts gui/, not the re
 
 ROOT = Path(__file__).resolve().parents[1]
 GUI_DIR = Path(__file__).resolve().parent
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 MAX_LOG_LINES = 500
 MAX_ARTIFACTS = 450
 UPLOAD_ROOT = ROOT / ".gui_uploads"
@@ -147,11 +147,16 @@ def read_json(handler: BaseHTTPRequestHandler) -> dict:
         raise ValueError("Request body must be valid JSON") from exc
 
 
-def receive_upload(handler: BaseHTTPRequestHandler) -> dict[str, str]:
+def receive_upload(
+    handler: BaseHTTPRequestHandler,
+    allowed_suffixes: set[str] | None = None,
+    file_description: str = ".tif image files",
+) -> dict[str, str]:
+    allowed_suffixes = allowed_suffixes or {".tif"}
     filename = handler.headers.get("X-Upload-Name", "").replace("\\", "/")
     safe_name = Path(filename).name
-    if not safe_name or Path(safe_name).suffix.lower() != ".tif":
-        raise ValueError("Only .tif image files can be selected")
+    if not safe_name or Path(safe_name).suffix.lower() not in allowed_suffixes:
+        raise ValueError(f"Only {file_description} can be selected")
     try:
         content_length = int(handler.headers.get("Content-Length", "0"))
     except ValueError as exc:
@@ -180,7 +185,7 @@ def receive_upload(handler: BaseHTTPRequestHandler) -> dict[str, str]:
     except Exception:
         destination.unlink(missing_ok=True)
         raise
-    return {"directory": str(directory), "file": destination.name, "group": group}
+    return {"directory": str(directory), "file": destination.name, "path": str(destination), "group": group}
 
 
 def browse_directory(value: str | None) -> dict[str, object]:
@@ -1050,6 +1055,18 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/upload":
             try:
                 json_response(self, receive_upload(self), HTTPStatus.CREATED)
+            except ValueError as exc:
+                json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except OSError as exc:
+                json_response(self, {"error": f"Could not save the selected file: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path == "/api/upload-feature":
+            try:
+                json_response(
+                    self,
+                    receive_upload(self, {".tsv", ".txt"}, "tab-separated .tsv or .txt files"),
+                    HTTPStatus.CREATED,
+                )
             except ValueError as exc:
                 json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except OSError as exc:

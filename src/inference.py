@@ -216,7 +216,13 @@ def generate_features_for_images(images_dir, temp_dir):
     # Create final dataframe
     data_file = os.path.join(temp_dir, "inference_data.tsv")
     try:
-        cmd = ["python", os.path.join(src_dir, "create_final_df_from_results.py"), analysis_dir, data_file]
+        cmd = [
+            "python",
+            os.path.join(src_dir, "create_final_df_from_results.py"),
+            analysis_dir,
+            data_file,
+            "--unlabelled",
+        ]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             logger.error(f"Final dataframe creation failed: {result.stderr}")

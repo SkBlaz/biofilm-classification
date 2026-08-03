@@ -84,6 +84,26 @@ def get_benchmark_runtime_config():
     }
 
 
+def configured_parallelism() -> int:
+    """Return the requested worker count for estimators and model searches."""
+    return PARALLELISM if PARALLELISM == -1 else max(1, PARALLELISM)
+
+
+def prepare_fold_features(x_train, x_test, n_components, thr_features, thr_indices):
+    """Prepare one fold once so every learner reuses the same transformed arrays."""
+    if not thr_features and n_components == "all" and len(thr_indices) > 0:
+        x_train = x_train[:, thr_indices]
+        x_test = x_test[:, thr_indices]
+
+    svd_transformer = None
+    if n_components != "all":
+        svd_transformer = TruncatedSVD(n_components=int(n_components), n_iter=15, random_state=42).fit(x_train)
+        x_train = svd_transformer.transform(x_train)
+        x_test = svd_transformer.transform(x_test)
+
+    return x_train, x_test, svd_transformer, x_train.shape[1]
+
+
 def get_out_dir(sub="ranking_results"):
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), sub)
 
@@ -170,8 +190,12 @@ def load_data(path_to_data: str):
     # nan --> -666
     for c in data.columns:
         if pd.api.types.is_numeric_dtype(data[c]):
-            max_val = data[c].replace(np.inf, np.nan).max()
-            data[c] = data[c].replace(np.inf, max_val + 3.14).fillna(-666)
+            finite = data[c].replace([np.inf, -np.inf], np.nan)
+            max_val = finite.max()
+            if pd.isna(max_val):
+                data[c] = finite.fillna(-666)
+            else:
+                data[c] = data[c].replace([np.inf, -np.inf], [max_val + 3.14, -666]).fillna(-666)
         else:
             data[c] = data[c].fillna("missing")
 
@@ -412,7 +436,10 @@ def do_classification_simple(
         f"(strategy: {cv_strategy}, minimum class count: {min_class_count}). {cv_reason}"
     )
 
-    rf_base = RandomForestClassifier(random_state=42, n_jobs=-1)
+    search_jobs = configured_parallelism()
+    # Parallelize the search, not both levels. Nested ``n_jobs=-1`` caused each
+    # outer worker to start another full worker pool for large feature tables.
+    rf_base = RandomForestClassifier(random_state=42, n_jobs=1)
     tuned_rf = RandomizedSearchCV(
         estimator=rf_base,
         param_distributions=rf_param_dist,
@@ -421,7 +448,8 @@ def do_classification_simple(
         cv=cv_rf,
         verbose=0,  # Reduced verbosity for faster execution
         random_state=42,
-        n_jobs=-1,
+        n_jobs=search_jobs,
+        pre_dispatch=search_jobs if search_jobs > 0 else "2*n_jobs",
     )
 
     if all_learners:
@@ -430,8 +458,13 @@ def do_classification_simple(
             "decisiontree": tree.DecisionTreeClassifier(),
             "logistic": LogisticRegression(),
             "rf": tuned_rf,
-            "xgb": XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective="binary:logistic"),
-            "gridsearch": GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM),
+            "xgb": XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective="binary:logistic", n_jobs=search_jobs),
+            "gridsearch": GridSearchCV(
+                KNeighborsClassifier(),
+                parameters,
+                n_jobs=search_jobs,
+                pre_dispatch=search_jobs if search_jobs > 0 else "2*n_jobs",
+            ),
             #'tpot': TPOTClassifier(generations=5, population_size=20, cv=5, random_state=42, verbosity=2, n_jobs=PARALLELISM, memory='auto'),
         }
 
@@ -453,8 +486,13 @@ def do_classification_simple(
             "dummy": DummyClassifier(),
             "decisiontree": tree.DecisionTreeClassifier(),
             "logistic": LogisticRegression(),
-            "xgb": XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective="binary:logistic"),
-            "gridsearch": GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM),
+            "xgb": XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective="binary:logistic", n_jobs=search_jobs),
+            "gridsearch": GridSearchCV(
+                KNeighborsClassifier(),
+                parameters,
+                n_jobs=search_jobs,
+                pre_dispatch=search_jobs if search_jobs > 0 else "2*n_jobs",
+            ),
         }
         if learner not in learner_models:
             raise ValueError(f"Unsupported learner: {learner}")
@@ -503,9 +541,13 @@ def do_classification_simple(
                     y_test = y[test_index]
                     groups_train = group_ids[train_index] if group_ids is not None else None
 
-                    if not thr_features and desc_components == "all" and len(thr_indices) > 0:
-                        x_train = x_train[:, thr_indices]
-                        x_test = x_test[:, thr_indices]
+                    x_train_model, x_test_model, svd_transformer, effective_components = prepare_fold_features(
+                        x_train,
+                        x_test,
+                        desc_components,
+                        thr_features,
+                        thr_indices,
+                    )
 
                     for model_name, model in models.items():
                         partial_path = (
@@ -534,7 +576,7 @@ def do_classification_simple(
                             logger.info(f"Loaded existing partial evaluation from {partial_path}, skipping model evaluation")
                             continue
 
-                        model_for_fold = model
+                        model_for_fold = clone(model)
                         if isinstance(model, RandomizedSearchCV | GridSearchCV):
                             cv_inner, n_splits_inner, min_class_count_inner, inner_cv_strategy, inner_cv_reason = get_adaptive_cv(
                                 y_train, max_splits=5, groups=groups_train
@@ -543,23 +585,12 @@ def do_classification_simple(
                                 f"Using {n_splits_inner} inner CV folds for {model_name} on fold {i} "
                                 f"(strategy: {inner_cv_strategy}, minimum class count: {min_class_count_inner}). {inner_cv_reason}"
                             )
-                            model_for_fold = clone(model).set_params(cv=cv_inner)
+                            model_for_fold.set_params(cv=cv_inner)
 
                         logger.info(
-                            f"Running {n_components} {' '.join(str(model_for_fold).split())}, fold: {i}, filter mode: {filter_mode}"
+                            f"Running {desc_components} ({effective_components} features) "
+                            f"{' '.join(str(model_for_fold).split())}, fold: {i}, filter mode: {filter_mode}"
                         )
-
-                        # Prepare data with SVD if needed
-                        x_train_model = x_train.copy()
-                        x_test_model = x_test.copy()
-                        svd_transformer = None
-
-                        if desc_components != "all" or "TabPFN" in str(model_for_fold):
-                            svd_transformer = TruncatedSVD(n_components=n_components, n_iter=15, random_state=42).fit(x_train_model)
-                            x_train_model = svd_transformer.transform(x_train_model)
-                            x_test_model = svd_transformer.transform(x_test_model)
-                        else:
-                            n_components = x_train_model.shape[1]
 
                         model_failed = False
                         if "TabularPredictor" in str(model_for_fold) and AUTOGLUON_AVAILABLE:
@@ -636,7 +667,7 @@ def do_classification_simple(
                             "RESULT",
                             re.sub(r"\s+", " ", str(model_for_fold)),
                             upsampling,
-                            n_components,
+                            effective_components,
                             i,
                             acc,
                             test_map,
@@ -748,19 +779,40 @@ def do_classification_simple(
                     )
 
                     final_model = RandomizedSearchCV(
-                        estimator=RandomForestClassifier(random_state=42, n_jobs=-1),
+                        estimator=RandomForestClassifier(random_state=42, n_jobs=1),
                         param_distributions=rf_param_dist,
                         n_iter=n_iter_final,
                         scoring=make_scorer(f1_score, average="weighted"),
                         cv=cv_final,
                         verbose=0,
                         random_state=42,
-                        n_jobs=-1,
+                        n_jobs=search_jobs,
+                        pre_dispatch=search_jobs if search_jobs > 0 else "2*n_jobs",
                     )
                 elif model_name == "xgb":
-                    final_model = XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective="binary:logistic")
+                    final_model = XGBClassifier(
+                        n_estimators=100,
+                        max_depth=3,
+                        learning_rate=1,
+                        objective="binary:logistic",
+                        n_jobs=search_jobs,
+                    )
                 elif model_name == "gridsearch":
-                    final_model = GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM)
+                    cv_final, n_splits_final, min_class_count_final, final_cv_strategy, final_cv_reason = get_adaptive_cv(
+                        y, max_splits=5, groups=group_ids
+                    )
+                    logger.info(
+                        f"Using {n_splits_final} CV folds for final KNN tuning with {X_final.shape[0]} samples "
+                        f"(strategy: {final_cv_strategy}, minimum class count: {min_class_count_final}). "
+                        f"{final_cv_reason}"
+                    )
+                    final_model = GridSearchCV(
+                        KNeighborsClassifier(),
+                        parameters,
+                        cv=cv_final,
+                        n_jobs=search_jobs,
+                        pre_dispatch=search_jobs if search_jobs > 0 else "2*n_jobs",
+                    )
                 elif model_name == "tpot" and TPOT_AVAILABLE:
                     final_model = TPOTClassifier(
                         generations=5,

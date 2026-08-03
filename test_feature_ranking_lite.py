@@ -13,7 +13,8 @@ from sklearn.model_selection import KFold, StratifiedKFold
 # Add src directory to path
 sys.path.insert(0, "src")
 
-from feature_ranking_lite import get_adaptive_cv, get_benchmark_runtime_config
+import feature_ranking_lite
+from feature_ranking_lite import configured_parallelism, get_adaptive_cv, get_benchmark_runtime_config, prepare_fold_features
 
 
 class TestAdaptiveCV(unittest.TestCase):
@@ -53,6 +54,17 @@ class TestAdaptiveCV(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least 2 samples"):
             get_adaptive_cv(np.array([1]), max_splits=5)
 
+    def test_grouped_cv_never_splits_a_replication_group(self):
+        y = np.tile(np.array([0, 1, 2]), 6)
+        groups = np.repeat(np.arange(6), 3)
+
+        cv, n_splits, _min_class_count, strategy, _reason = get_adaptive_cv(y, max_splits=5, groups=groups)
+
+        self.assertEqual(n_splits, 5)
+        self.assertIn(strategy, {"stratified-group", "group"})
+        for train_indices, test_indices in cv.split(np.zeros((len(y), 1)), y, groups):
+            self.assertTrue(set(groups[train_indices]).isdisjoint(groups[test_indices]))
+
 
 class TestBenchmarkRuntimeConfig(unittest.TestCase):
     """Test benchmark runtime tuning for CI and local runs."""
@@ -72,6 +84,44 @@ class TestBenchmarkRuntimeConfig(unittest.TestCase):
         self.assertEqual(config["n_iter"], 10)
         self.assertEqual(config["repetitions"], 3)
         self.assertEqual(config["n_components"], [16, 32, 64, 128, 256, 512, "all"])
+
+    def test_configured_parallelism_honors_requested_worker_limit(self):
+        with patch.object(feature_ranking_lite, "PARALLELISM", 3):
+            self.assertEqual(configured_parallelism(), 3)
+
+    def test_fold_preprocessing_is_reusable_across_learners(self):
+        x_train = np.arange(60, dtype=float).reshape(10, 6)
+        x_test = np.arange(24, dtype=float).reshape(4, 6)
+
+        transformed_train, transformed_test, transformer, effective_components = prepare_fold_features(
+            x_train,
+            x_test,
+            3,
+            True,
+            np.array([1, 4]),
+        )
+
+        self.assertEqual(transformed_train.shape, (10, 3))
+        self.assertEqual(transformed_test.shape, (4, 3))
+        self.assertEqual(effective_components, 3)
+        self.assertIsNotNone(transformer)
+
+    def test_threshold_only_fold_reports_actual_feature_count(self):
+        x_train = np.arange(60, dtype=float).reshape(10, 6)
+        x_test = np.arange(24, dtype=float).reshape(4, 6)
+
+        transformed_train, transformed_test, transformer, effective_components = prepare_fold_features(
+            x_train,
+            x_test,
+            "all",
+            False,
+            np.array([1, 4]),
+        )
+
+        self.assertEqual(transformed_train.shape, (10, 2))
+        self.assertEqual(transformed_test.shape, (4, 2))
+        self.assertEqual(effective_components, 2)
+        self.assertIsNone(transformer)
 
 
 if __name__ == "__main__":

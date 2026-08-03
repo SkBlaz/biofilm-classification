@@ -159,6 +159,21 @@ class TestDataProcessingUtilities(unittest.TestCase):
             self.assertEqual(data.index.tolist(), ["sample--pos001"])
             self.assertEqual(data.loc["sample--pos001", "label"], "L1323")
 
+    def test_load_data_imputes_both_infinity_directions(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_path = os.path.join(temp_dir, "datafile.tsv")
+            pd.DataFrame(
+                {
+                    "sampleName": ["sample-a", "sample-b", "sample-c"],
+                    "feature": [1.0, float("inf"), float("-inf")],
+                    "label": ["A", "A", "B"],
+                }
+            ).to_csv(data_path, sep="\t", index=False)
+
+            data = load_data(data_path)
+
+            self.assertEqual(data["feature"].tolist(), [1.0, 4.140000000000001, -666.0])
+
     def test_dataframe_groupby_operations(self):
         """Test that pandas groupby operations work as expected."""
         # This tests the operations used in analysis.py

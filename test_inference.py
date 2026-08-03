@@ -8,6 +8,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import joblib
 import numpy as np
@@ -17,7 +19,7 @@ from sklearn.ensemble import RandomForestClassifier
 # Add src directory to path
 sys.path.insert(0, "src")
 
-from inference import format_predictions, load_models, validate_cli_inputs
+from inference import format_predictions, generate_features_for_images, load_models, validate_cli_inputs
 
 
 class TestLoadModels(unittest.TestCase):
@@ -231,6 +233,30 @@ class TestValidateCliInputs(unittest.TestCase):
             with self.assertRaises(ValueError) as context:
                 validate_cli_inputs(models_dir, images_dir, str(Path(images_dir, "missing.tsv")))
             self.assertIn("Features file does not exist", str(context.exception))
+
+
+class TestGeneratedInferenceFeatures(unittest.TestCase):
+    def test_final_table_creation_is_explicitly_unlabelled(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            images = root / "images"
+            output = root / "output"
+            images.mkdir()
+            (images / "arbitrary_treatment_name.tif").touch()
+            commands = []
+
+            def run_command(command, **_kwargs):
+                commands.append(command)
+                if "create_final_df_from_results.py" in command[1]:
+                    Path(command[3]).touch()
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            with patch("inference.subprocess.run", side_effect=run_command):
+                generated = generate_features_for_images(str(images), str(output))
+
+            final_command = next(command for command in commands if "create_final_df_from_results.py" in command[1])
+            self.assertEqual(final_command[-1], "--unlabelled")
+            self.assertEqual(generated, str(output / "inference_data.tsv"))
 
 
 if __name__ == "__main__":

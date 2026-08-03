@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import io
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from gui.app import default_config, folder_status, generated_feature_path, gui_feature_validation_path, validate_config
+from gui.app import default_config, folder_status, generated_feature_path, gui_feature_validation_path, receive_upload, validate_config
 
 
 class TestFolderStatus(unittest.TestCase):
@@ -31,6 +34,25 @@ class TestFolderStatus(unittest.TestCase):
             self.assertEqual(status["item_count"], 6)
             self.assertEqual(status["items"], ["a.tsv", "b.tsv", "c.tsv", "d.tsv", "e.tsv"])
             self.assertTrue(status["has_more"])
+
+
+class TestFeatureFileSelection(unittest.TestCase):
+    def test_tab_separated_file_picker_stages_one_file(self):
+        contents = b"sampleName\tlabel\tfeature\nsample-a\tA\t1\n"
+        handler = SimpleNamespace(
+            headers={
+                "X-Upload-Name": "publication-data.tsv",
+                "Content-Length": str(len(contents)),
+            },
+            rfile=io.BytesIO(contents),
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_directory, patch("gui.app.UPLOAD_ROOT", Path(temporary_directory)):
+            selected = receive_upload(handler, {".tsv", ".txt"}, "tab-separated .tsv or .txt files")
+
+            selected_path = Path(selected["path"])
+            self.assertEqual(selected_path.name, "publication-data.tsv")
+            self.assertEqual(selected_path.read_bytes(), contents)
 
 
 class TestCleanupValidation(unittest.TestCase):
@@ -182,6 +204,12 @@ class TestWorkflowInterface(unittest.TestCase):
         self.assertNotIn("Host monitor", javascript)
         self.assertIn("Imaging position (pos)", html)
         self.assertIn("MicroICS uses this table as-is and does not extract or join features automatically.", html)
+        self.assertIn('id="featureFilePicker"', html)
+        self.assertIn("Choose file", html)
+        self.assertIn('data-learner-mode="single"', html)
+        self.assertIn('data-learner-mode="all"', html)
+        self.assertIn("Benchmark every algorithm", html)
+        self.assertIn("Filenames found", javascript)
         self.assertIn("<strong>Images per label</strong>", javascript)
         self.assertIn('<details class="validation-secondary">', javascript)
         self.assertIn("<summary>Images per label per date</summary>", javascript)

@@ -283,5 +283,15 @@ h1 { margin-bottom:10px; font-size:31px; letter-spacing:-.035em; }
 .validation-section > strong { display:block; margin-bottom:.35rem; font-size:.82rem; }
 .validation-secondary { margin-top:.75rem; }
 .validation-secondary summary { cursor:pointer; color:var(--green); font-size:.82rem; font-weight:700; }
+.validation-filenames { max-height:220px; margin:.5rem 0 0; padding-left:1.25rem; overflow:auto; font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; overflow-wrap:anywhere; }
+.validation-warnings { margin:.25rem 0 0; padding-left:1.25rem; color:#765c20; font-size:.78rem; }
+.learner-picker { display:grid; gap:8px; margin-top:18px; }
+.learner-picker legend { margin-bottom:8px; color:var(--muted); font-size:11px; font-weight:700; }
+.learner-mode-choices { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.learner-option { display:flex; align-items:center; gap:9px; min-height:56px; padding:9px 10px; border:1px solid var(--line); border-radius:9px; background:var(--panel); cursor:pointer; }
+.learner-option.active { border-color:var(--green); background:var(--green-pale); box-shadow:inset 3px 0 var(--green); }
+.learner-option input { accent-color:var(--green); margin:0; }
+.learner-select-field { margin-top:2px; }
+.learner-picker select { min-height:40px; padding:8px 10px; border:1px solid #cfddd5; border-radius:9px; background:#fff; color:var(--ink); }
 .learner-picker select:disabled { opacity:.55; }
 @media (max-width:620px) { .workflow-feature-choices { grid-template-columns:1fr; } }
