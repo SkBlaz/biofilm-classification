@@ -44,6 +44,9 @@ services:
       - IMAGINE_INFERENCE_INPUTS=/imagine/inference_inputs
       - IMAGINE_INFERENCE_OUTPUTS=/imagine/inference_outputs
       - IMAGINE_INFERENCE_DATAFILE=/imagine/inference_datafile
+      - IMAGINE_VOXEL_SIZE_X=${IMAGINE_VOXEL_SIZE_X:-0.13}
+      - IMAGINE_VOXEL_SIZE_Y=${IMAGINE_VOXEL_SIZE_Y:-0.13}
+      - IMAGINE_VOXEL_SIZE_Z=${IMAGINE_VOXEL_SIZE_Z:-0.5}
 
   imagine-test-generate-features:
     <<: *base-test-config

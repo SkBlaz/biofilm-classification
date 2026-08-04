@@ -1,6 +1,7 @@
 const form = document.querySelector('#pipelineForm');
 const runButton = document.querySelector('#runButton');
 const stopButton = document.querySelector('#stopButton');
+const resetButton = document.querySelector('#resetButton');
 const formMessage = document.querySelector('#formMessage');
 const pipelineTrack = document.querySelector('#pipelineTrack');
 const fileList = document.querySelector('#fileList');
@@ -84,6 +85,7 @@ function setWorkflow(workflow) {
   document.querySelector('#resultsDir').closest('.field-group').querySelector('small').textContent = ['full', 'features_labelled', 'features_unlabelled'].includes(workflow) ? 'Feature generation replaces existing contents after confirmation.' : workflow === 'train' ? 'Read datafile.tsv and write models in this folder.' : 'Models are read from this folder/models.';
   document.querySelector('#featureFileField').classList.toggle('hidden', ['features_labelled', 'features_unlabelled'].includes(workflow));
   document.querySelector('#modelFields').classList.toggle('hidden', !['full', 'train'].includes(workflow));
+  document.querySelector('#voxelFields').classList.toggle('hidden', workflow === 'train');
   cleanupConfirm.classList.toggle('hidden', !['full', 'features_labelled', 'features_unlabelled'].includes(workflow));
 }
 
@@ -99,6 +101,9 @@ function syncForm(config) {
   document.querySelector('#workers').value = config.workers ?? 4;
   document.querySelector('#topFeatures').value = config.top_features ?? 10;
   document.querySelector('#correlationThreshold').value = config.correlation_threshold ?? 0.8;
+  document.querySelector('#voxelSizeX').value = config.voxel_size_x ?? 0.13;
+  document.querySelector('#voxelSizeY').value = config.voxel_size_y ?? 0.13;
+  document.querySelector('#voxelSizeZ').value = config.voxel_size_z ?? 0.5;
   document.querySelector('#replicationUnit').value = config.replication_unit || 'date';
   document.querySelector('#featureFile').value = config.feature_file || '';
   document.querySelector(`input[name="learner_mode"][value="${config.all_learners ? 'all' : 'single'}"]`).checked = true;
@@ -123,6 +128,9 @@ async function loadDefaults() {
     document.querySelector('#workers').value = config.workers;
     document.querySelector('#topFeatures').value = config.top_features;
     document.querySelector('#correlationThreshold').value = config.correlation_threshold || 0.8;
+    document.querySelector('#voxelSizeX').value = config.voxel_size_x ?? 0.13;
+    document.querySelector('#voxelSizeY').value = config.voxel_size_y ?? 0.13;
+    document.querySelector('#voxelSizeZ').value = config.voxel_size_z ?? 0.5;
     document.querySelector('#learner').value = config.learner || 'rf';
     const workflowInput = document.querySelector(`input[name="workflow"][value="${config.workflow}"]`);
     if (workflowInput) {
@@ -297,6 +305,9 @@ function configFromForm() {
     workers: Number(value('workers')),
     top_features: Number(value('topFeatures')),
     correlation_threshold: Number(value('correlationThreshold')),
+    voxel_size_x: Number(value('voxelSizeX')),
+    voxel_size_y: Number(value('voxelSizeY')),
+    voxel_size_z: Number(value('voxelSizeZ')),
     replication_unit: document.querySelector('#replicationUnit').value,
     feature_file: value('featureFile'),
     all_learners: document.querySelector('input[name="learner_mode"]:checked').value === 'all',
@@ -308,7 +319,12 @@ function configFromForm() {
 }
 
 function renderValidation(report) {
-  if (!report) return;
+  if (!report) {
+    validationPanel.classList.remove('is-invalid', 'is-valid');
+    validationMessage.textContent = 'Input validation runs before processing.';
+    validationDetails.innerHTML = '';
+    return;
+  }
   const images = report.images || {};
   const features = report.features || {};
   validationPanel.classList.toggle('is-invalid', report.ok === false);
@@ -510,6 +526,10 @@ function renderState(nextState) {
   hardwareDefaultsButton.disabled = running;
   runButton.classList.toggle('hidden', running);
   stopButton.classList.toggle('hidden', !running);
+  resetButton.classList.toggle('hidden', nextState.status === 'idle');
+  if (nextState.status === 'idle' && previousRunStatus && previousRunStatus !== 'idle') {
+    preview.innerHTML = '<div class="preview-placeholder"><span>＋</span><p>Select a file to inspect it.</p><small>Tables, plots, and HTML visualizations open here.</small></div>';
+  }
   formMessage.classList.toggle('success', !running && nextState.status === 'complete');
   if (!running && nextState.status === 'complete') formMessage.textContent = 'Pipeline complete. Select an output file to inspect it.';
   if (nextState.status === 'failed' && nextState.error) formMessage.textContent = nextState.error;
@@ -591,6 +611,20 @@ stopButton.addEventListener('click', async () => {
   stopButton.disabled = true;
   try { await post('/api/stop'); } catch (error) { formMessage.textContent = error.message; }
   stopButton.disabled = false;
+});
+
+resetButton.addEventListener('click', async () => {
+  resetButton.disabled = true;
+  try {
+    const resetState = await post('/api/reset');
+    renderState(resetState);
+    formMessage.classList.remove('success');
+    formMessage.textContent = 'Run cleared. MicroICS is ready to start again.';
+  } catch (error) {
+    formMessage.textContent = error.message;
+  } finally {
+    resetButton.disabled = false;
+  }
 });
 
 document.querySelector('#refreshButton').addEventListener('click', () => poll(true));

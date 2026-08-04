@@ -3,13 +3,26 @@
 from __future__ import annotations
 
 import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from gui.app import default_config, folder_status, generated_feature_path, gui_feature_validation_path, receive_upload, validate_config
+from gui.app import (
+    command_for,
+    create_env,
+    default_config,
+    folder_status,
+    generated_feature_path,
+    gui_feature_validation_path,
+    receive_upload,
+    reset_pipeline,
+    runtime,
+    state,
+    validate_config,
+)
 
 
 class TestFolderStatus(unittest.TestCase):
@@ -186,6 +199,111 @@ class TestCleanupValidation(unittest.TestCase):
 
         self.assertEqual(path, Path("/tmp/microics-results/gui_feature_validation.json"))
 
+    def test_voxel_dimensions_are_validated_and_written_to_the_run_environment(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            images = Path(temporary_directory) / "images"
+            results = Path(temporary_directory) / "results"
+            images.mkdir()
+            config = validate_config(
+                {
+                    "workflow": "features_labelled",
+                    "training_images": str(images),
+                    "results_dir": str(results),
+                    "voxel_size_x": "0.2",
+                    "voxel_size_y": 0.3,
+                    "voxel_size_z": 0.7,
+                }
+            )
+
+            env_path = Path(create_env(config))
+            try:
+                env_text = env_path.read_text(encoding="utf-8")
+            finally:
+                os.unlink(env_path)
+
+            self.assertEqual((config["voxel_size_x"], config["voxel_size_y"], config["voxel_size_z"]), (0.2, 0.3, 0.7))
+            self.assertIn('IMAGINE_VOXEL_SIZE_X="0.2"', env_text)
+            self.assertIn('IMAGINE_VOXEL_SIZE_Y="0.3"', env_text)
+            self.assertIn('IMAGINE_VOXEL_SIZE_Z="0.7"', env_text)
+
+    def test_voxel_dimensions_must_be_positive(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            images = Path(temporary_directory)
+
+            with self.assertRaisesRegex(ValueError, "Voxel size Z must be a positive number"):
+                validate_config(
+                    {
+                        "workflow": "features_labelled",
+                        "training_images": str(images),
+                        "results_dir": str(images / "results"),
+                        "voxel_size_z": 0,
+                    }
+                )
+
+
+class TestRunReset(unittest.TestCase):
+    def test_docker_step_uses_a_unique_run_container_name(self):
+        command = command_for("/tmp/run.env", ["1", "datafile.tsv", "10", "generate_features"], {}, "microics-run-id")
+
+        self.assertEqual(
+            command,
+            [
+                "docker",
+                "compose",
+                "--env-file",
+                "/tmp/run.env",
+                "run",
+                "--rm",
+                "--no-TTY",
+                "--name",
+                "microics-run-id",
+                "imagine",
+                "1",
+                "datafile.tsv",
+                "10",
+                "generate_features",
+            ],
+        )
+
+    def test_reset_terminates_active_process_and_returns_to_ready_state(self):
+        process = object()
+        original_state = dict(state)
+        original_runtime = dict(runtime)
+        try:
+            state.update(
+                {
+                    "status": "running",
+                    "steps": [{"id": "features", "status": "running"}],
+                    "logs": ["working"],
+                    "artifacts": [{"path": "partial.tsv"}],
+                    "artifact_roots": {"results": "/tmp/results"},
+                    "validation": {"ok": True},
+                }
+            )
+            runtime.update({"process": process, "active_run_id": "old-run", "stop_requested": False})
+
+            runtime["container_name"] = "microics-old-run"
+            with (
+                patch("gui.app.terminate_process") as terminate,
+                patch("gui.app.remove_run_container") as remove_container,
+            ):
+                self.assertTrue(reset_pipeline())
+
+            terminate.assert_called_once_with(process, force=True)
+            remove_container.assert_called_once_with("microics-old-run")
+            self.assertEqual(state["status"], "idle")
+            self.assertEqual(state["steps"], [])
+            self.assertEqual(state["logs"], [])
+            self.assertEqual(state["artifacts"], [])
+            self.assertIsNone(state["validation"])
+            self.assertEqual(state["progress"]["label"], "Ready")
+            self.assertIsNone(runtime["active_run_id"])
+        finally:
+            state.clear()
+            state.update(original_state)
+            runtime.clear()
+            runtime.update(original_runtime)
+
 
 class TestWorkflowInterface(unittest.TestCase):
     def test_workflow_is_ordered_and_host_monitor_is_removed(self):
@@ -209,11 +327,25 @@ class TestWorkflowInterface(unittest.TestCase):
         self.assertIn('data-learner-mode="single"', html)
         self.assertIn('data-learner-mode="all"', html)
         self.assertIn("Benchmark every algorithm", html)
+        self.assertIn('id="voxelSizeX"', html)
+        self.assertIn('id="voxelSizeY"', html)
+        self.assertIn('id="voxelSizeZ"', html)
+        self.assertIn('id="resetButton"', html)
+        self.assertIn('<img src="/logo.png" alt="MicroICS logo">', html)
+        self.assertIn("filter:none", (Path(__file__).parent / "gui" / "styles.css").read_text(encoding="utf-8"))
         self.assertIn("Filenames found", javascript)
         self.assertIn("<strong>Images per label</strong>", javascript)
         self.assertIn('<details class="validation-secondary">', javascript)
         self.assertIn("<summary>Images per label per date</summary>", javascript)
         self.assertEqual(default_config()["workflow"], "features_labelled")
+        self.assertEqual(
+            (
+                default_config()["voxel_size_x"],
+                default_config()["voxel_size_y"],
+                default_config()["voxel_size_z"],
+            ),
+            (0.13, 0.13, 0.5),
+        )
 
 
 if __name__ == "__main__":

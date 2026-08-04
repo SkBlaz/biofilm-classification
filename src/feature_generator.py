@@ -1,6 +1,7 @@
 import argparse
 import logging
-import os.path
+import math
+import os
 import warnings
 
 import matplotlib.pyplot as plt
@@ -31,9 +32,28 @@ logger.addHandler(ch)
 
 CONNECTION_KERNEL = np.ones((3, 3), dtype=np.int32)
 
-# Constants
-voxel_size = 0.13 * 0.13 * 0.5
-pixel_area = 0.13**2
+DEFAULT_VOXEL_DIMENSIONS = (0.13, 0.13, 0.5)
+
+
+def read_voxel_dimensions(environ=None) -> tuple[float, float, float]:
+    """Read positive X/Y/Z voxel dimensions in micrometres from the environment."""
+    environ = os.environ if environ is None else environ
+    dimensions = []
+    for axis, default in zip(("X", "Y", "Z"), DEFAULT_VOXEL_DIMENSIONS):
+        name = f"IMAGINE_VOXEL_SIZE_{axis}"
+        try:
+            value = float(environ.get(name, default))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} must be a positive number") from exc
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{name} must be a positive number")
+        dimensions.append(value)
+    return tuple(dimensions)
+
+
+voxel_size_x, voxel_size_y, voxel_size_z = read_voxel_dimensions()
+voxel_size = voxel_size_x * voxel_size_y * voxel_size_z
+pixel_area = voxel_size_x * voxel_size_y
 
 
 def rgb2gray(rgb):
@@ -385,4 +405,10 @@ if __name__ == "__main__":
     parser.add_argument("-f", "--file", help="File name", required=True)
     parser.add_argument("-of", "--outfolder", help="Output folder", required=True)
     args = vars(parser.parse_args())
+    logger.info(
+        "Using voxel dimensions X=%s µm, Y=%s µm, Z=%s µm",
+        voxel_size_x,
+        voxel_size_y,
+        voxel_size_z,
+    )
     segment(args["file"], args["outfolder"])

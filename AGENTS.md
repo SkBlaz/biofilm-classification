@@ -60,6 +60,7 @@ Keep newest entry at the top.
 
 | Date (UTC) | Bot/Agent | PR/Commit | AGENTS.md update summary |
 |---|---|---|---|
+| 2026-08-04 | Codex | current change | GUI voxel-dimension propagation, visible logo treatment, and stop-versus-reset recovery behavior documented. |
 | 2026-08-03 | Codex | current change | Feature-table picker, legacy generated-value imputation contract, convention-free unlabelled preflight, prominent learner scope, and bounded all-learner resources documented. |
 | 2026-07-29 | Codex | current change | Sequential GUI workflow, complete external-table contract, imaging-position replication, Windows diagnostics, and writable generated-feature validation documented. |
 | 2026-07-21 | Codex | current change | Unix GUI launcher now diagnoses sudo misuse and Docker socket access. |

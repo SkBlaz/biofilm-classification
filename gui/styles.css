@@ -295,3 +295,23 @@ h1 { margin-bottom:10px; font-size:31px; letter-spacing:-.035em; }
 .learner-picker select { min-height:40px; padding:8px 10px; border:1px solid #cfddd5; border-radius:9px; background:#fff; color:var(--ink); }
 .learner-picker select:disabled { opacity:.55; }
 @media (max-width:620px) { .workflow-feature-choices { grid-template-columns:1fr; } }
+
+/* Physical calibration and recoverable run controls. */
+.brand .brand-logo { display:grid; place-items:center; width:105px; height:43px; margin:0; padding:4px 7px; overflow:hidden; border:1px solid rgba(255,255,255,.22); border-radius:10px; background:#fff; box-shadow:0 5px 16px rgba(0,0,0,.16); }
+.brand .brand-logo img { display:block; width:91px; height:auto; filter:none; }
+.voxel-picker { margin-top:20px; padding:14px 15px 13px; border:1px solid #dbe9e1; border-radius:12px; background:rgba(246,251,248,.86); }
+.voxel-picker legend { display:flex; align-items:center; gap:6px; padding:0 4px; color:#51635a; font-size:10px; font-weight:800; letter-spacing:.04em; }
+.voxel-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.voxel-grid .field-group { min-width:0; margin-top:4px; }
+.voxel-grid .field-group label { text-transform:none; }
+.voxel-picker > small { display:block; margin-top:8px; color:var(--muted); font-size:10px; }
+.reset-button { min-height:34px; white-space:nowrap; }
+@media (max-width:620px) {
+  .brand .brand-logo { width:88px; height:37px; }
+  .brand .brand-logo img { width:76px; }
+  .panel-heading { align-items:flex-start; gap:12px; }
+  .panel-heading-actions { flex-wrap:wrap; justify-content:flex-end; gap:6px; }
+  .eta-chip { order:3; }
+  .inspector { grid-template-columns:1fr; }
+  .file-list { max-height:210px; border-right:0; border-bottom:1px solid var(--line); }
+}

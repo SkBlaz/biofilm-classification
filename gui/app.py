@@ -31,14 +31,22 @@ except ModuleNotFoundError:  # Running gui/app.py directly puts gui/, not the re
 
 ROOT = Path(__file__).resolve().parents[1]
 GUI_DIR = Path(__file__).resolve().parent
-VERSION = "0.5.1"
+VERSION = "0.6.0"
 MAX_LOG_LINES = 500
 MAX_ARTIFACTS = 450
+DEFAULT_VOXEL_DIMENSIONS = {"voxel_size_x": 0.13, "voxel_size_y": 0.13, "voxel_size_z": 0.5}
 UPLOAD_ROOT = ROOT / ".gui_uploads"
 GUI_LOG = ROOT / "microics-gui.log"
 
 state_lock = threading.RLock()
-runtime = {"process": None, "stop_requested": False, "progress_context": None}
+runtime = {
+    "process": None,
+    "stop_requested": False,
+    "progress_context": None,
+    "active_run_id": None,
+    "thread": None,
+    "container_name": None,
+}
 state = {
     "status": "idle",
     "current_step": None,
@@ -113,6 +121,7 @@ def default_config() -> dict[str, object]:
         "memory_limit": None,
         "replication_unit": "date",
         "feature_file": "",
+        **DEFAULT_VOXEL_DIMENSIONS,
     }
 
 
@@ -236,9 +245,11 @@ def folder_status(value: str | None) -> dict[str, object]:
     }
 
 
-def add_log(message: str):
+def add_log(message: str, run_id: str | None = None):
     entry = f"[{now()}] {message}"
     with state_lock:
+        if run_id is not None and runtime["active_run_id"] != run_id:
+            return
         state["logs"].append(entry)
         state["logs"] = state["logs"][-MAX_LOG_LINES:]
     try:
@@ -491,6 +502,17 @@ def validate_config(raw: dict) -> dict:
     if not 0 < correlation_threshold <= 1:
         raise ValueError("Correlation threshold must be between 0 and 1")
 
+    voxel_dimensions = {}
+    for axis in ("x", "y", "z"):
+        key = f"voxel_size_{axis}"
+        try:
+            dimension = float(config.get(key, DEFAULT_VOXEL_DIMENSIONS[key]))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Voxel size {axis.upper()} must be a positive number") from exc
+        if not math.isfinite(dimension) or dimension <= 0:
+            raise ValueError(f"Voxel size {axis.upper()} must be a positive number")
+        voxel_dimensions[key] = dimension
+
     cpu_limit = config.get("cpu_limit")
     if cpu_limit is None or cpu_limit == "":
         cpu_limit = None
@@ -552,6 +574,7 @@ def validate_config(raw: dict) -> dict:
         "replication_unit": replication_unit,
         "feature_file": feature_file,
         "resume": resume,
+        **voxel_dimensions,
     }
 
 
@@ -580,6 +603,9 @@ def create_env(config: dict) -> str:
         "IMAGINE_INFERENCE_INPUTS": config["inference_images"],
         "IMAGINE_INFERENCE_OUTPUTS": config["inference_output"],
         "IMAGINE_INFERENCE_DATAFILE": config["results_dir"],
+        "IMAGINE_VOXEL_SIZE_X": config["voxel_size_x"],
+        "IMAGINE_VOXEL_SIZE_Y": config["voxel_size_y"],
+        "IMAGINE_VOXEL_SIZE_Z": config["voxel_size_z"],
     }
     handle = tempfile.NamedTemporaryFile("w", prefix="microics-", suffix=".env", delete=False)
     try:
@@ -591,8 +617,15 @@ def create_env(config: dict) -> str:
     return handle.name
 
 
-def command_for(env_file: str, args: list[str], config: dict | None = None) -> list[str]:
+def command_for(
+    env_file: str,
+    args: list[str],
+    config: dict | None = None,
+    container_name: str | None = None,
+) -> list[str]:
     command = ["docker", "compose", "--env-file", env_file, "run", "--rm", "--no-TTY"]
+    if container_name:
+        command.extend(["--name", container_name])
     if config and config.get("cpu_limit"):
         command.extend(["--cpus", str(config["cpu_limit"])])
     if config and config.get("memory_limit"):
@@ -600,7 +633,7 @@ def command_for(env_file: str, args: list[str], config: dict | None = None) -> l
     return [*command, "imagine", *args]
 
 
-def terminate_process(process: subprocess.Popen):
+def terminate_process(process: subprocess.Popen, force: bool = False):
     if process.poll() is not None:
         return
     try:
@@ -610,12 +643,47 @@ def terminate_process(process: subprocess.Popen):
             process.terminate()
     except ProcessLookupError:
         pass
+    if not force:
+        return
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            if os.name != "nt":
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+        except ProcessLookupError:
+            pass
 
 
-def execute_step(step_id: str, label: str, command: list[str]) -> bool:
+def remove_run_container(container_name: str | None):
+    """Remove only the uniquely named one-off container owned by the current GUI run."""
+    if not container_name:
+        return
+    try:
+        subprocess.run(
+            ["docker", "rm", "--force", container_name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def run_is_active(run_id: str) -> bool:
+    with state_lock:
+        return runtime["active_run_id"] == run_id
+
+
+def execute_step(step_id: str, label: str, command: list[str], run_id: str) -> bool:
+    if not run_is_active(run_id):
+        return False
     set_step(step_id, "running", "Running")
     update_progress(step_id, "Starting")
-    add_log(f"$ {' '.join(command)}")
+    add_log(f"$ {' '.join(command)}", run_id)
     try:
         process = subprocess.Popen(
             command,
@@ -632,17 +700,25 @@ def execute_step(step_id: str, label: str, command: list[str]) -> bool:
         set_step(step_id, "failed", str(exc))
         with state_lock:
             state["error"] = f"{label} could not start: {exc}"
-        add_log(f"Could not start {label}: {exc}")
+        add_log(f"Could not start {label}: {exc}", run_id)
         return False
 
     with state_lock:
-        runtime["process"] = process
+        active = runtime["active_run_id"] == run_id
+        if active:
+            runtime["process"] = process
+    if not active:
+        terminate_process(process)
+        return False
     try:
         assert process.stdout is not None
         for line in process.stdout:
+            if not run_is_active(run_id):
+                terminate_process(process)
+                break
             line = line.rstrip()
             if line:
-                add_log(line)
+                add_log(line, run_id)
                 update_progress(step_id, line)
             with state_lock:
                 if runtime["stop_requested"]:
@@ -650,26 +726,28 @@ def execute_step(step_id: str, label: str, command: list[str]) -> bool:
         exit_code = process.wait()
     finally:
         with state_lock:
-            runtime["process"] = None
+            if runtime["active_run_id"] == run_id and runtime["process"] is process:
+                runtime["process"] = None
 
     with state_lock:
-        stopped = runtime["stop_requested"]
+        stopped = runtime["stop_requested"] or runtime["active_run_id"] != run_id
     if stopped:
-        set_step(step_id, "cancelled", "Stopped")
+        if run_is_active(run_id):
+            set_step(step_id, "cancelled", "Stopped")
         return False
     if exit_code:
         set_step(step_id, "failed", f"Exited with code {exit_code}")
         with state_lock:
             state["error"] = f"{label} failed with exit code {exit_code}"
-        add_log(f"{label} failed with exit code {exit_code}")
+        add_log(f"{label} failed with exit code {exit_code}", run_id)
         return False
     set_step(step_id, "complete", "Complete")
     update_progress(step_id, complete=True)
-    add_log(f"{label} complete")
+    add_log(f"{label} complete", run_id)
     return True
 
 
-def refresh_artifacts(config: dict | None):
+def refresh_artifacts(config: dict | None, run_id: str | None = None):
     if not config:
         return
     roots = {"results": Path(config["results_dir"])}
@@ -707,6 +785,8 @@ def refresh_artifacts(config: dict | None):
         if len(artifacts) >= MAX_ARTIFACTS:
             break
     with state_lock:
+        if run_id is not None and runtime["active_run_id"] != run_id:
+            return
         state["artifacts"] = artifacts
         state["artifact_roots"] = {key: str(value) for key, value in roots.items()}
 
@@ -726,16 +806,17 @@ def artifact_kind(path: Path) -> str:
 refresh_artifacts(default_config())
 
 
-def run_pipeline(config: dict):
+def run_pipeline(config: dict, run_id: str):
     env_file = create_env(config)
+    container_name = f"microics-{run_id}"
     try:
         if config.get("feature_file") and config["workflow"] in {"full", "train", "inference"}:
             destination = Path(config["results_dir"]) / "datafile.tsv"
             source = Path(config["feature_file"])
             if source.resolve() != destination.resolve():
                 shutil.copy2(source, destination)
-            add_log(f"Using validated feature table: {destination}")
-        add_log("Resuming benchmark from saved partial evaluations" if config.get("resume") else "Pipeline started")
+            add_log(f"Using validated feature table: {destination}", run_id)
+        add_log("Resuming benchmark from saved partial evaluations" if config.get("resume") else "Pipeline started", run_id)
         steps = [("prepare", "Prepare Docker image", ["docker", "compose", "--env-file", env_file, "build", "imagine"])]
         if config["workflow"] in {"full", "train", "features_labelled", "features_unlabelled"}:
             steps.extend(
@@ -753,6 +834,7 @@ def run_pipeline(config: dict):
                                 *(["--unlabelled"] if config["workflow"] == "features_unlabelled" else []),
                             ],
                             config,
+                            container_name,
                         ),
                     ),
                     (
@@ -772,6 +854,7 @@ def run_pipeline(config: dict):
                                 *(["--all_learners"] if config["all_learners"] else []),
                             ],
                             config,
+                            container_name,
                         ),
                     ),
                 ]
@@ -811,16 +894,21 @@ def run_pipeline(config: dict):
                             "inference",
                         ],
                         config,
+                        container_name,
                     ),
                 )
             )
 
         with state_lock:
+            if runtime["active_run_id"] != run_id:
+                return
             state["steps"] = [{"id": step_id, "label": label, "status": "pending", "detail": "Waiting"} for step_id, label, _ in steps]
             state["progress"] = {"completed": 0, "total": len(steps), "percent": 0, "label": "Preparing pipeline"}
             runtime["progress_context"] = progress_context(config, steps)
         for step_id, label, command in steps:
-            if not execute_step(step_id, label, command):
+            if not execute_step(step_id, label, command, run_id):
+                if not run_is_active(run_id):
+                    return
                 report_path = gui_feature_validation_path(config)
                 try:
                     report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -828,10 +916,10 @@ def run_pipeline(config: dict):
                         state["validation"] = {**(state.get("validation") or {}), **report}
                 except (OSError, json.JSONDecodeError):
                     pass
-                refresh_artifacts(config)
+                refresh_artifacts(config, run_id)
                 with state_lock:
                     cancelled = runtime["stop_requested"]
-                add_log("Pipeline stopped" if cancelled else "Pipeline stopped after an error")
+                add_log("Pipeline stopped" if cancelled else "Pipeline stopped after an error", run_id)
                 break
             if step_id == "validate":
                 report_path = gui_feature_validation_path(config)
@@ -840,11 +928,13 @@ def run_pipeline(config: dict):
                     with state_lock:
                         state["validation"] = {**(state.get("validation") or {}), **report}
                 except (OSError, json.JSONDecodeError) as exc:
-                    add_log(f"Could not load feature validation report: {exc}")
-            refresh_artifacts(config)
+                    add_log(f"Could not load feature validation report: {exc}", run_id)
+            refresh_artifacts(config, run_id)
         else:
-            add_log("Pipeline complete")
+            add_log("Pipeline complete", run_id)
         with state_lock:
+            if runtime["active_run_id"] != run_id:
+                return
             if runtime["stop_requested"]:
                 state["status"] = "cancelled"
             elif any(step["status"] == "failed" for step in state["steps"]):
@@ -852,17 +942,23 @@ def run_pipeline(config: dict):
             else:
                 state["status"] = "complete"
             state["finished_at"] = now()
-        refresh_artifacts(config)
+        refresh_artifacts(config, run_id)
     except Exception as exc:  # Keep failures visible in the UI rather than killing the worker silently.
         with state_lock:
+            if runtime["active_run_id"] != run_id:
+                return
             state["status"] = "failed"
             state["error"] = str(exc)
             state["finished_at"] = now()
-        add_log(f"Unexpected error: {exc}")
+        add_log(f"Unexpected error: {exc}", run_id)
     finally:
         with state_lock:
-            runtime["process"] = None
-            runtime["progress_context"] = None
+            if runtime["active_run_id"] == run_id:
+                runtime["process"] = None
+                runtime["progress_context"] = None
+                runtime["active_run_id"] = None
+                runtime["thread"] = None
+                runtime["container_name"] = None
         try:
             os.unlink(env_file)
         except OSError:
@@ -893,6 +989,9 @@ def start_pipeline(raw_config: dict) -> tuple[bool, str | None]:
         pass
     with state_lock:
         runtime["stop_requested"] = False
+        run_id = uuid.uuid4().hex
+        runtime["active_run_id"] = run_id
+        runtime["container_name"] = f"microics-{run_id}"
         state.update(
             {
                 "status": "running",
@@ -906,9 +1005,12 @@ def start_pipeline(raw_config: dict) -> tuple[bool, str | None]:
                 "progress": {"completed": 0, "total": 0, "percent": 0, "label": "Preparing pipeline"},
                 "logs": [],
                 "artifacts": [],
+                "artifact_roots": {},
             }
         )
-    thread = threading.Thread(target=run_pipeline, args=(config,), daemon=True)
+    thread = threading.Thread(target=run_pipeline, args=(config, run_id), daemon=True)
+    with state_lock:
+        runtime["thread"] = thread
     thread.start()
     return True, None
 
@@ -919,10 +1021,49 @@ def stop_pipeline() -> bool:
             return False
         runtime["stop_requested"] = True
         process = runtime["process"]
+        container_name = runtime["container_name"]
     if process:
-        terminate_process(process)
+        terminate_process(process, force=True)
+    remove_run_container(container_name)
     add_log("Stop requested")
     return True
+
+
+def reset_pipeline() -> bool:
+    """Stop any active work and clear transient run state without changing the form configuration."""
+    with state_lock:
+        had_run = state["status"] != "idle" or bool(state["steps"] or state["logs"])
+        process = runtime["process"]
+        container_name = runtime["container_name"]
+        runtime.update(
+            {
+                "process": None,
+                "stop_requested": True,
+                "progress_context": None,
+                "active_run_id": None,
+                "thread": None,
+                "container_name": None,
+            }
+        )
+        state.update(
+            {
+                "status": "idle",
+                "current_step": None,
+                "started_at": None,
+                "finished_at": None,
+                "error": None,
+                "validation": None,
+                "steps": [],
+                "progress": {"completed": 0, "total": 0, "percent": 0, "label": "Ready"},
+                "logs": [],
+                "artifacts": [],
+                "artifact_roots": {},
+            }
+        )
+    if process:
+        terminate_process(process, force=True)
+    remove_run_container(container_name)
+    return had_run
 
 
 def snapshot(refresh=False) -> dict:
@@ -1087,6 +1228,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/stop":
             stop_pipeline()
+            json_response(self, snapshot())
+            return
+        if parsed.path == "/api/reset":
+            reset_pipeline()
             json_response(self, snapshot())
             return
         self.send_error(HTTPStatus.NOT_FOUND)

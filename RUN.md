@@ -61,11 +61,17 @@ The learner scope is a separate, prominent choice between **One learner** and **
 worker count also limits nested model searches; dimensionality reduction is computed once per fold and reused by all
 learners to keep large all-learner runs within predictable CPU and memory bounds.
 
+Set **Voxel dimensions (µm)** before any feature-generating workflow. X, Y, and Z default to `0.13`, `0.13`, and `0.5`
+µm, respectively. The values are passed to labelled generation, unlabelled generation, and inference-time feature
+generation so physical-unit features use the acquisition scale entered in the GUI.
+
 Feature generation clears the selected results folder, so the GUI asks for confirmation when it is not empty.
 Model training reuses the complete table and does not clear the folder. The live pipeline shows the active Docker step
 with a green glow. Generated TSV files, plots, images, and HTML
 visualizations can be selected in the output browser while or after a run. Use the **Stop** button to terminate a running
-Docker step. Pass `--no-browser` to start the server without opening a browser automatically. On Windows, the launcher
+Docker step while retaining its status and logs. Use **Reset run** to terminate active work, clear the current run state,
+and return the interface to Ready without restarting the GUI; files already written to the output folder are not deleted.
+Pass `--no-browser` to start the server without opening a browser automatically. On Windows, the launcher
 keeps its terminal open when the GUI stops and the latest pipeline output remains available in `microics-gui.log`.
 
 ## Generating and running the containers
@@ -178,6 +184,9 @@ The two (toy example) commands below showcase the slight difference between runn
 
 * IMAGINE_IMAGES=./my_folder/test_images
 * IMAGINE_RESULTS=./my_folder/test_results
+* IMAGINE_VOXEL_SIZE_X=0.13
+* IMAGINE_VOXEL_SIZE_Y=0.13
+* IMAGINE_VOXEL_SIZE_Z=0.5
 
 For Windows users:
 * IMAGINE_IMAGES=/c/my_folder/test_images

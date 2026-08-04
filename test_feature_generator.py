@@ -16,6 +16,7 @@ from feature_generator import (
     get_cell_count,
     get_homogenity,
     get_transition_matrix,
+    read_voxel_dimensions,
     rgb2gray,
 )
 
@@ -67,6 +68,26 @@ class TestRgb2Gray(unittest.TestCase):
         # So gray value should be 100 * 1.0 = 100
         expected_value = 100 * (0.2989 + 0.5870 + 0.1140)
         self.assertTrue(np.allclose(gray, expected_value, rtol=0.01))
+
+
+class TestVoxelDimensions(unittest.TestCase):
+    def test_defaults_match_the_legacy_physical_scale(self):
+        self.assertEqual(read_voxel_dimensions({}), (0.13, 0.13, 0.5))
+
+    def test_custom_dimensions_are_read_per_axis(self):
+        dimensions = read_voxel_dimensions(
+            {
+                "IMAGINE_VOXEL_SIZE_X": "0.21",
+                "IMAGINE_VOXEL_SIZE_Y": "0.22",
+                "IMAGINE_VOXEL_SIZE_Z": "0.8",
+            }
+        )
+
+        self.assertEqual(dimensions, (0.21, 0.22, 0.8))
+
+    def test_invalid_dimension_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "IMAGINE_VOXEL_SIZE_Y must be a positive number"):
+            read_voxel_dimensions({"IMAGINE_VOXEL_SIZE_Y": "nan"})
 
 
 class TestCalculateSpatialSpreading(unittest.TestCase):

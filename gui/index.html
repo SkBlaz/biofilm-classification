@@ -4,12 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MicroICS Pipeline</title>
-  <link rel="stylesheet" href="/styles.css?v=20260803-1">
+  <link rel="stylesheet" href="/styles.css?v=20260804-1">
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <picture><source media="(prefers-color-scheme: dark)" srcset="/logo_dark.png"><img src="/logo.png" alt="MicroICS"></picture>
+      <span class="brand-logo"><img src="/logo.png" alt="MicroICS logo"></span>
       <div><strong>MicroICS</strong><span>3D biofilm classification · <span id="versionLabel">v—</span></span></div>
     </div>
     <div class="connection"><span class="connection-dot"></span><span id="connectionText">Ready</span></div>
@@ -61,6 +61,15 @@
           <div class="field-group"><div class="field-label"><label for="topFeatures">Top features</label><button class="help-button" data-help-title="Top features" data-help-text="The number of highest-ranked features used for the benchmark visualizations and downstream analysis. 10 is a reasonable starting point." type="button" aria-label="Help for Top features">?</button></div><input id="topFeatures" name="top_features" type="number" min="1" max="500" value="10"></div>
           <div class="field-group"><div class="field-label"><label for="correlationThreshold">Correlation |r| threshold</label><button class="help-button" data-help-title="Correlation threshold" data-help-text="Features with absolute correlation above this value are grouped in the redundancy report. Default is 0.8." type="button" aria-label="Help for Correlation threshold">?</button></div><input id="correlationThreshold" name="correlation_threshold" type="number" min="0.01" max="1" step="0.01" value="0.8"></div>
         </div>
+        <fieldset class="voxel-picker" id="voxelFields">
+          <legend>Voxel dimensions (µm) <button class="help-button" data-help-title="Voxel dimensions" data-help-text="Enter the physical width (X), height (Y), and depth (Z) of one image voxel in micrometres. MicroICS uses these values for features measured in physical units. The defaults are X 0.13, Y 0.13, and Z 0.5 µm." type="button" aria-label="Help for Voxel dimensions">?</button></legend>
+          <div class="voxel-grid">
+            <div class="field-group"><label for="voxelSizeX">X (µm)</label><input id="voxelSizeX" name="voxel_size_x" type="number" min="0" step="any" value="0.13" inputmode="decimal" required></div>
+            <div class="field-group"><label for="voxelSizeY">Y (µm)</label><input id="voxelSizeY" name="voxel_size_y" type="number" min="0" step="any" value="0.13" inputmode="decimal" required></div>
+            <div class="field-group"><label for="voxelSizeZ">Z (µm)</label><input id="voxelSizeZ" name="voxel_size_z" type="number" min="0" step="any" value="0.5" inputmode="decimal" required></div>
+          </div>
+          <small>Physical voxel size used during feature generation and inference.</small>
+        </fieldset>
         <div class="field-row compact-row">
           <div class="field-group"><div class="field-label"><label for="replicationUnit">Unit of replication</label><button class="help-button" data-help-title="Unit of replication" data-help-text="Keeps all images from one imaging position, well, plate, or imaging date together during cross-validation. Choose the independent experimental unit decided at the bench." type="button" aria-label="Help for Unit of replication">?</button></div><select id="replicationUnit" name="replication_unit"><option value="date" selected>Date</option><option value="plate">Plate</option><option value="well">Well</option><option value="position">Imaging position (pos)</option></select></div>
           <div class="field-group" id="featureFileField"><div class="field-label"><label for="featureFile">Complete feature table (optional)</label><button class="help-button" data-help-title="Complete feature table" data-help-text="MicroICS uses this table as-is and does not extract or join features automatically. It must already contain sampleName, label for training, all desired MicroICS and external feature columns, and one row per image." type="button" aria-label="Help for Complete feature table">?</button></div><div class="path-picker"><input id="featureFile" name="feature_file" type="text" spellcheck="false" placeholder="/path/to/complete_features.tsv"><label class="file-button" for="featureFilePicker">Choose file</label><input class="hidden" id="featureFilePicker" type="file" accept=".tsv,.txt,text/tab-separated-values,text/plain"></div><small>Use a generated MicroICS datafile, optionally with external columns already appended.</small><small class="file-picker-status" id="featureFileStatus"></small></div>
@@ -76,7 +85,7 @@
     </section>
 
     <section class="results-panel">
-      <div class="panel-heading"><div><div class="eyebrow">Live run</div><h2>Pipeline progress <span class="status-warning hidden" id="statusWarning" title="Open the run log for details">!</span></h2></div><div class="panel-heading-actions"><span class="eta-chip" id="etaLabel">ETA —</span><button class="icon-button" id="refreshButton" type="button" title="Refresh results" aria-label="Refresh results">↻</button></div></div>
+      <div class="panel-heading"><div><div class="eyebrow">Live run</div><h2>Pipeline progress <span class="status-warning hidden" id="statusWarning" title="Open the run log for details">!</span></h2></div><div class="panel-heading-actions"><span class="eta-chip" id="etaLabel">ETA —</span><button class="button tertiary reset-button hidden" id="resetButton" type="button" title="Stop active work and clear this run">↻ Reset run</button><button class="icon-button" id="refreshButton" type="button" title="Refresh results" aria-label="Refresh results">↻</button></div></div>
       <div class="progress-panel" aria-live="polite">
         <div class="progress-labels"><span id="progressLabel">Ready to run</span><strong id="progressValue">0%</strong></div>
         <div class="progress-bar" id="progressBar" role="progressbar" aria-label="Pipeline progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="progress-fill" id="progressFill"></span></div>
@@ -120,6 +129,6 @@
       <button class="button primary help-modal-close" id="dismissHelpModal" type="button">Got it</button>
     </div>
   </div>
-  <script src="/app.js?v=20260803-1"></script>
+  <script src="/app.js?v=20260804-1"></script>
 </body>
 </html>
