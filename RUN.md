@@ -1,43 +1,27 @@
-# Docker images
-We prepared a Docker image that can be used to run the processing pipeline.
-A Docker image can contain anything; in our case, it contains a Python installation with all required dependencies,
-together with the most important part - the code that actually does image processing for the Imagine project. Make sure you have docker `Docker version 27.0.0` or later.
+# Running MicroICS
 
-Think of a Docker image as a template with pre-defined behavior (the behavior is defined by the image creator). 
-In order to obtain any Docker image, one must first build it. This is achieved by using Dockerfiles (blueprints/recipes),
-simple text files with a specific syntax. One can be found in the same folder as this README.
+MicroICS packages image processing, machine learning, and scientific visualization libraries in a Docker image. A running instance is called a container. This keeps the analysis environment consistent and avoids installing the full Python data-science stack on the host computer.
 
-Once the Dockerfile (the blueprint for the software) is created, the image can be built. The build process creates a piece of executable code.
-However, since images can (vaguely) be considered as templates, it is natural to assume that one can make several instances 
-of such an image - those are called containers. 
-
-## Why use containers?
-The purpose of containerization is to remove the need to install all the software that is required in order to run a 
-specific piece of code - these software are called dependencies. In our case, that code does image processing, 
-machine learning and visualizations. All dependencies are installed within the Docker image so that the user of the image
-does not have to worry about that. 
-
-The only software that one must install in order to create Docker containers for the Imagine project are these:
-- git; to clone the Imagine project repository and obtain the source code
-- docker; to build and run Docker images
-
-Each image can also expose parameters, that the user of the image can specify during the creation of a container. In our 
-case, an example of such parameter is the path to the image folder.
+See the [README installation guide](README.md#what-you-need) for Windows, Linux, and macOS prerequisites. Git is convenient for cloning and updating the repository but is not required when the source is downloaded as a ZIP.
 
 ## Using the local GUI
 
-The repository includes a small local GUI for the Docker pipeline. It needs only Python 3 and Docker; the browser interface
-does not add another Python dependency. From the repository root, run:
+The repository includes a local browser interface for the Docker pipeline. On Windows, double-click the only root-level batch launcher:
+
+```text
+MicroICS.bat
+```
+
+It creates the desktop shortcut, checks or installs Python and the local GUI packages, verifies Docker, and starts the interface. The scientific dependencies remain inside Docker.
+
+On Linux or macOS, run:
 
 ```sh
 bash run_gui.sh
 ```
 
-Run it as your normal user, not with `sudo`. On Linux, if Docker reports a socket permission error, run
+The Unix launcher creates a private `.microics-venv` environment and installs its two local preflight packages on first use. Run it as your normal user, not with `sudo`. On Linux, if Docker reports a socket permission error, run
 `sudo usermod -aG docker "$USER"`, sign out and in, and then retry the command.
-
-Windows users can double-click `MicroICS GUI.bat` (or `run_gui.bat`). To create a desktop shortcut with the MicroICS icon, double-click
-`install_microics_gui.bat` once; it creates **MicroICS GUI** on the desktop. The launchers require Python 3 and Docker Desktop to be running.
 
 The GUI opens at `http://127.0.0.1:8765`. Its options follow the normal analysis order:
 
@@ -71,7 +55,7 @@ with a green glow. Generated TSV files, plots, images, and HTML
 visualizations can be selected in the output browser while or after a run. Use the **Stop** button to terminate a running
 Docker step while retaining its status and logs. Use **Reset run** to terminate active work, clear the current run state,
 and return the interface to Ready without restarting the GUI; files already written to the output folder are not deleted.
-Pass `--no-browser` to start the server without opening a browser automatically. On Windows, the launcher
+Pass `--no-browser` to start the server without opening a browser automatically. On Windows, `MicroICS.bat`
 keeps its terminal open when the GUI stops and the latest pipeline output remains available in `microics-gui.log`.
 
 ## Generating and running the containers

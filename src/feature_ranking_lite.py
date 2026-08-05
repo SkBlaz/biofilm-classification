@@ -665,7 +665,7 @@ def do_classification_simple(
                         prediction_map = ",".join([str(catmap.get(int(x), x)) for x in np.asarray(y_hat)])
                         output = [
                             "RESULT",
-                            re.sub(r"\s+", " ", str(model_for_fold)),
+                            model_name,
                             upsampling,
                             effective_components,
                             i,

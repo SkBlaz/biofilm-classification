@@ -306,6 +306,17 @@ class TestRunReset(unittest.TestCase):
 
 
 class TestWorkflowInterface(unittest.TestCase):
+    def test_windows_has_one_visible_self_preparing_launcher(self):
+        repository = Path(__file__).parent
+        launchers = sorted(path.name for path in repository.glob("*.bat"))
+        launcher = (repository / "MicroICS.bat").read_text(encoding="utf-8")
+
+        self.assertEqual(launchers, ["MicroICS.bat"])
+        self.assertIn("call :create_shortcut", launcher)
+        self.assertIn("winget install --exact --id Python.Python.3.12", launcher)
+        self.assertIn("winget install --exact --id Docker.DockerDesktop", launcher)
+        self.assertIn("gui\\requirements.txt", launcher)
+
     def test_workflow_is_ordered_and_host_monitor_is_removed(self):
         html = (Path(__file__).parent / "gui" / "index.html").read_text(encoding="utf-8")
         javascript = (Path(__file__).parent / "gui" / "app.js").read_text(encoding="utf-8")

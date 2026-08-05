@@ -12,7 +12,7 @@ Use this repository to process 3D biofilm images and run feature generation, ran
 - `src/visualizations/`: visualization modules
 - `test_*.py`: unit tests
 - `run_tests.py`: test runner
-- `run_gui.sh` / `run_gui.bat`: local GUI launchers for Unix-like systems and Windows
+- `run_gui.sh` / `MicroICS.bat`: self-preparing local GUI launchers for Unix-like systems and Windows
 - `src/requirements.docker.txt`: runtime Python dependencies used in Docker
 - `.github/workflows/`: CI workflows (Docker workflows + Ruff)
 - `RUN.md`: usage and Docker execution guide
@@ -60,6 +60,7 @@ Keep newest entry at the top.
 
 | Date (UTC) | Bot/Agent | PR/Commit | AGENTS.md update summary |
 |---|---|---|---|
+| 2026-08-05 | Codex | current change | Single self-preparing Windows launcher, private GUI dependencies, bounded benchmark report names, and cross-platform installation/workflow guidance documented. |
 | 2026-08-04 | Codex | current change | GUI voxel-dimension propagation, visible logo treatment, and stop-versus-reset recovery behavior documented. |
 | 2026-08-03 | Codex | current change | Feature-table picker, legacy generated-value imputation contract, convention-free unlabelled preflight, prominent learner scope, and bounded all-learner resources documented. |
 | 2026-07-29 | Codex | current change | Sequential GUI workflow, complete external-table contract, imaging-position replication, Windows diagnostics, and writable generated-feature validation documented. |

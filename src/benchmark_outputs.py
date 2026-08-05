@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 from pathlib import Path
 
 import matplotlib
@@ -11,6 +13,27 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
+
+MODEL_DISPLAY_NAMES = {
+    "decisiontree": "Decision tree",
+    "dummy": "Majority baseline",
+    "gridsearch": "KNN grid search",
+    "logistic": "Logistic regression",
+    "rf": "Random forest",
+    "xgb": "XGBoost",
+}
+
+
+def _model_report_name(model_name: object, max_length: int = 80) -> tuple[str, str]:
+    """Return readable, filesystem-safe names for current and legacy reports."""
+    raw_name = re.sub(r"\s+", " ", str(model_name)).strip() or "model"
+    display_name = MODEL_DISPLAY_NAMES.get(raw_name, raw_name)
+    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", raw_name).strip("_") or "model"
+    if len(safe_name) > max_length:
+        digest = hashlib.sha256(raw_name.encode("utf-8")).hexdigest()[:12]
+        safe_name = f"{safe_name[: max_length - len(digest) - 1].rstrip('_')}_{digest}"
+        display_name = f"Legacy model {digest}"
+    return display_name, safe_name
 
 
 def _ranking_features(rankings: pd.DataFrame, top_n: int) -> list[str]:
@@ -47,13 +70,13 @@ def write_confusion_matrices(classification_file: str | Path, output_dir: str | 
             continue
         labels = sorted(set(true_values) | set(predictions))
         matrix = confusion_matrix(true_values, predictions, labels=labels)
-        safe_name = "".join(character if character.isalnum() or character in "-_" else "_" for character in str(model_name))
+        display_name, safe_name = _model_report_name(model_name)
         table = pd.DataFrame(matrix, index=labels, columns=labels)
         table.index.name = "true"
         table.to_csv(destination / f"confusion_matrix_{safe_name}.tsv", sep="\t")
         plt.figure(figsize=(max(5, len(labels) * 1.2), max(4, len(labels) * 0.9)))
         sns.heatmap(table, annot=True, fmt="d", cmap="Blues", cbar=False)
-        plt.title(f"Held-out confusion matrix: {model_name}")
+        plt.title(f"Held-out confusion matrix: {display_name}")
         plt.xlabel("Predicted label")
         plt.ylabel("True label")
         plt.tight_layout()

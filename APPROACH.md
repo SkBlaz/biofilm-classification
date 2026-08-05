@@ -1,55 +1,89 @@
-# Algorithmic overview of MicroICS
+# How MicroICS works
 
-There are three main computational components that constitute each run.
+MicroICS converts 3D biofilm microscopy images into measurements, learns which measurements distinguish known biological classes, and applies the trained models to new images. Docker supplies a reproducible scientific environment; users can control it through the graphical interface or directly from the command line.
 
-## Feature construction
-Feature construction aims to facilitate the process of identifying geometric (and other!) features from a given 3D image. The main source file that contains the bulk of the logic is `src/feature_generator.py`. Features that are created broadly follow the following algorithm:
-1. For each input feature (in parallel)
-2. For each layer in image
-3. Gather statistics about layer + push statistics about global info about image to a container
-4. At the end, dump the statistics to a given file
+## Using MicroICS through the GUI
 
-Statistics aim to extract both density based aspects, as well as general (e.g., homogeneity) aspects of images. The goal of this part is to produce a comprehensive feature set fast, as it's meant to run in parallel for thousands of images on commodity hardware (e.g., Fiji-based flows for similar scope run out of memory). One of the novelties of this approach is automated threshold-based generation -- as we cannot be certain of appropriate thresholds when generating features, we lift the constraint and generate thousands of features corresponding to different e.g., intensity/volume thresholds. This, albeit resulting in many features, enables the algorithms to capture the relevant patterns while remaining general (same threshold for whole data set). Rough sets of features generated:
+The GUI presents the analysis as three biological questions rather than a list of scripts.
 
-1. counts (based on intensity, thresholded)
-2. Normalized counts (thresholded)
-3. Intensity diffs (max - min)
-4. Max intensity
-5. Median intensity
-6. Standard deviation of intensity
-7. Mean intensity
-8. minProp (new) - proportion of pixels that are below mean intensity
-9. Normalized dispersion (std / avg. pixel intensity)
-10. Normalized values for all above w.r.t. all layer values
-11. BioVolume
-12. SubstratumCoverage
-13. Homogeneity
-14. ThicknessThreshold(min_thr) - thickness, thresholded
-15. RoughnessThreshold(min_thr) - roughness, thresholded
-16. layerwise global diff - mean
-17. layerwise global diff - max
-18. layerwise global diff - min
-19. Fractal dimension
-20. Graycomatrix features (contrast, correlation, dissimilarity, energy)
+### 1. Generate features
 
-## Machine learning
-Machine learning takes as input the results of feature construction, and attempts to associate the plethora of generated features with the target of interest (strain in most cases). We ran comprehensive experiments with different approaches (`feature_ranking_lite.py`), and as default selected tree ensembles, as they offered good time-performance trade-off. This part of the flow enables insights into learnability of strain properties based on image-derived features. Main use case is of diagnostic nature -- for new images, the trained algorithm will be used to assess the strain/virulence/other properties. Results of machine learning are discussed next (example follows)
+Feature generation measures each 3D TIFF image and writes one row per image.
 
+**Labelled images** are images whose filenames contain a known class, such as a strain. Choose this option when preparing a table for model training. MicroICS checks the filename convention, reports the number of images in each class and acquisition date, and writes `datafile.tsv`.
+
+**Unlabelled images** are new or unknown samples whose class is not yet known. Choose this option when preparing images for prediction. Their filenames do not need to contain a class. MicroICS writes `unknown_features.tsv` while preserving the filenames so predictions can be traced back to images.
+
+Before either calculation, enter the physical voxel dimensions X, Y, and Z in micrometres. MicroICS uses them for measurements expressed as physical area, volume, or thickness. The displayed defaults (0.13, 0.13, and 0.5 µm) should be replaced with the values recorded by the microscope when they differ.
+
+Feature families describe complementary aspects of biofilm structure, including:
+
+- intensity and thresholded biomass counts;
+- layer-to-layer intensity differences;
+- mean, median, maximum, standard deviation, and normalized dispersion;
+- biovolume and substratum coverage;
+- homogeneity and spatial spreading;
+- thresholded thickness and roughness;
+- 2D area and 3D surface, volume, and compactness;
+- fractal and gray-level co-occurrence measurements.
+
+MicroICS deliberately generates many threshold-dependent measurements because the most informative threshold may differ between biological questions. Feature ranking and cross-validation then assess which measurements are useful.
+
+### 2. Train models
+
+Training asks whether structural measurements can distinguish the known labels. It reads a complete tab-separated feature table containing `sampleName`, `label`, and numeric feature columns. The table can be generated by MicroICS or assembled externally; if external measurements are added, they must already be joined to the matching MicroICS rows by `sampleName` before selection.
+
+Choose the **unit of replication** that represents independent experimental material (imaging position, well, plate, or acquisition date). All images from the same unit remain in one cross-validation fold. This avoids an overly optimistic score caused by closely related images appearing in both training and test data.
+
+**One learner** is the normal starting point. Random Forest is the default and provides a focused run with lower time and resource requirements. Other single learners are available for a planned comparison.
+
+**All learners** benchmarks every available algorithm under the same folds. Use it when an algorithm comparison is scientifically relevant and enough compute time is available. It is substantially slower than one learner; the worker and Docker resource controls bound its CPU and memory use.
+
+During training, MicroICS:
+
+1. ranks image-derived features;
+2. evaluates different feature subsets in held-out folds;
+3. tunes the selected learner or learners;
+4. writes classification tables and confusion matrices;
+5. trains final models on all labelled data and saves them in `results/models`.
+
+Empty, NaN, and infinite values in otherwise valid numeric feature columns are reported during preflight and imputed by the learning pipeline. Missing sample identifiers, duplicate samples, non-numeric text, or missing training labels stop the run.
+
+### 3. Inference
+
+Inference answers: “Which learned class best matches each new biofilm image?” It loads the saved models, generates the same measurements for new images (or reads a complete precomputed feature table), aligns them to the features expected by each model, and writes predictions and explanations to the chosen inference folder.
+
+Inference is not a substitute for independent biological validation. Predictions are most reliable when new images use acquisition and preprocessing conditions comparable to the training set.
+
+### Combined workflow and recovery
+
+**All together** runs labelled feature generation, model training, and inference in sequence. Separate stages are preferable while checking a new dataset because their intermediate tables are easier to inspect.
+
+The GUI preflight report appears before computation. **Stop** interrupts the current container and retains the visible run state and log. **Reset run** terminates active work, clears the transient GUI state, and returns MicroICS to Ready without deleting output files.
+
+## Using Docker without the GUI
+
+Direct Docker commands expose the same pipeline for scripted, remote, or reproducible batch runs. Paths and options are configured through `.env`/Docker Compose variables, then the numbered pipeline steps are invoked in order.
+
+Typical labelled training flow:
+
+```bash
+cp env-example.env .env
+docker compose build
+docker compose run --rm imagine 4 datafile.tsv 10 generate_features
+docker compose run --rm imagine 4 datafile.tsv 10 learning_benchmark_save_models
 ```
-	tag	model	upsampling	n_components	fold	accuracy	test_set	thr_features
-0	RESULT	RandomForestClassifier()	1	32	0	0.5074626865671642	L1323,L1323,L1323,L1323,L1323,L1323,L1323,L1323,L1323,L1823,L1823,L1823,L1823,L1823,L1823,L1823,L1823,L394,L394,L394,L394,L394,L634,L634,L634,L634,L634,L628,L628,L628,L628,L628,L628,L628,L628,L1764,L1764,L1764,L1764,L1764,L1764,L1764,L1764,L634,L634,L634,L634,19115,19115,19115,19115,19115,L455,L455,L455,L455,L455,L394,L394,L394,L455,L455,L455,19115,19115,19115,19115	True
-1	RESULT	RandomForestClassifier()	1	32	1	0.7164179104477612	L1323,L1823,L1823,L1823,L1823,L1823,L1823,L1823,L628,L628,L1764,L1764,L634,L634,L634,L634,L634,L634,L1323,L1323,L1323,L1323,L1323,L1764,L1764,L1764,L1764,L1764,L628,L628,L628,L628,L628,L394,L394,L394,L394,L394,L394,L394,L455,L455,L455,L455,L455,L455,L455,L394,L1323,L1323,L1823,L1823,19115,19115,19115,19115,19115,19115,L628,L628,19115,19115,L455,L455,L1764,L634,L634	True
+
+Typical inference flow:
+
+```bash
+docker compose run --rm imagine 4 - 10 inference
 ```
 
-Explanation:
+These are entry points, not a complete configuration example. Set the host image, results, model, inference, voxel-dimension, and replication paths described in [RUN.md](RUN.md) before processing real data. The detailed reference also documents test services, complete-table requirements, environment variables, and output files.
 
-1. `tag_model` -> ignore, relevant for gathering by the approach
-2. `upsampling` -> We found out that upsampling training data (over-copying it) helps, this is factor for that
-3. `n_components` -> if <50, it means features were compressed by using Singular Value Decomposition prior to learning -- this is effectively like doing PCA but faster (without centering)
-4. `fold` -> which iteration of learning (which part was used to be predicted on)
-5. `accuracy` -> accuracy metric
-6. `test_set` -> What were the labels of the test set for this fold
-7. `thr_features` -> are we using thresholded features (True/False possible)
+## Methodological notes
 
-## Inference
-Inference is the final computational component that applies trained machine learning models to new, unseen biofilm images. Once the feature construction and machine learning steps have been completed, inference enables real-time classification of images without requiring retraining. The trained models are used to predict strain, virulence, or other properties for newly acquired biofilm images, making the system practical for diagnostic applications. This component leverages the trained classifiers to efficiently process new images through the established feature extraction pipeline and produce predictions based on the learned patterns.
+The learning benchmark uses adaptive stratified cross-validation when class counts permit it and grouped splitting when a replication unit is selected. Model selection is evaluated on held-out folds, while final saved models are refitted on all labelled samples using the chosen configuration. Dimensionality reduction and threshold-feature selection are fitted within training folds to avoid test-fold information leaking into preprocessing.
+
+The reported accuracy, weighted F1 results, class predictions, and confusion matrices should be interpreted together with class balance, replication design, and the number of independent biological experiments. High image counts do not compensate for too few independent experimental units.

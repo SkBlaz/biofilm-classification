@@ -188,8 +188,12 @@ print_failure_hints() {
 		echo "Hint: The process may have run out of memory. Try reducing parallelism and/or using fewer learners."
 	fi
 
-	if grep -qiE "cannot create cross-validation splitter|minimum class count|error.*label|failed.*label|missing.*label|error.*target[_ ]col|failed.*target[_ ]col|at least [0-9]+ samples" "$log_file"; then
+	if grep -qiE "cannot create (grouped )?cross-validation splitter|error.*label|failed.*label|missing.*label|error.*target[_ ]col|failed.*target[_ ]col|at least [0-9]+ (samples|groups) (are )?required" "$log_file"; then
 		echo "Hint: The dataset may not have enough supported labels/classes for the requested benchmark step."
+	fi
+
+	if grep -qiE "File name too long|Errno 36" "$log_file"; then
+		echo "Hint: An output filename exceeded the filesystem limit. Update MicroICS and resume the run."
 	fi
 
 	if grep -qiE "No such file or directory|FileNotFoundError" "$log_file"; then
