@@ -294,7 +294,7 @@ function renderState(nextState) {
   statusWarning.classList.toggle('hidden', !['failed', 'cancelled'].includes(nextState.status));
   downloadButton.classList.toggle('hidden', !nextState.download_url);
   if (nextState.download_url) downloadButton.href = nextState.download_url;
-  if (nextState.status === 'completed') formMessage.textContent = `Job ${nextState.job_id.slice(0, 8)} completed. Results are ready to download.`;
+  if (nextState.status === 'completed') formMessage.textContent = `Job ${nextState.job_id.slice(0, 8)} completed. Inspect the files on the right or download the results ZIP.`;
   if (nextState.status === 'failed') formMessage.textContent = nextState.error || 'The job failed. Review its log.';
   previousRunStatus = nextState.status;
 }

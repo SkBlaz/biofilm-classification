@@ -44,6 +44,8 @@ Available operations are:
 
 Completed output is available from the job’s **Download results ZIP** link. A failed computation changes only that job to `failed`; the server remains available for another request.
 
+Choosing a feature table selects the input only. No output folder needs to be selected: generated files appear in **Inspect results** in the browser, and **Download results ZIP** saves a copy to the browser’s configured download location. Internally, the job keeps them under `/data/jobs/<job-id>/output/`.
+
 ## Runtime filesystem
 
 Each browser run receives an unpredictable UUID and owns this structure:

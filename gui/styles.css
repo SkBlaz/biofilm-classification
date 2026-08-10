@@ -45,6 +45,9 @@ h1,h2,p { margin-top:0; } h1 { margin-bottom:8px; font-size:27px; line-height:1.
 .button.primary { flex:1; background:var(--green); color:#fff; box-shadow:0 6px 17px rgba(18,123,99,.2); } .button.primary:hover { background:#0d6d58; }
 .button.secondary { background:#fff; border-color:#cfd8d3; color:#7b3c31; } .button.tertiary { min-height:33px; padding:0 11px; border-color:#b9d7c8; background:var(--green-pale); color:var(--green); font-size:11px; } .button.tertiary:hover { border-color:var(--green); } .button:disabled { cursor:wait; opacity:.6; } .button-icon { margin-right:6px; font-size:10px; }
 .hardware-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:16px; } .hardware-actions small { color:var(--muted); font-size:10px; }
+.result-delivery { display:grid; gap:3px; margin-top:17px; padding:11px 12px; border:1px solid #cfe4d9; border-radius:7px; background:var(--green-pale); color:var(--muted); font-size:11px; }
+.result-delivery strong { color:var(--ink); font-size:12px; }
+.result-delivery b { color:var(--green); }
 .form-message { min-height:20px; margin:11px 0 0; color:#ba5c47; font-size:12px; } .form-message.success { color:var(--green); }
 .panel-heading,.inspector-heading { display:flex; align-items:end; justify-content:space-between; } .panel-heading { margin:4px 0 17px; }
 .icon-button { width:32px; height:32px; border:1px solid var(--line); border-radius:5px; background:var(--panel); color:var(--green); font-size:20px; line-height:1; } .icon-button:hover { border-color:var(--green); background:var(--green-pale); }

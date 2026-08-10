@@ -61,7 +61,7 @@ Keep newest entry at the top.
 
 | Date (UTC) | Bot/Agent | PR/Commit | AGENTS.md update summary |
 |---|---|---|---|
-| 2026-08-10 | Codex | current change | Standalone single-container GUI/pipeline image, direct per-job execution, browser uploads/downloads, and `/data` persistence documented. |
+| 2026-08-10 | Codex | current change | Standalone single-container GUI/pipeline image, direct per-job execution, explicit browser result delivery, and `/data` persistence documented. |
 | 2026-08-05 | Codex | current change | Single self-preparing Windows launcher, private GUI dependencies, bounded benchmark report names, and cross-platform installation/workflow guidance documented. |
 | 2026-08-04 | Codex | current change | GUI voxel-dimension propagation, visible logo treatment, and stop-versus-reset recovery behavior documented. |
 | 2026-08-03 | Codex | current change | Feature-table picker, legacy generated-value imputation contract, convention-free unlabelled preflight, prominent learner scope, and bounded all-learner resources documented. |

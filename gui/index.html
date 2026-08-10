@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MicroICS Pipeline</title>
-  <link rel="stylesheet" href="/styles.css?v=20260810-1">
+  <link rel="stylesheet" href="/styles.css?v=20260810-2">
 </head>
 <body>
   <header class="topbar">
@@ -94,6 +94,10 @@
         </fieldset>
 
         <div class="hardware-actions"><button class="button tertiary" id="hardwareDefaultsButton" type="button">Suggested workers</button><small id="hardwareDefaultsMessage">Uses a conservative share of the CPUs available to this container.</small></div>
+        <aside class="result-delivery" id="resultDelivery" aria-label="Where results are saved">
+          <strong>Where do the results go?</strong>
+          <span>They appear in <b>Inspect results</b> on this page. After the run, <b>Download results ZIP</b> saves a copy to your browser's configured download location; no output folder selection is needed.</span>
+        </aside>
         <div class="form-actions"><button class="button primary" id="runButton" type="submit"><span class="button-icon">▶</span>Run pipeline</button><button class="button secondary hidden" id="stopButton" type="button"><span class="button-icon">■</span>Stop</button><a class="button tertiary hidden" id="downloadButton" href="#" download>Download results ZIP</a></div>
         <p class="form-message" id="formMessage" role="status"></p>
         <section class="validation-panel" id="validationPanel" aria-live="polite"><div class="eyebrow">Preflight report</div><p id="validationMessage">Input validation runs before processing.</p><div id="validationDetails"></div></section>
@@ -122,6 +126,6 @@
       <p id="helpModalText"></p><button class="button primary help-modal-close" id="dismissHelpModal" type="button">Got it</button>
     </div>
   </div>
-  <script src="/app.js?v=20260810-1"></script>
+  <script src="/app.js?v=20260810-2"></script>
 </body>
 </html>

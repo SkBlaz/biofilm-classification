@@ -240,6 +240,8 @@ class TestHTTPAndImage(unittest.TestCase):
         self.assertIn('accept=".tif,.tiff,image/tiff"', html)
         self.assertIn('id="modelJob"', html)
         self.assertIn('id="downloadButton"', html)
+        self.assertIn('id="resultDelivery"', html)
+        self.assertIn("browser's configured download location", html)
         self.assertNotIn("Results folder", html)
         self.assertNotIn("Choose folder", html)
         self.assertIn("X-Job-ID", javascript)
