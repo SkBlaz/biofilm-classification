@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -97,12 +98,15 @@ def write_feature_correlation(
     numeric = data[features].apply(pd.to_numeric, errors="coerce").dropna(axis=1, how="all")
     if len(numeric.columns) < 2:
         return []
-    correlation = numeric.corr()
+    correlation = numeric.replace([np.inf, -np.inf], np.nan).corr()
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
     matrix_path = destination / "top_feature_correlation.tsv"
     correlation.to_csv(matrix_path, sep="\t")
-    clustered = sns.clustermap(correlation, cmap="vlag", center=0, vmin=-1, vmax=1, figsize=(12, 10))
+    plot_values = correlation.replace([np.inf, -np.inf], np.nan).fillna(0.0).to_numpy(copy=True)
+    np.fill_diagonal(plot_values, 1.0)
+    plot_correlation = pd.DataFrame(plot_values, index=correlation.index, columns=correlation.columns)
+    clustered = sns.clustermap(plot_correlation, cmap="vlag", center=0, vmin=-1, vmax=1, figsize=(12, 10))
     heatmap_path = destination / "top_feature_correlation_clustered.png"
     clustered.savefig(heatmap_path, dpi=180)
     plt.close(clustered.fig)
@@ -147,7 +151,8 @@ def write_feature_boxplots(data_file: str | Path, rankings_file: str | Path, out
     for feature in _ranking_features(rankings, top_n):
         if feature not in data.columns:
             continue
-        values = pd.DataFrame({"label": data["label"].astype(str), "value": pd.to_numeric(data[feature], errors="coerce")}).dropna()
+        numeric_values = pd.to_numeric(data[feature], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        values = pd.DataFrame({"label": data["label"].astype(str), "value": numeric_values}).dropna()
         if values.empty:
             continue
         plt.figure(figsize=(max(6, len(values["label"].unique()) * 1.2), 5))

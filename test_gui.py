@@ -1,303 +1,201 @@
-"""Tests for the local MicroICS GUI safety helpers."""
+"""Tests for the standalone, container-local MicroICS GUI."""
 
 from __future__ import annotations
 
 import io
-import os
+import json
+import sys
 import tempfile
+import threading
 import unittest
+import urllib.request
+import zipfile
+from contextlib import contextmanager
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from gui.app import (
-    command_for,
-    create_env,
-    default_config,
-    folder_status,
-    generated_feature_path,
-    gui_feature_validation_path,
-    receive_upload,
-    reset_pipeline,
-    runtime,
-    state,
-    validate_config,
-)
+import gui.app as app
+import gui.execution as execution
+from gui.app import Handler, create_results_zip, receive_upload, reset_pipeline, runtime, state, validate_config
+from gui.execution import ExecutionStep, build_execution_steps, create_job, job_paths
 
 
-class TestFolderStatus(unittest.TestCase):
-    def test_missing_folder_is_safe_to_create(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            missing = Path(temporary_directory) / "new-results"
+@contextmanager
+def temporary_jobs_root():
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        jobs_root = Path(temporary_directory) / "jobs"
+        with patch.object(execution, "JOBS_ROOT", jobs_root), patch.object(app, "JOBS_ROOT", jobs_root):
+            yield jobs_root
 
-            self.assertEqual(
-                folder_status(str(missing)),
-                {"path": str(missing), "exists": False, "item_count": 0, "items": [], "has_more": False},
+
+def upload_handler(name: str, contents: bytes, job_id: str = ""):
+    headers = {"X-Upload-Name": name, "Content-Length": str(len(contents))}
+    if job_id:
+        headers["X-Job-ID"] = job_id
+    return SimpleNamespace(headers=headers, rfile=io.BytesIO(contents))
+
+
+def labelled_image_name() -> str:
+    return "01012026_s_Lm_st_L1_p_C01_pos001_tm_24_ch_Syto9_z_21.tif"
+
+
+def training_table() -> bytes:
+    return b"sampleName\tlabel\tfeature\n01012026--s--Lm--st--L1--p--C01--pos001--tm--24--ch--Syto9--z--21\tL1\t1\n"
+
+
+class TestJobUploads(unittest.TestCase):
+    def test_jobs_have_isolated_input_work_and_output_directories(self):
+        with temporary_jobs_root():
+            first = create_job()
+            second = create_job()
+
+            self.assertNotEqual(first.job_id, second.job_id)
+            self.assertTrue(first.training_images.is_dir())
+            self.assertTrue(first.work.is_dir())
+            self.assertTrue(first.output.is_dir())
+            self.assertNotEqual(first.root, second.root)
+
+    def test_upload_strips_path_components_and_stays_in_job(self):
+        with temporary_jobs_root():
+            selected = receive_upload(upload_handler("../../../etc/escape.tif", b"TIFF"), "training")
+            paths = job_paths(selected["job_id"])
+            destination = paths.training_images / selected["file"]
+
+            self.assertEqual(selected["file"], "escape.tif")
+            self.assertEqual(destination.read_bytes(), b"TIFF")
+            self.assertEqual(destination.resolve().parent, paths.training_images.resolve())
+
+    def test_tiff_and_feature_table_uploads_are_supported(self):
+        with temporary_jobs_root():
+            image = receive_upload(upload_handler("volume.tiff", b"TIFF"), "inference")
+            feature = receive_upload(
+                upload_handler("features.tsv", training_table(), image["job_id"]),
+                "feature",
+                {".tsv", ".txt"},
+                "tab-separated files",
             )
 
-    def test_non_empty_folder_reports_contents(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            results = Path(temporary_directory)
-            for name in ("a.tsv", "b.tsv", "c.tsv", "d.tsv", "e.tsv", "f.tsv"):
-                (results / name).touch()
-
-            status = folder_status(str(results))
-
-            self.assertTrue(status["exists"])
-            self.assertEqual(status["item_count"], 6)
-            self.assertEqual(status["items"], ["a.tsv", "b.tsv", "c.tsv", "d.tsv", "e.tsv"])
-            self.assertTrue(status["has_more"])
+            self.assertEqual(image["job_id"], feature["job_id"])
+            self.assertEqual(feature["file"], "features.tsv")
 
 
-class TestFeatureFileSelection(unittest.TestCase):
-    def test_tab_separated_file_picker_stages_one_file(self):
-        contents = b"sampleName\tlabel\tfeature\nsample-a\tA\t1\n"
-        handler = SimpleNamespace(
-            headers={
-                "X-Upload-Name": "publication-data.tsv",
-                "Content-Length": str(len(contents)),
-            },
-            rfile=io.BytesIO(contents),
-        )
+class TestDirectExecution(unittest.TestCase):
+    def test_feature_generation_plan_calls_pipeline_directly(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            (paths.training_images / labelled_image_name()).touch()
+            config = validate_config({"workflow": "features_labelled", "job_id": paths.job_id})
 
-        with tempfile.TemporaryDirectory() as temporary_directory, patch("gui.app.UPLOAD_ROOT", Path(temporary_directory)):
-            selected = receive_upload(handler, {".tsv", ".txt"}, "tab-separated .tsv or .txt files")
+            steps = build_execution_steps(config)
+            commands = [command for step in steps for command in step.commands]
 
-            selected_path = Path(selected["path"])
-            self.assertEqual(selected_path.name, "publication-data.tsv")
-            self.assertEqual(selected_path.read_bytes(), contents)
+            self.assertEqual([step.step_id for step in steps], ["features", "validate"])
+            self.assertTrue(any(command[0] == "bash" and command[1].endswith("run_analysis.sh") for command in commands))
+            self.assertFalse(any(token in {"docker", "compose", "docker-compose"} for command in commands for token in command))
+
+    def test_training_plan_calls_existing_learning_entry_point(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            (paths.feature_files / "training.tsv").write_bytes(training_table())
+            config = validate_config({"workflow": "train", "job_id": paths.job_id, "feature_file": "training.tsv"})
+
+            steps = build_execution_steps(config)
+
+            self.assertEqual([step.step_id for step in steps], ["models", "reports"])
+            self.assertIn("feature_ranking_lite.py", " ".join(steps[0].commands[0]))
+            self.assertIn("--save_models", steps[0].commands[0])
+
+    def test_inference_plan_accepts_precomputed_features_and_prior_models(self):
+        with temporary_jobs_root():
+            model_paths = create_job()
+            models = model_paths.results / "models"
+            models.mkdir(parents=True, exist_ok=True)
+            (models / "rf_model.joblib").touch()
+            paths = create_job()
+            (paths.feature_files / "unknown_features.tsv").write_bytes(training_table().replace(b"\tlabel", b"\tprediction_label"))
+            config = validate_config(
+                {
+                    "workflow": "inference",
+                    "job_id": paths.job_id,
+                    "feature_file": "unknown_features.tsv",
+                    "model_job_id": model_paths.job_id,
+                }
+            )
+
+            steps = build_execution_steps(config)
+            command = steps[0].commands[0]
+
+            self.assertEqual([step.step_id for step in steps], ["inference"])
+            self.assertIn("inference.py", " ".join(command))
+            self.assertIn("--features_file", command)
+            self.assertEqual(config["models_dir"], str(models))
 
 
-class TestCleanupValidation(unittest.TestCase):
-    def test_feature_generation_rejects_non_empty_results_without_confirmation(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            training_images = root / "training-images"
-            results = root / "results"
-            training_images.mkdir()
-            results.mkdir()
-            (results / "previous-run.tsv").touch()
+class TestResultsAndRecovery(unittest.TestCase):
+    def test_job_output_is_downloadable_as_zip(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            result = paths.results / "datafile.tsv"
+            result.write_text("sampleName\tfeature\nA\t1\n", encoding="utf-8")
 
+            archive = create_results_zip(paths.job_id)
+
+            with zipfile.ZipFile(archive) as bundle:
+                self.assertEqual(bundle.namelist(), ["results/datafile.tsv"])
+
+    def test_failed_subprocess_marks_job_failed_without_raising(self):
+        with temporary_jobs_root():
+            paths = create_job()
             config = {
+                "job_id": paths.job_id,
                 "workflow": "features_labelled",
-                "training_images": str(training_images),
-                "results_dir": str(results),
-                "confirm_cleanup": False,
+                "training_images": str(paths.training_images),
+                "inference_images": str(paths.inference_images),
+                "results_dir": str(paths.results),
+                "inference_output": str(paths.inference_output),
+                "inference_work_dir": str(paths.work / "inference"),
+                "feature_file": "",
+                "models_dir": str(paths.results / "models"),
+                "workers": 1,
+                "top_features": 1,
+                "replication_unit": "date",
+                "learner": "rf",
+                "all_learners": False,
+                "correlation_threshold": 0.8,
+                "voxel_size_x": 0.13,
+                "voxel_size_y": 0.13,
+                "voxel_size_z": 0.5,
             }
-
-            with self.assertRaisesRegex(ValueError, "not empty"):
-                validate_config(config)
-
-    def test_feature_generation_accepts_non_empty_results_after_confirmation(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            training_images = root / "training-images"
-            results = root / "results"
-            training_images.mkdir()
-            results.mkdir()
-            (results / "previous-run.tsv").touch()
-
-            config = validate_config(
-                {
-                    "workflow": "features_labelled",
-                    "training_images": str(training_images),
-                    "results_dir": str(results),
-                    "confirm_cleanup": True,
-                }
-            )
-
-            self.assertEqual(config["results_dir"], str(results.resolve()))
-            self.assertTrue(config["confirm_cleanup"])
-
-    def test_train_models_reuses_existing_complete_table_without_cleanup(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            images = root / "images"
-            results = root / "results"
-            images.mkdir()
-            results.mkdir()
-            (results / "datafile.tsv").write_text("sampleName\tlabel\tfeature\nsample\tA\t1\n", encoding="utf-8")
-
-            config = validate_config(
-                {
-                    "workflow": "train",
-                    "training_images": str(images),
-                    "results_dir": str(results),
-                    "confirm_cleanup": False,
-                }
-            )
-
-            self.assertEqual(config["workflow"], "train")
-            self.assertFalse(config["confirm_cleanup"])
-
-    def test_train_models_requires_a_complete_table(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            images = root / "images"
-            results = root / "results"
-            images.mkdir()
-            results.mkdir()
-
-            with self.assertRaisesRegex(ValueError, "complete feature table"):
-                validate_config(
-                    {
-                        "workflow": "train",
-                        "training_images": str(images),
-                        "results_dir": str(results),
-                    }
-                )
-
-    def test_complete_feature_table_is_a_file(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            images = root / "images"
-            results = root / "results"
-            feature_file = root / "complete.tsv"
-            images.mkdir()
-            results.mkdir()
-            feature_file.write_text("sampleName\tlabel\tfeature\nsample\tA\t1\n", encoding="utf-8")
-
-            config = validate_config(
-                {
-                    "workflow": "train",
-                    "training_images": str(images),
-                    "results_dir": str(results),
-                    "feature_file": str(feature_file),
-                }
-            )
-
-            self.assertEqual(config["feature_file"], str(feature_file.resolve()))
-
-    def test_imaging_position_is_a_supported_replication_unit(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            images = Path(temporary_directory)
-            results = images / "results"
-
-            config = validate_config(
-                {
-                    "workflow": "features_labelled",
-                    "training_images": str(images),
-                    "results_dir": str(results),
-                    "replication_unit": "position",
-                }
-            )
-
-            self.assertEqual(config["replication_unit"], "position")
-
-    def test_unlabelled_generation_validates_unknown_features_table(self):
-        path = generated_feature_path(
-            {
-                "workflow": "features_unlabelled",
-                "results_dir": "/tmp/microics-unlabelled-results",
-            }
-        )
-
-        self.assertEqual(path.name, "unknown_features.tsv")
-
-    def test_gui_validation_report_avoids_docker_owned_validation_folder(self):
-        path = gui_feature_validation_path({"results_dir": "/tmp/microics-results"})
-
-        self.assertEqual(path, Path("/tmp/microics-results/gui_feature_validation.json"))
-
-    def test_voxel_dimensions_are_validated_and_written_to_the_run_environment(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            images = Path(temporary_directory) / "images"
-            results = Path(temporary_directory) / "results"
-            images.mkdir()
-            config = validate_config(
-                {
-                    "workflow": "features_labelled",
-                    "training_images": str(images),
-                    "results_dir": str(results),
-                    "voxel_size_x": "0.2",
-                    "voxel_size_y": 0.3,
-                    "voxel_size_z": 0.7,
-                }
-            )
-
-            env_path = Path(create_env(config))
+            failure = ExecutionStep("features", "Expected failure", ((sys.executable, "-c", "raise SystemExit(7)"),))
+            original_state = dict(state)
+            original_runtime = dict(runtime)
             try:
-                env_text = env_path.read_text(encoding="utf-8")
+                state.update(status="starting", job_id=paths.job_id, steps=[], logs=[], artifacts=[], error=None)
+                runtime.update(active_job_id=paths.job_id, stop_requested=False)
+                with patch("gui.app.build_execution_steps", return_value=[failure]):
+                    app.run_pipeline(config, paths.job_id)
+
+                self.assertEqual(state["status"], "failed")
+                self.assertIn("exit code 7", state["error"])
             finally:
-                os.unlink(env_path)
+                state.clear()
+                state.update(original_state)
+                runtime.clear()
+                runtime.update(original_runtime)
 
-            self.assertEqual((config["voxel_size_x"], config["voxel_size_y"], config["voxel_size_z"]), (0.2, 0.3, 0.7))
-            self.assertIn('IMAGINE_VOXEL_SIZE_X="0.2"', env_text)
-            self.assertIn('IMAGINE_VOXEL_SIZE_Y="0.3"', env_text)
-            self.assertIn('IMAGINE_VOXEL_SIZE_Z="0.7"', env_text)
-
-    def test_voxel_dimensions_must_be_positive(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            images = Path(temporary_directory)
-
-            with self.assertRaisesRegex(ValueError, "Voxel size Z must be a positive number"):
-                validate_config(
-                    {
-                        "workflow": "features_labelled",
-                        "training_images": str(images),
-                        "results_dir": str(images / "results"),
-                        "voxel_size_z": 0,
-                    }
-                )
-
-
-class TestRunReset(unittest.TestCase):
-    def test_docker_step_uses_a_unique_run_container_name(self):
-        command = command_for("/tmp/run.env", ["1", "datafile.tsv", "10", "generate_features"], {}, "microics-run-id")
-
-        self.assertEqual(
-            command,
-            [
-                "docker",
-                "compose",
-                "--env-file",
-                "/tmp/run.env",
-                "run",
-                "--rm",
-                "--no-TTY",
-                "--name",
-                "microics-run-id",
-                "imagine",
-                "1",
-                "datafile.tsv",
-                "10",
-                "generate_features",
-            ],
-        )
-
-    def test_reset_terminates_active_process_and_returns_to_ready_state(self):
+    def test_reset_terminates_only_the_active_subprocess(self):
         process = object()
         original_state = dict(state)
         original_runtime = dict(runtime)
         try:
-            state.update(
-                {
-                    "status": "running",
-                    "steps": [{"id": "features", "status": "running"}],
-                    "logs": ["working"],
-                    "artifacts": [{"path": "partial.tsv"}],
-                    "artifact_roots": {"results": "/tmp/results"},
-                    "validation": {"ok": True},
-                }
-            )
-            runtime.update({"process": process, "active_run_id": "old-run", "stop_requested": False})
-
-            runtime["container_name"] = "microics-old-run"
-            with (
-                patch("gui.app.terminate_process") as terminate,
-                patch("gui.app.remove_run_container") as remove_container,
-            ):
+            state.update(status="running", job_id=None, steps=[{"id": "features"}], logs=["working"])
+            runtime.update(process=process, active_job_id=None, stop_requested=False)
+            with patch("gui.app.terminate_process") as terminate:
                 self.assertTrue(reset_pipeline())
-
             terminate.assert_called_once_with(process, force=True)
-            remove_container.assert_called_once_with("microics-old-run")
             self.assertEqual(state["status"], "idle")
-            self.assertEqual(state["steps"], [])
-            self.assertEqual(state["logs"], [])
-            self.assertEqual(state["artifacts"], [])
-            self.assertIsNone(state["validation"])
-            self.assertEqual(state["progress"]["label"], "Ready")
-            self.assertIsNone(runtime["active_run_id"])
         finally:
             state.clear()
             state.update(original_state)
@@ -305,58 +203,47 @@ class TestRunReset(unittest.TestCase):
             runtime.update(original_runtime)
 
 
-class TestWorkflowInterface(unittest.TestCase):
-    def test_windows_has_one_visible_self_preparing_launcher(self):
+class TestHTTPAndImage(unittest.TestCase):
+    def test_health_endpoint_reports_ok(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/api/health") as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(json.load(response), {"status": "ok"})
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_dockerfile_launches_one_self_contained_gui(self):
         repository = Path(__file__).parent
-        launchers = sorted(path.name for path in repository.glob("*.bat"))
-        launcher = (repository / "MicroICS.bat").read_text(encoding="utf-8")
+        dockerfile = (repository / "Dockerfile").read_text(encoding="utf-8")
+        compose = (repository / "docker-compose.yml").read_text(encoding="utf-8")
+        backend = (repository / "gui" / "app.py").read_text(encoding="utf-8")
 
-        self.assertEqual(launchers, ["MicroICS.bat"])
-        self.assertIn("call :create_shortcut", launcher)
-        self.assertIn("winget install --exact --id Python.Python.3.12", launcher)
-        self.assertIn("winget install --exact --id Docker.DockerDesktop", launcher)
-        self.assertIn("gui\\requirements.txt", launcher)
+        self.assertIn("COPY . /opt/microics", dockerfile)
+        self.assertIn("EXPOSE 8765", dockerfile)
+        self.assertIn('"--host", "0.0.0.0"', dockerfile)
+        self.assertIn("MICROICS_DATA_ROOT=/data", dockerfile)
+        self.assertNotIn("docker compose", backend.lower())
+        self.assertNotIn('subprocess.run(["docker"', backend)
+        self.assertEqual(compose.count("services:"), 1)
+        self.assertNotIn("/var/run/docker.sock", compose)
 
-    def test_workflow_is_ordered_and_host_monitor_is_removed(self):
-        html = (Path(__file__).parent / "gui" / "index.html").read_text(encoding="utf-8")
-        javascript = (Path(__file__).parent / "gui" / "app.js").read_text(encoding="utf-8")
+    def test_browser_interface_uses_uploads_jobs_and_zip_downloads(self):
+        repository = Path(__file__).parent
+        html = (repository / "gui" / "index.html").read_text(encoding="utf-8")
+        javascript = (repository / "gui" / "app.js").read_text(encoding="utf-8")
 
-        workflows = [
-            'class="workflow-stage"',
-            'data-workflow="train"',
-            'data-workflow="inference"',
-            'data-workflow="full"',
-        ]
-        positions = [html.index(workflow) for workflow in workflows]
-        self.assertEqual(positions, sorted(positions))
-        self.assertNotIn("Host monitor", html)
-        self.assertNotIn("Host monitor", javascript)
-        self.assertIn("Imaging position (pos)", html)
-        self.assertIn("MicroICS uses this table as-is and does not extract or join features automatically.", html)
-        self.assertIn('id="featureFilePicker"', html)
-        self.assertIn("Choose file", html)
-        self.assertIn('data-learner-mode="single"', html)
-        self.assertIn('data-learner-mode="all"', html)
-        self.assertIn("Benchmark every algorithm", html)
-        self.assertIn('id="voxelSizeX"', html)
-        self.assertIn('id="voxelSizeY"', html)
-        self.assertIn('id="voxelSizeZ"', html)
-        self.assertIn('id="resetButton"', html)
-        self.assertIn('<img src="/logo.png" alt="MicroICS logo">', html)
-        self.assertIn("filter:none", (Path(__file__).parent / "gui" / "styles.css").read_text(encoding="utf-8"))
-        self.assertIn("Filenames found", javascript)
-        self.assertIn("<strong>Images per label</strong>", javascript)
-        self.assertIn('<details class="validation-secondary">', javascript)
-        self.assertIn("<summary>Images per label per date</summary>", javascript)
-        self.assertEqual(default_config()["workflow"], "features_labelled")
-        self.assertEqual(
-            (
-                default_config()["voxel_size_x"],
-                default_config()["voxel_size_y"],
-                default_config()["voxel_size_z"],
-            ),
-            (0.13, 0.13, 0.5),
-        )
+        self.assertIn('accept=".tif,.tiff,image/tiff"', html)
+        self.assertIn('id="modelJob"', html)
+        self.assertIn('id="downloadButton"', html)
+        self.assertNotIn("Results folder", html)
+        self.assertNotIn("Choose folder", html)
+        self.assertIn("X-Job-ID", javascript)
+        self.assertIn("download_url", javascript)
 
 
 if __name__ == "__main__":

@@ -89,8 +89,7 @@ venv.bak/
 ehthumbs.db
 Thumbs.db
 
-# Docker
-.dockerignore
+# Docker build artifacts
 /manual/_minted-manual
 /manual/manual.aux
 /manual/manual.log

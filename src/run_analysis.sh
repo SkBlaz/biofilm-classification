@@ -13,37 +13,19 @@ if [ $# -lt 4 ]; then
   echo ""
   echo "Usage:"
   echo ""
-  echo "If you are using a Docker container:"
-  echo -e "=> docker run \t-v ./your/images:/imagine/images"
-  echo -e "\t\t-v ./your/results:/imagine/results "
-  echo -e "\t\t--rm"
-  echo -e "\t\t-it jsi/imagine"
-  echo -e "\t\t<nb parallel jobs (4)>"
-  echo -e "\t\t<dataset name (datafile.tsv)>"
-  echo -e "\t\t<top features to visualize (10)>"
-  echo -e "\t\t<task (generate_features | learning_benchmark | learning_benchmark_save_models | inference)>"
-  echo -e "\t\t[--all_learners (optional: enable all ML algorithms)]"
-  echo
-  echo
-  echo "For inference task (environment variable mode):"
-  echo "Set IMAGINE_INFERENCE_INPUTS and IMAGINE_INFERENCE_OUTPUTS in .env file"
-  echo -e "=> docker compose run --rm imagine 4 - 10 inference"
-  echo
-  echo "For inference task (parameter mode):"
-  echo -e "=> docker compose run --rm imagine 4 - 10 inference <models_path> <images_path> <output_path>"
-  echo
-  echo
-  echo "If you are running the script directly:"
-  echo "=> run_analysis.sh <image folder> <nb parallel jobs (4)> <dataset name (datafile.tsv)> <top features to visualize (10)> <results folder (./your/results)> <task>"
+  echo "IMAGINE_IMAGES=/path/to/images IMAGINE_RESULTS=/path/to/results bash run_analysis.sh <parallel jobs> <dataset name> <top features> <task> [options]"
+  echo ""
+  echo "Tasks: generate_features, learning_benchmark, learning_benchmark_save_models, data_visualization, inference"
+  echo "For inference, use src/inference.py directly or set the IMAGINE_INFERENCE_* environment variables."
   exit
 fi
 
-INPUT_IMAGE_FOLDER="/imagine/images"
+INPUT_IMAGE_FOLDER="${IMAGINE_IMAGES:-/imagine/images}"
 INPUT_PARALLELISM="$1"
 INPUT_DATASETNAME="$2"
 INPUT_NB_VISUALIZATION_FEATURES="$3"
 LEARNING_TASK="$4"
-OUTPUT_RESULTS_FOLDER='/imagine/results'
+OUTPUT_RESULTS_FOLDER="${IMAGINE_RESULTS:-/imagine/results}"
 
 # Check for optional --all_learners flag in any position after the required parameters
 ALL_LEARNERS_FLAG=""
@@ -147,12 +129,10 @@ if [ "$LEARNING_TASK" = "inference" ]; then
 			echo "Inference task requires either environment variables or additional parameters:"
 			echo ""
 			echo "Environment variable mode:"
-			echo "Set IMAGINE_INFERENCE_INPUTS and IMAGINE_INFERENCE_OUTPUTS in .env file"
-			echo "=> docker compose run --rm imagine 4 - 10 inference"
+			echo "Set IMAGINE_INFERENCE_INPUTS, IMAGINE_INFERENCE_OUTPUTS, and IMAGINE_RESULTS"
 			echo ""
-			echo "Parameter mode:"
-			echo "=> docker compose run --rm imagine 4 - 10 inference <models_path> <images_path> <output_path>"
-			echo "=> docker compose run --rm imagine 4 - 10 inference <models_path> <images_path> <output_path> --all_learners"
+			echo "Direct mode:"
+			echo "python inference.py <models_path> <images_path> <output_path> [--features_file TABLE]"
 			exit 1
 		fi
 		MODELS_PATH="${INFERENCE_PARAMS[4]}"
@@ -235,10 +215,10 @@ run_step() {
 validate_tif_inputs() {
 	local image_dir="$1"
 	shopt -s nullglob
-	local tif_files=("${image_dir}"/*.tif)
+	local tif_files=("${image_dir}"/*.tif "${image_dir}"/*.tiff)
 	shopt -u nullglob
 	if [ "${#tif_files[@]}" -eq 0 ]; then
-		echo "ERROR: No .tif files found in ${image_dir}"
+		echo "ERROR: No .tif or .tiff files found in ${image_dir}"
 		return 1
 	fi
 	return 0
@@ -246,7 +226,7 @@ validate_tif_inputs() {
 
 echo "Using the following parameters for input:"
 echo "Input images folder: $INPUT_IMAGE_FOLDER"
-echo "Results folder: $OUTPUT_RESULTS_FOLDER (if running Docker, map it to a volume to see the results)"
+echo "Results folder: $OUTPUT_RESULTS_FOLDER"
 echo "Parallelism: $INPUT_PARALLELISM"
 echo "Dataset name: $INPUT_DATASETNAME"
 echo "Number of visualization features: $INPUT_NB_VISUALIZATION_FEATURES"
@@ -259,8 +239,11 @@ if [ $LEARNING_TASK = "generate_features" ]; then
 
 	run_step "validate image names and labels" python validate_inputs.py --images "${INPUT_IMAGE_FOLDER}" ${UNLABELLED_FLAG} --output "${OUTPUT_RESULTS_FOLDER}/validation/image_validation.json"
 	run_step "validate input .tif files" validate_tif_inputs "${INPUT_IMAGE_FOLDER}"
+	shopt -s nullglob
+	INPUT_TIFF_FILES=("${INPUT_IMAGE_FOLDER}"/*.tif "${INPUT_IMAGE_FOLDER}"/*.tiff)
+	shopt -u nullglob
 	run_step "feature generation for all input images" parallel --halt now,fail=1 --verbose -j"${INPUT_PARALLELISM}" \
-		python feature_generator.py --outfolder "${RESULTS_FOLDER_FEATURE_GENERATOR}" --file {} ::: "${INPUT_IMAGE_FOLDER}"/*.tif
+		python feature_generator.py --outfolder "${RESULTS_FOLDER_FEATURE_GENERATOR}" --file {} ::: "${INPUT_TIFF_FILES[@]}"
 
 	# creating a dataset from images
 	run_step "create joint dataframe" python create_joint_df.py "${RESULTS_FOLDER_FEATURE_GENERATOR}" "${RESULTS_FOLDER_RAW}"

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MicroICS Pipeline</title>
-  <link rel="stylesheet" href="/styles.css?v=20260804-1">
+  <link rel="stylesheet" href="/styles.css?v=20260810-1">
 </head>
 <body>
   <header class="topbar">
@@ -19,11 +19,11 @@
     <section class="setup-panel" aria-labelledby="setupTitle">
       <div class="eyebrow">Pipeline setup</div>
       <h1 id="setupTitle">Run your analysis</h1>
-      <p class="lede">Follow the analysis workflow from feature generation through training and inference.</p>
+      <p class="lede">Upload inputs, run MicroICS, and download the isolated job results.</p>
 
       <form id="pipelineForm">
         <fieldset class="workflow-picker">
-          <legend>Workflow <button class="help-button" data-help-title="Workflow" data-help-text="Work from top to bottom: generate a complete feature table, train models from that table, then run inference. All together performs the complete labelled workflow in one run." type="button" aria-label="Help for Workflow">?</button></legend>
+          <legend>Workflow <button class="help-button" data-help-title="Workflow" data-help-text="Generate features, train models, run inference, or execute the complete labelled workflow. Every run receives a separate job folder." type="button" aria-label="Help for Workflow">?</button></legend>
           <div class="workflow-stage">
             <span class="stage-number">1</span>
             <div class="workflow-stage-content">
@@ -35,100 +35,93 @@
               </div>
             </div>
           </div>
-          <label class="workflow-option workflow-stage-option" data-workflow="train"><span class="stage-number">2</span><input type="radio" name="workflow" value="train"><span class="workflow-copy"><b>Train models</b><small>Use a complete feature table; run one learner or all</small></span></label>
-          <label class="workflow-option workflow-stage-option" data-workflow="inference"><span class="stage-number">3</span><input type="radio" name="workflow" value="inference"><span class="workflow-copy"><b>Inference</b><small>Classify new images with saved models</small></span></label>
-          <label class="workflow-option workflow-stage-option" data-workflow="full"><span class="stage-number">4</span><input type="radio" name="workflow" value="full"><span class="workflow-copy"><b>All together</b><small>Generate labelled features, train models, and run inference</small></span></label>
+          <label class="workflow-option workflow-stage-option" data-workflow="train"><span class="stage-number">2</span><input type="radio" name="workflow" value="train"><span class="workflow-copy"><b>Train models</b><small>Upload a complete labelled feature table</small></span></label>
+          <label class="workflow-option workflow-stage-option" data-workflow="inference"><span class="stage-number">3</span><input type="radio" name="workflow" value="inference"><span class="workflow-copy"><b>Inference</b><small>Use uploaded images or a compatible feature table</small></span></label>
+          <label class="workflow-option workflow-stage-option" data-workflow="full"><span class="stage-number">4</span><input type="radio" name="workflow" value="full"><span class="workflow-copy"><b>All together</b><small>Generate, train, and classify in one isolated job</small></span></label>
         </fieldset>
 
         <div class="field-group" id="trainingImagesField">
-          <div class="field-label"><label for="trainingImages">Training images</label><button class="help-button" data-help-title="Training images" data-help-text="Choose a folder containing labelled .tif images, or select individual .tif files to upload. Image names should contain the labels expected by the pipeline." type="button" aria-label="Help for Training images">?</button></div>
-          <div class="path-picker"><input id="trainingImages" name="training_images" type="text" spellcheck="false" placeholder="/path/to/training_images"><button class="file-button" data-folder-target="trainingImages" type="button">Choose folder</button><label class="file-button" for="trainingFilePicker">Choose files</label><input class="hidden" id="trainingFilePicker" type="file" accept=".tif,image/tiff" multiple></div>
-          <small>Folder containing labelled <code>.tif</code> images, or choose files to upload.</small>
-          <small class="file-picker-status" id="trainingFileStatus"></small>
+          <div class="field-label"><label for="trainingFilePicker">Training images</label><button class="help-button" data-help-title="Training images" data-help-text="Upload labelled .tif or .tiff images. Files are stored only inside this job's input folder." type="button" aria-label="Help for Training images">?</button></div>
+          <label class="file-button upload-button" for="trainingFilePicker">Choose labelled images</label>
+          <input class="hidden" id="trainingFilePicker" type="file" accept=".tif,.tiff,image/tiff" multiple>
+          <small class="file-picker-status" id="trainingFileStatus">No training images uploaded.</small>
         </div>
-        <div class="field-group">
-          <div class="field-label"><label for="resultsDir">Results folder</label><button class="help-button" data-help-title="Results folder" data-help-text="This is where generated features, rankings, models, and other analysis output are stored. Training workflows clear existing contents after you confirm." type="button" aria-label="Help for Results folder">?</button></div>
-          <div class="path-picker"><input id="resultsDir" name="results_dir" type="text" spellcheck="false" placeholder="/path/to/results"><button class="file-button" data-folder-target="resultsDir" type="button">Choose folder</button></div>
-          <small class="warning-note">Feature generation starts by clearing this folder.</small>
+
+        <div class="field-group" id="inferenceImagesField">
+          <div class="field-label"><label for="inferenceFilePicker">Images to classify</label><button class="help-button" data-help-title="Inference images" data-help-text="Upload unlabelled .tif or .tiff images. For inference-only jobs, a pre-generated feature table may be used instead." type="button" aria-label="Help for inference images">?</button></div>
+          <label class="file-button upload-button" for="inferenceFilePicker">Choose inference images</label>
+          <input class="hidden" id="inferenceFilePicker" type="file" accept=".tif,.tiff,image/tiff" multiple>
+          <small class="file-picker-status" id="inferenceFileStatus">No inference images uploaded.</small>
         </div>
-        <div class="field-row" id="inferenceFields">
-          <div class="field-group"><div class="field-label"><label for="inferenceImages">Images to classify</label><button class="help-button" data-help-title="Images to classify" data-help-text="Choose a folder containing new .tif images, or select individual .tif files to upload. The saved models will generate predictions for these images." type="button" aria-label="Help for Images to classify">?</button></div><div class="path-picker split-picker"><input id="inferenceImages" name="inference_images" type="text" spellcheck="false" placeholder="/path/to/new_images"><button class="file-button" data-folder-target="inferenceImages" type="button">Choose folder</button><label class="file-button" for="inferenceFilePicker">Choose files</label><input class="hidden" id="inferenceFilePicker" type="file" accept=".tif,image/tiff" multiple></div><small class="file-picker-status" id="inferenceFileStatus"></small></div>
-          <div class="field-group"><div class="field-label"><label for="inferenceOutput">Inference output</label><button class="help-button" data-help-title="Inference output" data-help-text="Choose where prediction tables, probabilities, features, and explanations should be written. The folder can be new; it will be created when the run starts." type="button" aria-label="Help for Inference output">?</button></div><div class="path-picker single-picker"><input id="inferenceOutput" name="inference_output" type="text" spellcheck="false" placeholder="/path/to/inference_results"><button class="file-button" data-folder-target="inferenceOutput" type="button">Choose folder</button></div></div>
+
+        <div class="field-group" id="featureFileField">
+          <div class="field-label"><label for="featureFilePicker">Complete feature table</label><button class="help-button" data-help-title="Complete feature table" data-help-text="For training, upload a labelled table containing sampleName, label, and all desired features. For inference, upload a compatible table with sampleName and model features; raw images will not be regenerated." type="button" aria-label="Help for Complete feature table">?</button></div>
+          <label class="file-button upload-button" for="featureFilePicker">Choose feature table</label>
+          <input class="hidden" id="featureFilePicker" type="file" accept=".tsv,.txt,text/tab-separated-values,text/plain">
+          <small class="file-picker-status" id="featureFileStatus">No feature table uploaded.</small>
+        </div>
+
+        <div class="field-group hidden" id="modelJobField">
+          <div class="field-label"><label for="modelJob">Trained models</label><button class="help-button" data-help-title="Trained models" data-help-text="Select a previous training job stored under /data that contains saved models." type="button" aria-label="Help for trained models">?</button></div>
+          <select id="modelJob" name="model_job_id"><option value="">No trained model jobs available</option></select>
+          <small>Persist <code>/data</code> with a Docker volume to keep jobs across container replacement.</small>
         </div>
 
         <div class="field-row compact-row">
-          <div class="field-group"><div class="field-label"><label for="workers">Parallel workers</label><button class="help-button" data-help-title="Parallel workers" data-help-text="Controls how many image jobs can run at the same time. More workers can be faster but use more CPU and RAM. Use Suggested hardware defaults if unsure." type="button" aria-label="Help for Parallel workers">?</button></div><input id="workers" name="workers" type="number" min="1" max="64" value="4"></div>
-          <div class="field-group"><div class="field-label"><label for="topFeatures">Top features</label><button class="help-button" data-help-title="Top features" data-help-text="The number of highest-ranked features used for the benchmark visualizations and downstream analysis. 10 is a reasonable starting point." type="button" aria-label="Help for Top features">?</button></div><input id="topFeatures" name="top_features" type="number" min="1" max="500" value="10"></div>
-          <div class="field-group"><div class="field-label"><label for="correlationThreshold">Correlation |r| threshold</label><button class="help-button" data-help-title="Correlation threshold" data-help-text="Features with absolute correlation above this value are grouped in the redundancy report. Default is 0.8." type="button" aria-label="Help for Correlation threshold">?</button></div><input id="correlationThreshold" name="correlation_threshold" type="number" min="0.01" max="1" step="0.01" value="0.8"></div>
+          <div class="field-group"><div class="field-label"><label for="workers">Parallel workers</label><button class="help-button" data-help-title="Parallel workers" data-help-text="Controls concurrent image and model work inside this container. More workers use more CPU and RAM." type="button" aria-label="Help for Parallel workers">?</button></div><input id="workers" name="workers" type="number" min="1" max="64" value="4"></div>
+          <div class="field-group"><div class="field-label"><label for="topFeatures">Top features</label><button class="help-button" data-help-title="Top features" data-help-text="Number of highest-ranked features used for benchmark visualizations." type="button" aria-label="Help for Top features">?</button></div><input id="topFeatures" name="top_features" type="number" min="1" max="500" value="10"></div>
+          <div class="field-group"><div class="field-label"><label for="correlationThreshold">Correlation |r| threshold</label><button class="help-button" data-help-title="Correlation threshold" data-help-text="Features above this absolute correlation are grouped in the redundancy report." type="button" aria-label="Help for Correlation threshold">?</button></div><input id="correlationThreshold" name="correlation_threshold" type="number" min="0.01" max="1" step="0.01" value="0.8"></div>
         </div>
+
         <fieldset class="voxel-picker" id="voxelFields">
-          <legend>Voxel dimensions (µm) <button class="help-button" data-help-title="Voxel dimensions" data-help-text="Enter the physical width (X), height (Y), and depth (Z) of one image voxel in micrometres. MicroICS uses these values for features measured in physical units. The defaults are X 0.13, Y 0.13, and Z 0.5 µm." type="button" aria-label="Help for Voxel dimensions">?</button></legend>
+          <legend>Voxel dimensions (µm) <button class="help-button" data-help-title="Voxel dimensions" data-help-text="Physical width, height, and depth of one image voxel. These values affect features measured in physical units." type="button" aria-label="Help for Voxel dimensions">?</button></legend>
           <div class="voxel-grid">
-            <div class="field-group"><label for="voxelSizeX">X (µm)</label><input id="voxelSizeX" name="voxel_size_x" type="number" min="0" step="any" value="0.13" inputmode="decimal" required></div>
-            <div class="field-group"><label for="voxelSizeY">Y (µm)</label><input id="voxelSizeY" name="voxel_size_y" type="number" min="0" step="any" value="0.13" inputmode="decimal" required></div>
-            <div class="field-group"><label for="voxelSizeZ">Z (µm)</label><input id="voxelSizeZ" name="voxel_size_z" type="number" min="0" step="any" value="0.5" inputmode="decimal" required></div>
+            <div class="field-group"><label for="voxelSizeX">X (µm)</label><input id="voxelSizeX" type="number" min="0" step="any" value="0.13" required></div>
+            <div class="field-group"><label for="voxelSizeY">Y (µm)</label><input id="voxelSizeY" type="number" min="0" step="any" value="0.13" required></div>
+            <div class="field-group"><label for="voxelSizeZ">Z (µm)</label><input id="voxelSizeZ" type="number" min="0" step="any" value="0.5" required></div>
           </div>
-          <small>Physical voxel size used during feature generation and inference.</small>
         </fieldset>
-        <div class="field-row compact-row">
-          <div class="field-group"><div class="field-label"><label for="replicationUnit">Unit of replication</label><button class="help-button" data-help-title="Unit of replication" data-help-text="Keeps all images from one imaging position, well, plate, or imaging date together during cross-validation. Choose the independent experimental unit decided at the bench." type="button" aria-label="Help for Unit of replication">?</button></div><select id="replicationUnit" name="replication_unit"><option value="date" selected>Date</option><option value="plate">Plate</option><option value="well">Well</option><option value="position">Imaging position (pos)</option></select></div>
-          <div class="field-group" id="featureFileField"><div class="field-label"><label for="featureFile">Complete feature table (optional)</label><button class="help-button" data-help-title="Complete feature table" data-help-text="MicroICS uses this table as-is and does not extract or join features automatically. It must already contain sampleName, label for training, all desired MicroICS and external feature columns, and one row per image." type="button" aria-label="Help for Complete feature table">?</button></div><div class="path-picker"><input id="featureFile" name="feature_file" type="text" spellcheck="false" placeholder="/path/to/complete_features.tsv"><label class="file-button" for="featureFilePicker">Choose file</label><input class="hidden" id="featureFilePicker" type="file" accept=".tsv,.txt,text/tab-separated-values,text/plain"></div><small>Use a generated MicroICS datafile, optionally with external columns already appended.</small><small class="file-picker-status" id="featureFileStatus"></small></div>
-        </div>
-        <div class="hardware-actions"><button class="button tertiary" id="hardwareDefaultsButton" type="button">Suggested hardware defaults</button><button class="help-button" data-help-title="Suggested hardware defaults" data-help-text="Sets a conservative CPU and RAM limit for Docker and chooses a matching worker count. It limits resource use; it does not force the computer to use all of those resources." type="button" aria-label="Help for Suggested hardware defaults">?</button><small id="hardwareDefaultsMessage">Caps Docker at about 70% of available CPU and RAM.</small></div>
-        <fieldset class="learner-picker" id="modelFields"><legend>Learners <button class="help-button" data-help-title="Learner selection" data-help-text="Choose one learner for a focused run, or select All learners to benchmark every available learner." type="button" aria-label="Help for Learner selection">?</button></legend><div class="learner-mode-choices"><label class="learner-option active" data-learner-mode="single"><input name="learner_mode" type="radio" value="single" checked><span class="workflow-copy"><b>One learner</b><small>Focused, faster training</small></span></label><label class="learner-option" data-learner-mode="all"><input name="learner_mode" type="radio" value="all"><span class="workflow-copy"><b>All learners</b><small>Benchmark every algorithm</small></span></label></div><div class="field-group learner-select-field"><label for="learner">Learner</label><select id="learner" name="learner"><option value="rf" selected>Random Forest</option><option value="dummy">Majority baseline</option><option value="decisiontree">Decision tree</option><option value="logistic">Logistic regression</option><option value="xgb">XGBoost</option><option value="gridsearch">KNN grid search</option></select></div></fieldset>
-        <div class="check-row confirm-row hidden" id="cleanupConfirm"><label><input name="confirm_cleanup" type="checkbox"><span>Clear the existing results folder</span></label><button class="help-button" data-help-title="Clear existing results" data-help-text="Feature generation starts by removing existing contents from the results folder. Check this only when you are sure those outputs can be replaced." type="button" aria-label="Help for Clear existing results">?</button></div>
 
-        <div class="form-actions"><button class="button primary" id="runButton" type="submit"><span class="button-icon">▶</span>Run pipeline</button><button class="button secondary" id="demoButton" type="button">Run sample images</button><button class="button tertiary" id="openOutputButton" type="button">Open output folder</button><button class="button secondary hidden" id="stopButton" type="button"><span class="button-icon">■</span>Stop</button></div>
+        <div class="field-group" id="replicationField">
+          <div class="field-label"><label for="replicationUnit">Unit of replication</label><button class="help-button" data-help-title="Unit of replication" data-help-text="Keeps all images from one position, well, plate, or date together during cross-validation." type="button" aria-label="Help for replication unit">?</button></div>
+          <select id="replicationUnit"><option value="date" selected>Date</option><option value="plate">Plate</option><option value="well">Well</option><option value="position">Imaging position (pos)</option></select>
+        </div>
+
+        <fieldset class="learner-picker" id="modelFields">
+          <legend>Learners <button class="help-button" data-help-title="Learner selection" data-help-text="Choose one learner for a focused run, or benchmark every supported learner." type="button" aria-label="Help for Learner selection">?</button></legend>
+          <div class="learner-mode-choices"><label class="learner-option active" data-learner-mode="single"><input name="learner_mode" type="radio" value="single" checked><span class="workflow-copy"><b>One learner</b><small>Focused, faster training</small></span></label><label class="learner-option" data-learner-mode="all"><input name="learner_mode" type="radio" value="all"><span class="workflow-copy"><b>All learners</b><small>Benchmark every algorithm</small></span></label></div>
+          <div class="field-group learner-select-field"><label for="learner">Learner</label><select id="learner"><option value="rf" selected>Random Forest</option><option value="dummy">Majority baseline</option><option value="decisiontree">Decision tree</option><option value="logistic">Logistic regression</option><option value="xgb">XGBoost</option><option value="gridsearch">KNN grid search</option></select></div>
+        </fieldset>
+
+        <div class="hardware-actions"><button class="button tertiary" id="hardwareDefaultsButton" type="button">Suggested workers</button><small id="hardwareDefaultsMessage">Uses a conservative share of the CPUs available to this container.</small></div>
+        <div class="form-actions"><button class="button primary" id="runButton" type="submit"><span class="button-icon">▶</span>Run pipeline</button><button class="button secondary hidden" id="stopButton" type="button"><span class="button-icon">■</span>Stop</button><a class="button tertiary hidden" id="downloadButton" href="#" download>Download results ZIP</a></div>
         <p class="form-message" id="formMessage" role="status"></p>
         <section class="validation-panel" id="validationPanel" aria-live="polite"><div class="eyebrow">Preflight report</div><p id="validationMessage">Input validation runs before processing.</p><div id="validationDetails"></div></section>
       </form>
     </section>
 
     <section class="results-panel">
-      <div class="panel-heading"><div><div class="eyebrow">Live run</div><h2>Pipeline progress <span class="status-warning hidden" id="statusWarning" title="Open the run log for details">!</span></h2></div><div class="panel-heading-actions"><span class="eta-chip" id="etaLabel">ETA —</span><button class="button tertiary reset-button hidden" id="resetButton" type="button" title="Stop active work and clear this run">↻ Reset run</button><button class="icon-button" id="refreshButton" type="button" title="Refresh results" aria-label="Refresh results">↻</button></div></div>
+      <div class="panel-heading"><div><div class="eyebrow">Live job</div><h2>Pipeline progress <span class="status-warning hidden" id="statusWarning">!</span></h2></div><div class="panel-heading-actions"><span class="eta-chip" id="etaLabel">ETA —</span><button class="button tertiary reset-button hidden" id="resetButton" type="button">↻ New job</button><button class="icon-button" id="refreshButton" type="button" title="Refresh results">↻</button></div></div>
       <div class="progress-panel" aria-live="polite">
         <div class="progress-labels"><span id="progressLabel">Ready to run</span><strong id="progressValue">0%</strong></div>
-        <div class="progress-bar" id="progressBar" role="progressbar" aria-label="Pipeline progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="progress-fill" id="progressFill"></span></div>
+        <div class="progress-bar" id="progressBar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="progress-fill" id="progressFill"></span></div>
         <div class="progress-meta"><span id="progressSteps">No stages started</span><span id="progressDetail">The active stage will appear here.</span></div>
       </div>
-      <div class="pipeline-track" id="pipelineTrack"><div class="empty-state"><span class="empty-mark">◌</span><p>Your pipeline is ready.</p><small>Start a run to see each Docker step light up here.</small></div></div>
+      <div class="pipeline-track" id="pipelineTrack"><div class="empty-state"><span class="empty-mark">◌</span><p>Your pipeline is ready.</p><small>Upload input files and start a job.</small></div></div>
 
       <div class="inspector-heading"><div><div class="eyebrow">Output browser</div><h2>Inspect results</h2></div><span class="file-count" id="fileCount">0 files</span></div>
-      <div class="inspector">
-        <div class="file-list" id="fileList"><div class="empty-state compact"><span class="empty-mark">⌁</span><p>No output yet.</p><small>Generated files will appear here as the pipeline completes.</small></div></div>
-        <div class="preview" id="preview"><div class="preview-placeholder"><span>＋</span><p>Select a file to inspect it.</p><small>Tables, plots, and HTML visualizations open here.</small></div></div>
-      </div>
-
-      <details class="log-panel" open><summary><span>Run log</span><span class="log-state" id="logState">Waiting</span></summary><pre id="logOutput">No run started.</pre></details>
+      <div class="inspector"><div class="file-list" id="fileList"><div class="empty-state compact"><span class="empty-mark">⌁</span><p>No output yet.</p></div></div><div class="preview" id="preview"><div class="preview-placeholder"><span>＋</span><p>Select a file to inspect it.</p></div></div></div>
+      <details class="log-panel" open><summary><span>Job log</span><span class="log-state" id="logState">Waiting</span></summary><pre id="logOutput">No job started.</pre></details>
     </section>
   </main>
-  <div class="folder-picker hidden" id="folderPicker" role="dialog" aria-modal="true" aria-labelledby="folderPickerTitle">
-    <div class="folder-picker-backdrop" data-close-folder-picker></div>
-    <div class="folder-picker-dialog">
-      <div class="folder-picker-heading"><div><div class="eyebrow">Folder selector</div><h2 id="folderPickerTitle">Choose a folder</h2></div><button class="icon-button" id="closeFolderPicker" type="button" aria-label="Close folder selector">×</button></div>
-      <div class="folder-path-row"><input id="folderPathInput" type="text" spellcheck="false"><button class="button tertiary" id="folderGoButton" type="button">Go</button></div>
-      <p class="folder-picker-message" id="folderPickerMessage">Select a folder below.</p>
-      <div class="folder-list" id="folderList"></div>
-      <div class="folder-picker-actions"><button class="button secondary" id="cancelFolderButton" type="button">Cancel</button><button class="button primary" id="selectFolderButton" type="button">Use this folder</button></div>
-    </div>
-  </div>
-  <div class="cleanup-modal hidden" id="cleanupModal" role="dialog" aria-modal="true" aria-labelledby="cleanupModalTitle" aria-describedby="cleanupModalText">
-    <div class="cleanup-modal-backdrop" data-close-cleanup-modal></div>
-    <div class="cleanup-modal-dialog">
-      <div class="cleanup-modal-heading"><span class="cleanup-modal-mark">!</span><div><div class="eyebrow">Before you run</div><h2 id="cleanupModalTitle">Replace existing results?</h2></div><button class="icon-button" id="closeCleanupModal" type="button" aria-label="Close cleanup confirmation">×</button></div>
-      <p id="cleanupModalText">Feature generation will clear the current results folder before it starts.</p>
-      <div class="cleanup-folder-card"><span class="cleanup-folder-icon">▣</span><div><strong id="cleanupFolderPath">/path/to/results</strong><small id="cleanupFolderSummary">Existing files will be replaced.</small></div></div>
-      <div class="cleanup-modal-actions"><button class="button secondary" id="cancelCleanupButton" type="button">Go back</button><button class="button primary danger-button" id="confirmCleanupButton" type="button">Clear folder &amp; run</button></div>
-    </div>
-  </div>
+
   <div class="help-modal hidden" id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpModalTitle" aria-describedby="helpModalText">
     <div class="help-modal-backdrop" data-close-help-modal></div>
     <div class="help-modal-dialog">
-      <div class="help-modal-heading"><span class="help-modal-mark">?</span><div><div class="eyebrow">Field guide</div><h2 id="helpModalTitle">Help</h2></div><button class="icon-button" id="closeHelpModal" type="button" aria-label="Close help">×</button></div>
-      <p id="helpModalText"></p>
-      <button class="button primary help-modal-close" id="dismissHelpModal" type="button">Got it</button>
+      <div class="help-modal-heading"><span class="help-modal-mark">?</span><div><div class="eyebrow">Field guide</div><h2 id="helpModalTitle">Help</h2></div><button class="icon-button" id="closeHelpModal" type="button">×</button></div>
+      <p id="helpModalText"></p><button class="button primary help-modal-close" id="dismissHelpModal" type="button">Got it</button>
     </div>
   </div>
-  <script src="/app.js?v=20260804-1"></script>
+  <script src="/app.js?v=20260810-1"></script>
 </body>
 </html>

@@ -20,7 +20,7 @@ def extract_class(model_name):
         return model_name.split("(")[0]
 
 
-results_folder = "/imagine/results"
+results_folder = os.environ.get("IMAGINE_RESULTS", "/imagine/results")
 
 for result in glob.glob(results_folder + "/classification*"):
     dfx = pd.read_csv(result, sep="\t")

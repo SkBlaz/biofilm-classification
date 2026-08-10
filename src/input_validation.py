@@ -92,7 +92,7 @@ def sample_fields(sample_name: str) -> dict[str, str] | None:
 def validate_image_directory(directory: str | Path, labelled: bool = True) -> dict[str, Any]:
     """Return a JSON-friendly filename, label, date, and replication report."""
     root = Path(directory)
-    files = sorted(path for path in root.glob("*.tif") if path.is_file()) if root.is_dir() else []
+    files = sorted(path for path in root.iterdir() if path.is_file() and path.suffix.lower() in {".tif", ".tiff"}) if root.is_dir() else []
 
     if not labelled:
         return {
@@ -110,7 +110,7 @@ def validate_image_directory(directory: str | Path, labelled: bool = True) -> di
             "message": (
                 f"Found {len(files)} unlabelled .tif image(s); filename convention was not enforced."
                 if files
-                else "No .tif images were found."
+                else "No .tif or .tiff images were found."
             ),
         }
 
@@ -147,7 +147,7 @@ def validate_image_directory(directory: str | Path, labelled: bool = True) -> di
         "message": (
             f"Validated {len(parsed)} of {len(files)} image filenames; found {len(labels)} unique label(s)."
             if files
-            else "No .tif images were found."
+            else "No .tif or .tiff images were found."
         ),
     }
 

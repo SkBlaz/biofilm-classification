@@ -1,6 +1,6 @@
 # How MicroICS works
 
-MicroICS converts 3D biofilm microscopy images into measurements, learns which measurements distinguish known biological classes, and applies the trained models to new images. Docker supplies a reproducible scientific environment; users can control it through the graphical interface or directly from the command line.
+MicroICS converts 3D biofilm microscopy images into measurements, learns which measurements distinguish known biological classes, and applies the trained models to new images. One Docker image supplies both the browser GUI and reproducible scientific environment; all computation runs in that same container.
 
 ## Using MicroICS through the GUI
 
@@ -47,7 +47,7 @@ During training, MicroICS:
 4. writes classification tables and confusion matrices;
 5. trains final models on all labelled data and saves them in `results/models`.
 
-Empty, NaN, and infinite values in otherwise valid numeric feature columns are reported during preflight and imputed by the learning pipeline. Missing sample identifiers, duplicate samples, non-numeric text, or missing training labels stop the run.
+Generated feature columns are retained even when they contain zero, NaN, or infinite values, and the learning and inference loaders apply the established value-level imputation consistently. Missing sample identifiers, duplicate samples, non-numeric text, or missing training labels stop the run.
 
 ### 3. Inference
 
@@ -59,28 +59,11 @@ Inference is not a substitute for independent biological validation. Predictions
 
 **All together** runs labelled feature generation, model training, and inference in sequence. Separate stages are preferable while checking a new dataset because their intermediate tables are easier to inspect.
 
-The GUI preflight report appears before computation. **Stop** interrupts the current container and retains the visible run state and log. **Reset run** terminates active work, clears the transient GUI state, and returns MicroICS to Ready without deleting output files.
+The GUI preflight report appears before computation. **Stop** interrupts the active scientific subprocess while keeping the web server and job log available. **New job** resets the transient interface state; completed files remain under that job ID when `/data` is persisted.
 
-## Using Docker without the GUI
+## Runtime architecture
 
-Direct Docker commands expose the same pipeline for scripted, remote, or reproducible batch runs. Paths and options are configured through `.env`/Docker Compose variables, then the numbered pipeline steps are invoked in order.
-
-Typical labelled training flow:
-
-```bash
-cp env-example.env .env
-docker compose build
-docker compose run --rm imagine 4 datafile.tsv 10 generate_features
-docker compose run --rm imagine 4 datafile.tsv 10 learning_benchmark_save_models
-```
-
-Typical inference flow:
-
-```bash
-docker compose run --rm imagine 4 - 10 inference
-```
-
-These are entry points, not a complete configuration example. Set the host image, results, model, inference, voxel-dimension, and replication paths described in [RUN.md](RUN.md) before processing real data. The detailed reference also documents test services, complete-table requirements, environment variables, and output files.
+The browser uploads data to a per-job directory under `/data`. `gui/execution.py` maps the request to the existing feature-generation, training, reporting, and inference entry points in `src/`. A worker thread supervises each scientific subprocess and records its output without blocking the HTTP server. Results remain associated with the job and can be downloaded as one ZIP archive. See [RUN.md](RUN.md) for the exact filesystem and commands.
 
 ## Methodological notes
 

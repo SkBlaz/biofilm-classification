@@ -212,7 +212,7 @@ class TestValidateCliInputs(unittest.TestCase):
             self._create_test_file(models_dir, "demo_model.joblib")
             with self.assertRaises(ValueError) as context:
                 validate_cli_inputs(models_dir, images_dir)
-            self.assertIn("No '.tif' images were found", str(context.exception))
+            self.assertIn("No '.tif' or '.tiff' images were found", str(context.exception))
 
     def test_valid_inputs(self):
         with tempfile.TemporaryDirectory() as models_dir, tempfile.TemporaryDirectory() as images_dir:

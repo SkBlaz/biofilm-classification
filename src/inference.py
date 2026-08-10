@@ -87,8 +87,8 @@ def validate_cli_inputs(models_dir, images_dir, features_file=None):
             errors.append(f"Features file does not exist: {features_file}")
     elif not os.path.isdir(images_dir):
         errors.append(f"Images directory does not exist: {images_dir}")
-    elif not any(Path(images_dir).glob("*.tif")):
-        errors.append(f"No '.tif' images were found in: {images_dir}")
+    elif not any(path.suffix.lower() in {".tif", ".tiff"} for path in Path(images_dir).iterdir() if path.is_file()):
+        errors.append(f"No '.tif' or '.tiff' images were found in: {images_dir}")
 
     if errors:
         raise ValueError("Invalid CLI inputs:\n- " + "\n- ".join(errors) + f"\n{CLI_USAGE}")
@@ -160,21 +160,12 @@ def generate_features_for_images(images_dir, temp_dir):
     os.makedirs(raw_dir, exist_ok=True)
     os.makedirs(analysis_dir, exist_ok=True)
 
-    # Determine working directory (Docker vs local)
-    if os.path.exists("/opt/imagine"):
-        src_dir = "/opt/imagine"
-    elif os.path.exists(os.path.join(os.path.dirname(__file__), "..", "src")):
-        # Running locally, check if we're in the src directory or project root
-        src_dir = os.path.dirname(os.path.abspath(__file__))
-    else:
-        # Assume we're running locally from project root
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        src_dir = current_dir
+    src_dir = os.path.dirname(os.path.abspath(__file__))
 
     # Find all .tif files
-    tif_files = glob.glob(os.path.join(images_dir, "*.tif"))
+    tif_files = sorted(glob.glob(os.path.join(images_dir, "*.tif")) + glob.glob(os.path.join(images_dir, "*.tiff")))
     if not tif_files:
-        raise ValueError(f"No .tif files found in {images_dir}")
+        raise ValueError(f"No .tif or .tiff files found in {images_dir}")
 
     logger.info(f"Found {len(tif_files)} .tif files")
 

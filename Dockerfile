@@ -1,47 +1,36 @@
 FROM python:3.11-slim
 
-WORKDIR /opt/imagine
+ARG DEBIAN_FRONTEND=noninteractive
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/opt/microics:/opt/microics/src \
+    MPLBACKEND=Agg \
+    MICROICS_DATA_ROOT=/data
+
+WORKDIR /opt/microics
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    dos2unix libhdf5-dev graphviz locales curl git zip parallel imagemagick && \
-	pip install --upgrade pip && \
-	rm -rf /var/lib/apt/lists/*
+        graphviz \
+        imagemagick \
+        libhdf5-dev \
+        locales \
+        parallel \
+    && rm -rf /var/lib/apt/lists/*
 
-# requirements
-COPY src/requirements.docker.txt .
+COPY src/requirements.docker.txt /tmp/requirements.docker.txt
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir -r /tmp/requirements.docker.txt
 
-RUN pip install \
-	--no-cache-dir \
-	--trusted-host pypi.org \
-	--trusted-host pypi.python.org \
-	--trusted-host files.pythonhosted.org \
-	-r requirements.docker.txt
+COPY . /opt/microics
 
-# processing, ranking and util
-COPY src/create_final_df_from_results.py \
-	 src/feature_generator.py \
-	 src/benchmark_outputs.py \
-	 src/input_validation.py \
-	 src/validate_inputs.py \
-	 src/create_joint_df.py \
-	 src/analysis.py \
-	 src/run_analysis.sh \
-	 src/feature_ranking_lite.py \
-	 src/inference.py \
-	 src/remove_layers.sh \
-	 src/visualize_benchmark.py \
-	 ./
+RUN mkdir -p /data/jobs \
+    && chmod +x /opt/microics/src/run_analysis.sh /opt/microics/src/remove_layers.sh
 
-# visualizations
-COPY src/visualizations/pipeline_visualizations.py \
-     src/visualizations/visualize.py \
-	 ./visualizations/
+VOLUME ["/data"]
+EXPOSE 8765
 
-RUN dos2unix run_analysis.sh && \
-	dos2unix remove_layers.sh
-	
-# test data for CI
-COPY datafile.tsv ./
-COPY ci_datafile.tsv ./
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/api/health', timeout=3)" || exit 1
 
-ENTRYPOINT [ "bash", "run_analysis.sh" ]
+CMD ["python", "gui/app.py", "--host", "0.0.0.0", "--port", "8765", "--no-browser"]

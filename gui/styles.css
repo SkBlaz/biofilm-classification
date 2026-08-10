@@ -63,7 +63,7 @@ h1,h2,p { margin-top:0; } h1 { margin-bottom:8px; font-size:27px; line-height:1.
 .step-mark { position:relative; z-index:2; display:grid; place-items:center; width:35px; height:35px; margin-bottom:18px; border:1px solid #ccd6d1; border-radius:50%; background:#fff; color:#99a49f; font-size:13px; font-weight:800; }
 .pipeline-step h3 { margin:0 0 4px; font-size:12px; line-height:1.25; } .pipeline-step p { margin:0; color:var(--muted); font-size:11px; }
 .pipeline-step.is-running { background:#f2faf6; } .pipeline-step.is-running .step-mark { border-color:var(--green-bright); color:var(--green); box-shadow:0 0 0 5px rgba(50,197,143,.13),0 0 22px rgba(50,197,143,.35); animation:breathe 1.4s ease-in-out infinite; }
-.pipeline-step.is-complete .step-mark { border-color:var(--green); background:var(--green); color:#fff; } .pipeline-step.is-failed .step-mark { border-color:var(--coral); color:var(--coral); } .pipeline-step.is-cancelled .step-mark { border-color:#a8b1ad; color:#78827d; }
+.pipeline-step.is-complete .step-mark,.pipeline-step.is-completed .step-mark { border-color:var(--green); background:var(--green); color:#fff; } .pipeline-step.is-failed .step-mark { border-color:var(--coral); color:var(--coral); } .pipeline-step.is-cancelled .step-mark { border-color:#a8b1ad; color:#78827d; }
 @keyframes breathe { 50% { box-shadow:0 0 0 7px rgba(50,197,143,.08),0 0 28px rgba(50,197,143,.42); } }
 .empty-state { grid-column:1/-1; display:grid; place-content:center; justify-items:center; min-height:143px; padding:20px; text-align:center; color:var(--muted); }
 .empty-mark { display:block; margin-bottom:9px; color:var(--green-bright); font-size:25px; } .empty-state p { margin-bottom:2px; color:var(--ink); font-size:13px; font-weight:700; } .empty-state small { font-size:11px; }
@@ -306,6 +306,9 @@ h1 { margin-bottom:10px; font-size:31px; letter-spacing:-.035em; }
 .voxel-grid .field-group label { text-transform:none; }
 .voxel-picker > small { display:block; margin-top:8px; color:var(--muted); font-size:10px; }
 .reset-button { min-height:34px; white-space:nowrap; }
+.upload-button { min-height:40px; width:100%; border-left:1px solid #cfddd5; border-radius:9px; }
+.file-row { width:100%; border-top:0; border-right:0; border-left:0; background:transparent; color:var(--ink); text-align:left; }
+a.button { display:inline-grid; place-items:center; text-decoration:none; }
 @media (max-width:620px) {
   .brand .brand-logo { width:88px; height:37px; }
   .brand .brand-logo img { width:76px; }
