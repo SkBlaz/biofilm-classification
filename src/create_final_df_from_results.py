@@ -3,26 +3,22 @@ import logging
 import os
 import sys
 
-import numpy as np
 import pandas as pd
 
 logging.basicConfig(format="%(asctime)s - %(message)s", datefmt="%d-%b-%y %H:%M:%S")
 logging.getLogger(__name__).setLevel(logging.INFO)
 
 
-def drop_nonfinite_feature_columns(frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
-    """Remove unusable generated features while preserving sample metadata."""
-    invalid_columns = []
-    for column in frame.columns:
-        if column == "label":
-            continue
-        if str(column).startswith("Unnamed:"):
-            invalid_columns.append(str(column))
-            continue
-        numeric = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
-        if not np.isfinite(numeric).all():
-            invalid_columns.append(str(column))
-    return frame.drop(columns=invalid_columns), invalid_columns
+def drop_export_artifact_columns(frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    """Remove accidental CSV index columns without changing generated features.
+
+    Empty, NaN, and infinite feature values are intentionally retained here. The
+    learning and inference loaders apply the legacy value-level imputation, so
+    dropping a whole feature because one sample needs imputation changes the
+    feature contract and makes GUI-generated tables differ from CLI tables.
+    """
+    artifact_columns = [str(column) for column in frame.columns if str(column).startswith("Unnamed:")]
+    return frame.drop(columns=artifact_columns), artifact_columns
 
 
 if __name__ == "__main__":
@@ -56,10 +52,10 @@ if __name__ == "__main__":
         df_final["label"] = [x.split("--")[4] for x in df_final.index.tolist()]
     ubound = df_final.isnull().sum(axis=1) / df_final.shape[1]
     df_final = df_final[ubound < 0.8]
-    df_final, removed_columns = drop_nonfinite_feature_columns(df_final)
+    df_final, removed_columns = drop_export_artifact_columns(df_final)
     if removed_columns:
         logging.warning(
-            "Excluded %d generated feature columns containing empty, NaN, or infinite values: %s",
+            "Excluded %d accidental index columns: %s",
             len(removed_columns),
             ", ".join(removed_columns),
         )

@@ -8,13 +8,21 @@ import unittest
 from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
 from sklearn.model_selection import KFold, StratifiedKFold
 
 # Add src directory to path
 sys.path.insert(0, "src")
 
 import feature_ranking_lite
-from feature_ranking_lite import configured_parallelism, get_adaptive_cv, get_benchmark_runtime_config, prepare_fold_features
+from feature_ranking_lite import (
+    compute_ablation_scores,
+    configured_parallelism,
+    get_adaptive_cv,
+    get_benchmark_runtime_config,
+    partial_evaluation_path,
+    prepare_fold_features,
+)
 
 
 class TestAdaptiveCV(unittest.TestCase):
@@ -89,6 +97,14 @@ class TestBenchmarkRuntimeConfig(unittest.TestCase):
         with patch.object(feature_ranking_lite, "PARALLELISM", 3):
             self.assertEqual(configured_parallelism(), 3)
 
+    def test_partial_cache_separates_replication_strategies(self):
+        date_path = partial_evaluation_path("partial", "all", 0, 16, True, "rf", 0, "date")
+        well_path = partial_evaluation_path("partial", "all", 0, 16, True, "rf", 0, "well")
+
+        self.assertNotEqual(date_path, well_path)
+        self.assertIn("_repdate_", date_path)
+        self.assertIn("/v2_", date_path)
+
     def test_fold_preprocessing_is_reusable_across_learners(self):
         x_train = np.arange(60, dtype=float).reshape(10, 6)
         x_test = np.arange(24, dtype=float).reshape(4, 6)
@@ -122,6 +138,26 @@ class TestBenchmarkRuntimeConfig(unittest.TestCase):
         self.assertEqual(transformed_test.shape, (4, 2))
         self.assertEqual(effective_components, 2)
         self.assertIsNone(transformer)
+
+
+class TestAblationEvaluation(unittest.TestCase):
+    def test_ablation_is_deterministic_and_honors_replication_groups(self):
+        rng = np.random.default_rng(42)
+        sample_names = [
+            f"{date}--s--Lm--st--{label}--p--C01--pos001--tm--24--ch--Syto9--z--21"
+            for date in ("01012026", "02012026", "03012026", "04012026")
+            for label in ("L1", "L2")
+            for _ in range(2)
+        ]
+        labels = pd.Series([label for _date in range(4) for label in ("L1", "L2") for _ in range(2)], index=sample_names)
+        features = pd.DataFrame(rng.normal(size=(len(sample_names), 22)), index=sample_names)
+
+        with patch.object(feature_ranking_lite, "PARALLELISM", 1):
+            first = compute_ablation_scores(features, labels, replication_unit="date")
+            second = compute_ablation_scores(features, labels, replication_unit="date")
+
+        pd.testing.assert_frame_equal(first, second)
+        self.assertEqual(first["top_n"].tolist(), [1, 21])
 
 
 if __name__ == "__main__":

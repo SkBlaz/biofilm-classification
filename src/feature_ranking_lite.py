@@ -67,6 +67,7 @@ np.random.seed(123)
 
 PARALLELISM = -1
 MIN_CV_SPLITS = 2
+PARTIAL_CACHE_VERSION = 2
 
 
 def get_benchmark_runtime_config():
@@ -87,6 +88,16 @@ def get_benchmark_runtime_config():
 def configured_parallelism() -> int:
     """Return the requested worker count for estimators and model searches."""
     return PARALLELISM if PARALLELISM == -1 else max(1, PARALLELISM)
+
+
+def partial_evaluation_path(partial_dir, filter_mode, repetition, n_components, thr_features, model_name, fold, replication_unit):
+    """Return a cache path that cannot mix incompatible CV strategies."""
+    replication_tag = replication_unit or "none"
+    filename = (
+        f"v{PARTIAL_CACHE_VERSION}_{filter_mode}_partial_{repetition}_n{n_components}_"
+        f"thr{thr_features}_{model_name}_rep{replication_tag}_fold{fold}.tsv"
+    )
+    return os.path.join(partial_dir, filename)
 
 
 def prepare_fold_features(x_train, x_test, n_components, thr_features, thr_indices):
@@ -550,9 +561,15 @@ def do_classification_simple(
                     )
 
                     for model_name, model in models.items():
-                        partial_path = (
-                            partial_dir
-                            + f"{filter_mode}_partial_{repetition}_n{desc_components}_thr{thr_features}_{model_name}_fold{i}.tsv"
+                        partial_path = partial_evaluation_path(
+                            partial_dir,
+                            filter_mode,
+                            repetition,
+                            desc_components,
+                            thr_features,
+                            model_name,
+                            i,
+                            replication_unit,
                         )
 
                         if os.path.isfile(partial_path):
@@ -894,44 +911,55 @@ def do_classification_simple(
                     continue
 
 
-def do_classification_rfe(xs, y, path_to_data, tagname="all"):
-    # Do feature ranking on everything (yeah, this is just an ablation)
-    # Do learning with top n
-    model = RandomForestClassifier()
-    model.fit(xs, y)
-    importances = np.array(model.feature_importances_)
-    sorted_indices = np.argsort(importances)[::-1]
-
+def compute_ablation_scores(xs, y, replication_unit=None):
+    """Evaluate top-feature subsets without leakage and with repeatable forests."""
+    sample_names = xs.index.astype(str).tolist()
     X_init = xs.values
     y_init = pd.Categorical(y.values).codes
-    skf, rfe_n_splits, rfe_min_class_count, rfe_cv_strategy, rfe_cv_reason = get_adaptive_cv(y_init, max_splits=3)
+    group_ids = None
+    if replication_unit:
+        try:
+            from input_validation import replication_group
+        except ImportError:
+            from .input_validation import replication_group
+
+        group_ids = np.array([replication_group(name, replication_unit) for name in sample_names])
+
+    skf, rfe_n_splits, rfe_min_class_count, rfe_cv_strategy, rfe_cv_reason = get_adaptive_cv(y_init, max_splits=3, groups=group_ids)
     logger.info(
         f"RFE evaluation uses {rfe_n_splits} folds (strategy: {rfe_cv_strategy}, "
         f"minimum class count: {rfe_min_class_count}). {rfe_cv_reason}"
     )
+    split_iterator = skf.split(X_init, y_init, group_ids) if group_ids is not None else skf.split(X_init, y_init)
+    splits = list(split_iterator)
+    top_feature_counts = list(range(1, X_init.shape[1], 20))
+    fold_accuracies = {top_n: [] for top_n in top_feature_counts}
+    forest_jobs = configured_parallelism()
+
+    for train_index, test_index in splits:
+        # Rank only on the training fold. Ranking on all samples before CV leaks
+        # information from the held-out fold into every ablation configuration.
+        ranking_model = RandomForestClassifier(random_state=1234, n_jobs=forest_jobs)
+        ranking_model.fit(X_init[train_index], y_init[train_index])
+        sorted_indices = np.argsort(ranking_model.feature_importances_)[::-1]
+
+        for top_n in top_feature_counts:
+            selected = sorted_indices[:top_n]
+            fresh_model = RandomForestClassifier(random_state=1234, n_jobs=forest_jobs)
+            fresh_model.fit(X_init[train_index][:, selected], y_init[train_index])
+            y_hat = fresh_model.predict(X_init[test_index][:, selected])
+            fold_accuracies[top_n].append(accuracy_score(y_init[test_index], y_hat))
+
     out_df = []
-    for j in range(1, len(sorted_indices), 20):
-        X = X_init[:, sorted_indices[:j]]
-        y = y_init
+    for top_n in top_feature_counts:
+        mean_acc = np.mean(fold_accuracies[top_n])
+        logger.info(f"Testing top features: {top_n} out of {X_init.shape[1]} (acc: {mean_acc})")
+        out_df.append({"top_n": top_n, "accuracy": mean_acc})
+    return pd.DataFrame(out_df)
 
-        accs = []
-        for i, (train_index, test_index) in enumerate(skf.split(X, y)):
-            fresh_model = RandomForestClassifier()
 
-            x_train = X[train_index]
-            y_train = y[train_index]
-
-            x_test = X[test_index]
-            y_test = y[test_index]
-
-            fresh_model.fit(x_train, y_train)
-            y_hat = fresh_model.predict(x_test)
-            acc = accuracy_score(y_test, y_hat)
-            accs.append(acc)
-        mean_acc = np.mean(accs)
-        logger.info(f"Testing top features: {j} out of {len(sorted_indices)} (acc: {mean_acc})")
-        out_df.append({"top_n": j, "accuracy": mean_acc})
-    dfx_out = pd.DataFrame(out_df)
+def do_classification_rfe(xs, y, path_to_data, tagname="all", replication_unit=None):
+    dfx_out = compute_ablation_scores(xs, y, replication_unit=replication_unit)
     # Handle case where path_to_data has no directory separator
     path_parts = path_to_data.split("/")[:-1]
     if path_parts:
@@ -939,7 +967,7 @@ def do_classification_rfe(xs, y, path_to_data, tagname="all"):
     else:
         base_dir = "."  # Current directory if no path is specified
     fout = base_dir + f"/ablation_ranking_{tagname}.tsv"
-    dfx_out.to_csv(fout, sep="\t")
+    dfx_out.to_csv(fout, sep="\t", index=False)
     print(dfx_out)
 
 
@@ -1050,7 +1078,7 @@ if __name__ == "__main__":
             replication_unit=arguments.replication_unit,
             learner=arguments.learner,
         )
-        do_classification_rfe(xs, y, file)
+        do_classification_rfe(xs, y, file, replication_unit=arguments.replication_unit)
 
         output_dir = os.path.join(os.path.dirname(file), "visualizations")
         write_confusion_matrices(os.path.join(os.path.dirname(file), "classification_all.tsv"), output_dir)

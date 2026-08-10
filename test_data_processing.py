@@ -14,7 +14,7 @@ import pandas as pd
 # Add src directory to path
 sys.path.insert(0, "src")
 
-from create_final_df_from_results import drop_nonfinite_feature_columns
+from create_final_df_from_results import drop_export_artifact_columns
 from create_joint_df import extract_data
 from feature_ranking_lite import load_data, validate_target_labels
 
@@ -109,7 +109,7 @@ class TestExtractData(unittest.TestCase):
 class TestDataProcessingUtilities(unittest.TestCase):
     """Test additional data processing utilities."""
 
-    def test_generated_table_drops_nonfinite_feature_columns(self):
+    def test_generated_table_preserves_features_that_need_imputation(self):
         frame = pd.DataFrame(
             {
                 "valid": [1.0, 2.0],
@@ -121,10 +121,12 @@ class TestDataProcessingUtilities(unittest.TestCase):
             index=["sample1", "sample2"],
         )
 
-        cleaned, removed = drop_nonfinite_feature_columns(frame)
+        cleaned, removed = drop_export_artifact_columns(frame)
 
-        self.assertEqual(removed, ["all_nan_std", "one_infinite", "Unnamed: 0-index"])
-        self.assertEqual(cleaned.columns.tolist(), ["valid", "label"])
+        self.assertEqual(removed, ["Unnamed: 0-index"])
+        self.assertEqual(cleaned.columns.tolist(), ["valid", "all_nan_std", "one_infinite", "label"])
+        self.assertTrue(cleaned["all_nan_std"].isna().all())
+        self.assertEqual(cleaned.loc["sample2", "one_infinite"], float("inf"))
 
     def test_validate_target_labels_rejects_missing_labels(self):
         df = pd.DataFrame({"feature": [1, 2], "label": ["L1323", None]}, index=["sample1", "sample2"])
@@ -247,6 +249,33 @@ class TestDataProcessingUtilities(unittest.TestCase):
 
             result = pd.read_csv(outfile, sep="\t", index_col=0)
             self.assertEqual(result.loc["E8_image_001", "label"], "unlabelled")
+
+    def test_create_final_df_keeps_columns_with_missing_generated_values(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            analysis_dir = os.path.join(temp_dir, "analysis")
+            os.makedirs(analysis_dir)
+            outfile = os.path.join(temp_dir, "datafile.tsv")
+            sample_names = [
+                "01012026--s--Lm--st--L1--p--C01--pos001--tm--24--ch--Syto9--z--21",
+                "01012026--s--Lm--st--L2--p--C02--pos001--tm--24--ch--Syto9--z--21",
+            ]
+            pd.DataFrame({"sampleName": sample_names, "mean": [float("nan"), 2.0], "zero": [0.0, 1.0]}).to_csv(
+                os.path.join(analysis_dir, "SUMMARYCustomAlgos.tsv_mean.txt"), sep="\t", index=False
+            )
+
+            subprocess.run(
+                [sys.executable, "src/create_final_df_from_results.py", analysis_dir, outfile],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            result = pd.read_csv(outfile, sep="\t")
+            mean_column = next(column for column in result if column.startswith("mean-"))
+            zero_column = next(column for column in result if column.startswith("zero-"))
+            self.assertIn(mean_column, result)
+            self.assertTrue(pd.isna(result.loc[0, mean_column]))
+            self.assertEqual(result.loc[0, zero_column], 0.0)
 
     def test_run_analysis_writes_unlabelled_features_to_unknown_features(self):
         with tempfile.TemporaryDirectory() as temp_dir:
