@@ -114,7 +114,16 @@ h1,h2,p { margin-top:0; } h1 { margin-bottom:8px; font-size:27px; line-height:1.
 .preview img { display:block; max-width:100%; max-height:370px; margin:18px auto; object-fit:contain; } .preview iframe { display:block; width:100%; height:390px; border:0; background:#fff; }
 .preview-title { padding:10px 14px 0; color:var(--muted); font-size:11px; } .log-panel { margin-top:17px; border:1px solid var(--line); border-radius:7px; background:#1b2824; color:#c5d6cd; overflow:hidden; }
 .log-panel summary { display:flex; justify-content:space-between; padding:11px 14px; cursor:pointer; color:#e3eee8; font-size:11px; font-weight:750; list-style:none; } .log-panel summary::-webkit-details-marker { display:none; }
-.log-state { color:var(--green-bright); font-weight:500; } .log-panel pre { max-height:180px; margin:0; padding:0 14px 14px; overflow:auto; color:#9eb8aa; font:10px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; }
+.log-actions { display:flex; align-items:center; gap:8px; margin-left:auto; }
+.log-state { color:var(--green-bright); font-weight:500; }
+.copy-log-feedback { min-width:0; color:#8fd8b9; font-size:10px; font-weight:650; }
+.copy-log-button { display:grid; place-items:center; width:26px; height:26px; padding:0; border:1px solid rgba(197,214,205,.22); border-radius:7px; background:rgba(255,255,255,.04); color:#c5d6cd; cursor:pointer; }
+.copy-log-button:hover:not(:disabled) { border-color:#65cda4; background:rgba(101,205,164,.12); color:#8ee0bf; }
+.copy-log-button:focus-visible { outline:2px solid #65cda4; outline-offset:2px; }
+.copy-log-button:disabled { cursor:not-allowed; opacity:.38; }
+.copy-log-button.is-copied { border-color:#65cda4; background:rgba(101,205,164,.18); color:#8ee0bf; }
+.copy-log-button svg { width:14px; height:14px; fill:none; stroke:currentColor; stroke-linecap:round; stroke-linejoin:round; stroke-width:1.8; }
+.log-panel pre { max-height:180px; margin:0; padding:0 14px 14px; overflow:auto; color:#9eb8aa; font:10px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; }
 .hidden { display:none!important; }
 @media (max-width:920px) { .app-shell { grid-template-columns:1fr; padding:25px 20px 35px; } .setup-panel { padding-right:0; } .lede { max-width:none; } }
 @media (max-width:620px) { .topbar { height:62px; padding:0 17px; } .app-shell { padding:22px 14px 28px; } .field-row,.compact-row { grid-template-columns:1fr; gap:0; } .pipeline-track { grid-template-columns:1fr 1fr; } .pipeline-step { min-height:142px; border-bottom:1px solid var(--line); } .pipeline-step:nth-child(2) { border-right:0; } .pipeline-step:nth-child(3),.pipeline-step:nth-child(4) { border-bottom:0; } .pipeline-step::after { display:none; } .resource-grid { grid-template-columns:1fr; gap:8px; } .inspector { grid-template-columns:1fr; } .file-list { max-height:210px; border-right:0; border-bottom:1px solid var(--line); } .file-list .empty-state { min-height:175px; } .preview { min-height:260px; } }

@@ -396,6 +396,11 @@ class TestHTTPAndImage(unittest.TestCase):
         self.assertIn("progressBar.classList.toggle('is-indeterminate'", javascript)
         self.assertIn("Preflight check in progress", javascript)
         self.assertLess(javascript.index("status: 'starting'"), javascript.index("renderState(await post('/api/run'"))
+        self.assertIn('id="copyLogButton"', html)
+        self.assertIn('aria-label="Copy job log"', html)
+        self.assertIn("navigator.clipboard?.writeText", javascript)
+        self.assertIn("fallbackCopyText", javascript)
+        self.assertIn("event.stopPropagation()", javascript)
 
 
 if __name__ == "__main__":

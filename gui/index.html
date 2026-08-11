@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MicroICS Pipeline</title>
-  <link rel="stylesheet" href="/styles.css?v=20260810-2">
+  <link rel="stylesheet" href="/styles.css?v=20260811-1">
 </head>
 <body>
   <header class="topbar">
@@ -115,7 +115,19 @@
 
       <div class="inspector-heading"><div><div class="eyebrow">Output browser</div><h2>Inspect results</h2></div><span class="file-count" id="fileCount">0 files</span></div>
       <div class="inspector"><div class="file-list" id="fileList"><div class="empty-state compact"><span class="empty-mark">⌁</span><p>No output yet.</p></div></div><div class="preview" id="preview"><div class="preview-placeholder"><span>＋</span><p>Select a file to inspect it.</p></div></div></div>
-      <details class="log-panel" open><summary><span>Job log</span><span class="log-state" id="logState">Waiting</span></summary><pre id="logOutput">No job started.</pre></details>
+      <details class="log-panel" open>
+        <summary>
+          <span>Job log</span>
+          <span class="log-actions">
+            <span class="log-state" id="logState">Waiting</span>
+            <span class="copy-log-feedback" id="copyLogFeedback" aria-live="polite"></span>
+            <button class="copy-log-button" id="copyLogButton" type="button" title="Copy job log" aria-label="Copy job log" disabled>
+              <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg>
+            </button>
+          </span>
+        </summary>
+        <pre id="logOutput">No job started.</pre>
+      </details>
     </section>
   </main>
 
@@ -126,6 +138,6 @@
       <p id="helpModalText"></p><button class="button primary help-modal-close" id="dismissHelpModal" type="button">Got it</button>
     </div>
   </div>
-  <script src="/app.js?v=20260810-2"></script>
+  <script src="/app.js?v=20260811-1"></script>
 </body>
 </html>

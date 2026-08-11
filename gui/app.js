@@ -18,6 +18,8 @@ const fileCount = document.querySelector('#fileCount');
 const preview = document.querySelector('#preview');
 const logOutput = document.querySelector('#logOutput');
 const logState = document.querySelector('#logState');
+const copyLogButton = document.querySelector('#copyLogButton');
+const copyLogFeedback = document.querySelector('#copyLogFeedback');
 const validationPanel = document.querySelector('#validationPanel');
 const validationMessage = document.querySelector('#validationMessage');
 const validationDetails = document.querySelector('#validationDetails');
@@ -39,6 +41,7 @@ let latestState = null;
 let pollTimer = null;
 let runStartedAt = null;
 let previousRunStatus = null;
+let copyLogResetTimer = null;
 
 function value(id) { return document.querySelector(`#${id}`).value.trim(); }
 function escapeHtml(text) { return String(text).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
@@ -48,6 +51,63 @@ function setFormMessage(message = '', tone = '') {
   formMessage.classList.toggle('is-success', tone === 'success');
   formMessage.classList.toggle('is-info', tone === 'info');
 }
+
+function fallbackCopyText(text) {
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  let copied = false;
+  try {
+    copied = document.execCommand('copy');
+  } finally {
+    textarea.remove();
+  }
+  if (!copied) throw new Error('The browser blocked clipboard access');
+}
+
+async function copyJobLog() {
+  const text = logOutput.textContent || '';
+  try {
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (_error) {
+        fallbackCopyText(text);
+      }
+    } else {
+      fallbackCopyText(text);
+    }
+    clearTimeout(copyLogResetTimer);
+    copyLogButton.classList.add('is-copied');
+    copyLogButton.setAttribute('aria-label', 'Job log copied');
+    copyLogButton.title = 'Job log copied';
+    copyLogFeedback.textContent = 'Copied';
+    copyLogResetTimer = setTimeout(() => {
+      copyLogButton.classList.remove('is-copied');
+      copyLogButton.setAttribute('aria-label', 'Copy job log');
+      copyLogButton.title = 'Copy job log';
+      copyLogFeedback.textContent = '';
+    }, 1600);
+  } catch (error) {
+    clearTimeout(copyLogResetTimer);
+    copyLogFeedback.textContent = 'Copy failed';
+    copyLogButton.title = error.message;
+    copyLogResetTimer = setTimeout(() => {
+      copyLogButton.title = 'Copy job log';
+      copyLogFeedback.textContent = '';
+    }, 2400);
+  }
+}
+
+copyLogButton.addEventListener('click', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  copyJobLog();
+});
 
 function setWorkflow(workflow) {
   document.querySelectorAll('.workflow-option').forEach((option) => option.classList.toggle('active', option.dataset.workflow === workflow));
@@ -299,6 +359,7 @@ function renderState(nextState) {
   logOutput.textContent = (nextState.logs || []).join('\n') || 'No job started.';
   logOutput.scrollTop = logOutput.scrollHeight;
   logState.textContent = nextState.status[0].toUpperCase() + nextState.status.slice(1);
+  copyLogButton.disabled = !(nextState.logs || []).length;
   const running = ['starting', 'running'].includes(nextState.status);
   runButton.classList.toggle('hidden', running);
   stopButton.classList.toggle('hidden', !running);
