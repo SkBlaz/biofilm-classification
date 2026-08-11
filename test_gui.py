@@ -18,7 +18,17 @@ from unittest.mock import patch
 
 import gui.app as app
 import gui.execution as execution
-from gui.app import Handler, create_results_zip, receive_upload, reset_pipeline, runtime, state, validate_config
+from gui.app import (
+    Handler,
+    create_results_zip,
+    preflight_error,
+    receive_upload,
+    reset_pipeline,
+    runtime,
+    start_pipeline,
+    state,
+    validate_config,
+)
 from gui.execution import ExecutionStep, build_execution_steps, create_job, job_paths
 
 
@@ -133,7 +143,138 @@ class TestDirectExecution(unittest.TestCase):
             self.assertEqual(config["models_dir"], str(models))
 
 
+class TestDetailedTrainingProgress(unittest.TestCase):
+    def test_structured_training_event_advances_within_model_stage(self):
+        event = {
+            "phase": "Benchmark all features",
+            "phase_index": 2,
+            "phase_total": 5,
+            "completed": 5,
+            "total": 20,
+            "detail": "Benchmark all features: evaluation 6 of 20 — rf, fold 1/3",
+            "sub_total": 10,
+        }
+        original_state = dict(state)
+        original_runtime = dict(runtime)
+        try:
+            state.update(
+                steps=[
+                    {"id": "models", "label": "Train and benchmark models", "status": "running", "detail": "Starting"},
+                    {"id": "reports", "label": "Create benchmark reports", "status": "pending", "detail": "Waiting"},
+                ]
+            )
+            runtime["progress_context"] = {"model_step_fraction": 0.0}
+
+            app.update_progress("models", f"2026-08-11 12:00:00 {app.PROGRESS_PREFIX}{json.dumps(event)}")
+
+            self.assertEqual(state["steps"][0]["detail"], event["detail"])
+            self.assertEqual(state["progress"]["percent"], 12.5)
+        finally:
+            state.clear()
+            state.update(original_state)
+            runtime.clear()
+            runtime.update(original_runtime)
+
+    def test_verbose_search_fit_updates_detail_and_fraction(self):
+        event = {
+            "phase": "Benchmark all features",
+            "phase_index": 2,
+            "phase_total": 5,
+            "completed": 5,
+            "total": 20,
+            "detail": "Benchmark all features: evaluation 6 of 20 — rf, fold 1/3",
+            "sub_total": 10,
+        }
+        original_state = dict(state)
+        original_runtime = dict(runtime)
+        try:
+            state.update(steps=[{"id": "models", "label": "Train models", "status": "running", "detail": "Starting"}])
+            runtime["progress_context"] = {"model_step_fraction": 0.0}
+            app.update_progress("models", f"{app.PROGRESS_PREFIX}{json.dumps(event)}")
+            initial_percent = state["progress"]["percent"]
+
+            app.update_progress("models", "[CV] END max_depth=10, n_estimators=100; total time=1.2s")
+
+            self.assertGreater(state["progress"]["percent"], initial_percent)
+            self.assertIn("search fit 1 of 10 complete", state["steps"][0]["detail"])
+        finally:
+            state.clear()
+            state.update(original_state)
+            runtime.clear()
+            runtime.update(original_runtime)
+
+
+class TestPreflightFailureDetails(unittest.TestCase):
+    def test_preflight_error_lists_exact_section_reasons(self):
+        report = {
+            "features": {
+                "ok": False,
+                "errors": ["Required label column is missing", "Could not parse feature columns: texture"],
+                "invalid_cells_by_feature": {"texture": 3},
+            },
+            "ok": False,
+        }
+
+        message = preflight_error(report)
+
+        self.assertEqual(
+            message,
+            "Preflight validation failed:\n"
+            "- Features: Required label column is missing\n"
+            "- Features: Could not parse feature columns: texture\n"
+            "- Features: Feature 'texture' contains 3 non-numeric values",
+        )
+
+    def test_preflight_error_lists_invalid_image_filenames(self):
+        report = {
+            "images": {
+                "ok": False,
+                "invalid_images": 2,
+                "invalid_filenames": ["bad-one.tif", "bad-two.tif"],
+                "message": "Validated 0 of 2 image filenames",
+            },
+            "ok": False,
+        }
+
+        message = preflight_error(report)
+
+        self.assertIn("- Images: Invalid image filename: bad-one.tif", message)
+        self.assertIn("- Images: Invalid image filename: bad-two.tif", message)
+
+
 class TestResultsAndRecovery(unittest.TestCase):
+    def test_training_start_does_not_wait_for_feature_preflight(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            (paths.feature_files / "training.tsv").write_bytes(training_table())
+            release_pipeline = threading.Event()
+            original_state = dict(state)
+            original_runtime = dict(runtime)
+
+            def hold_background_job(_config, _job_id):
+                release_pipeline.wait(timeout=2)
+
+            try:
+                state["status"] = "idle"
+                with patch("gui.app.preflight_config") as preflight, patch("gui.app.run_pipeline", side_effect=hold_background_job):
+                    started, error = start_pipeline({"workflow": "train", "job_id": paths.job_id, "feature_file": "training.tsv"})
+
+                self.assertTrue(started)
+                self.assertIsNone(error)
+                self.assertEqual(state["status"], "starting")
+                self.assertEqual(state["progress"]["label"], "Validating inputs")
+                self.assertTrue(state["progress"]["indeterminate"])
+                preflight.assert_not_called()
+            finally:
+                release_pipeline.set()
+                thread = runtime.get("thread")
+                if thread:
+                    thread.join(timeout=2)
+                state.clear()
+                state.update(original_state)
+                runtime.clear()
+                runtime.update(original_runtime)
+
     def test_job_output_is_downloadable_as_zip(self):
         with temporary_jobs_root():
             paths = create_job()
@@ -174,7 +315,10 @@ class TestResultsAndRecovery(unittest.TestCase):
             try:
                 state.update(status="starting", job_id=paths.job_id, steps=[], logs=[], artifacts=[], error=None)
                 runtime.update(active_job_id=paths.job_id, stop_requested=False)
-                with patch("gui.app.build_execution_steps", return_value=[failure]):
+                with (
+                    patch("gui.app.build_execution_steps", return_value=[failure]),
+                    patch("gui.app.preflight_config", return_value={"ok": True}),
+                ):
                     app.run_pipeline(config, paths.job_id)
 
                 self.assertEqual(state["status"], "failed")
@@ -246,6 +390,12 @@ class TestHTTPAndImage(unittest.TestCase):
         self.assertNotIn("Choose folder", html)
         self.assertIn("X-Job-ID", javascript)
         self.assertIn("download_url", javascript)
+        self.assertNotIn("await post('/api/preflight'", javascript)
+        self.assertIn("setFormMessage(nextState.error", javascript)
+        self.assertIn("'is-error'", javascript)
+        self.assertIn("progressBar.classList.toggle('is-indeterminate'", javascript)
+        self.assertIn("Preflight check in progress", javascript)
+        self.assertLess(javascript.index("status: 'starting'"), javascript.index("renderState(await post('/api/run'"))
 
 
 if __name__ == "__main__":

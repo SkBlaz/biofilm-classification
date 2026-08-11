@@ -59,6 +59,7 @@ GUI_DIR = Path(__file__).resolve().parent
 VERSION = "0.7.0"
 MAX_LOG_LINES = 500
 MAX_ARTIFACTS = 450
+PROGRESS_PREFIX = "MICROICS_PROGRESS "
 DEFAULT_VOXEL_DIMENSIONS = {"voxel_size_x": 0.13, "voxel_size_y": 0.13, "voxel_size_z": 0.5}
 
 state_lock = threading.RLock()
@@ -376,6 +377,28 @@ def preflight_config(config: dict) -> dict:
     return report
 
 
+def preflight_error(report: dict) -> str:
+    reasons = []
+    for name, section in report.items():
+        if not isinstance(section, dict) or section.get("ok", True):
+            continue
+        section_name = name.replace("_", " ").capitalize()
+        section_reasons = [str(error) for error in section.get("errors", [])]
+        invalid_cells = section.get("invalid_cells_by_feature", {})
+        section_reasons.extend(
+            f"Feature '{feature}' contains {count} non-numeric value{'s' if count != 1 else ''}" for feature, count in invalid_cells.items()
+        )
+        invalid_filenames = section.get("invalid_filenames", [])
+        section_reasons.extend(f"Invalid image filename: {filename}" for filename in invalid_filenames)
+        unlisted_filenames = max(0, int(section.get("invalid_images", 0)) - len(invalid_filenames))
+        if unlisted_filenames:
+            section_reasons.append(f"{unlisted_filenames} additional invalid image filename(s) were omitted")
+        if not section_reasons and section.get("message"):
+            section_reasons.append(str(section["message"]))
+        reasons.extend(f"- {section_name}: {reason}" for reason in section_reasons)
+    return "Preflight validation failed:\n" + "\n".join(reasons or ["- Check the uploaded inputs"])
+
+
 def run_is_active(job_id: str) -> bool:
     with state_lock:
         return runtime["active_job_id"] == job_id
@@ -401,8 +424,35 @@ def progress_context(config: dict, steps: list[ExecutionStep]) -> dict:
         "step_count": len(steps),
         "feature_total": sum(1 for path in Path(config["training_images"]).glob("*.tif*")),
         "feature_writes": 0,
-        "model_events": 0,
+        "model_step_fraction": 0.0,
     }
+
+
+def parse_pipeline_progress(line: str) -> dict | None:
+    """Extract and validate a structured progress event from a subprocess log line."""
+    marker = line.find(PROGRESS_PREFIX)
+    if marker < 0:
+        return None
+    try:
+        event = json.loads(line[marker + len(PROGRESS_PREFIX) :])
+        numeric_fields = ("phase_index", "phase_total", "completed", "total")
+        if not isinstance(event, dict) or not all(isinstance(event.get(field), int | float) for field in numeric_fields):
+            return None
+        if event["phase_total"] <= 0 or event["total"] <= 0 or not isinstance(event.get("detail"), str):
+            return None
+        return event
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def model_step_fraction(event: dict, sub_completed: int = 0) -> float:
+    """Map work within a reported training phase to a fraction of the model step."""
+    unit_fraction = event["completed"]
+    sub_total = event.get("sub_total")
+    if sub_total:
+        unit_fraction += min(sub_completed / sub_total, 0.99)
+    phase_fraction = min(1.0, unit_fraction / event["total"])
+    return min(1.0, max(0.0, (event["phase_index"] - 1 + phase_fraction) / event["phase_total"]))
 
 
 def update_progress(step_id: str, line: str | None = None, complete: bool = False):
@@ -414,19 +464,32 @@ def update_progress(step_id: str, line: str | None = None, complete: bool = Fals
             if step_id == "features" and "writing " in line:
                 context["feature_writes"] = context.get("feature_writes", 0) + 1
                 detail = f"Generated feature outputs: {context['feature_writes']}"
-            elif step_id == "models" and ("Stored partial evaluation" in line or "Loaded existing partial evaluation" in line):
-                context["model_events"] = context.get("model_events", 0) + 1
-                detail = f"Completed benchmark evaluations: {context['model_events']}"
+            elif step_id == "models":
+                event = parse_pipeline_progress(line)
+                if event:
+                    context["model_progress_event"] = event
+                    context["model_sub_completed"] = 0
+                    context["model_step_fraction"] = max(context.get("model_step_fraction", 0.0), model_step_fraction(event))
+                    detail = event["detail"]
+                elif "[CV" in line and "] END" in line and context.get("model_progress_event", {}).get("sub_total"):
+                    event = context["model_progress_event"]
+                    sub_completed = min(context.get("model_sub_completed", 0) + 1, event["sub_total"])
+                    context["model_sub_completed"] = sub_completed
+                    context["model_step_fraction"] = max(context.get("model_step_fraction", 0.0), model_step_fraction(event, sub_completed))
+                    detail = f"{event['detail']} — search fit {sub_completed} of {event['sub_total']} complete"
+                elif context.get("model_progress_event"):
+                    detail = current.get("detail", detail)
             current["detail"] = detail
         completed = sum(item["status"] == "completed" for item in state["steps"])
         total = len(state["steps"])
         base = completed / total if total else 0
         if not complete and current and current["status"] == "running" and total:
-            base += 0.5 / total
+            step_fraction = context.get("model_step_fraction", 0.0) if step_id == "models" else 0.5
+            base += step_fraction / total
         state["progress"] = {
             "completed": completed,
             "total": total,
-            "percent": min(99 if not complete else 100, round(base * 100)),
+            "percent": min(99 if not complete else 100, round(base * 100, 1)),
             "label": f"Working: {current['label']}" if current and current["status"] == "running" else "Complete",
             "detail": current.get("detail", "Working") if current else "Working",
         }
@@ -503,7 +566,9 @@ def execute_step(step: ExecutionStep, environment: dict[str, str], job_id: str) 
                 break
             line = line.rstrip()
             if line:
-                add_log(line, job_id)
+                progress_only = step.step_id == "models" and (PROGRESS_PREFIX in line or ("[CV" in line and "] END" in line))
+                if not progress_only:
+                    add_log(line, job_id)
                 update_progress(step.step_id, line)
             with state_lock:
                 if runtime["stop_requested"]:
@@ -562,20 +627,40 @@ def refresh_artifacts(job_id: str | None):
 
 def run_pipeline(config: dict, job_id: str):
     try:
-        stage_training_features(config)
         steps = build_execution_steps(config)
         if not steps:
             raise ValueError("The selected workflow has no executable steps")
         environment = execution_environment(config)
+        validation_detail = "Validating the uploaded feature table" if config.get("feature_file") else "Validating uploaded images"
         with state_lock:
             if runtime["active_job_id"] != job_id:
                 return
             state["status"] = "running"
             state["steps"] = [{"id": step.step_id, "label": step.label, "status": "pending", "detail": "Waiting"} for step in steps]
-            state["progress"] = {"completed": 0, "total": len(steps), "percent": 0, "label": "Starting"}
+            state["progress"] = {
+                "completed": 0,
+                "total": len(steps),
+                "percent": 0,
+                "label": "Validating inputs",
+                "detail": validation_detail,
+                "indeterminate": True,
+            }
             runtime["progress_context"] = progress_context(config, steps)
         write_job_metadata(job_id, status="running", workflow=config["workflow"])
         add_log("Pipeline started inside the MicroICS container", job_id)
+        add_log(validation_detail, job_id)
+
+        preflight = preflight_config(config)
+        with state_lock:
+            if runtime["active_job_id"] != job_id:
+                return
+            state["validation"] = preflight
+        if not preflight["ok"]:
+            raise ValueError(preflight_error(preflight))
+
+        with state_lock:
+            state["progress"].update(label="Preparing inputs", detail="Preparing the validated inputs for processing", indeterminate=True)
+        stage_training_features(config)
         for step in steps:
             if not execute_step(step, environment, job_id):
                 break
@@ -617,14 +702,6 @@ def start_pipeline(raw_config: dict) -> tuple[bool, str | None]:
             return False, "A pipeline is already running"
     try:
         config = validate_config(raw_config)
-        preflight = preflight_config(config)
-        if not preflight["ok"]:
-            errors = []
-            for section in preflight.values():
-                if isinstance(section, dict):
-                    errors.extend(section.get("errors", []))
-                    errors.extend(section.get("invalid_filenames", [])[:5])
-            return False, "Preflight validation failed. " + "; ".join(errors or ["Check the uploaded inputs"])
     except (FileNotFoundError, ValueError) as exc:
         return False, str(exc)
 
@@ -639,10 +716,17 @@ def start_pipeline(raw_config: dict) -> tuple[bool, str | None]:
                 "started_at": now(),
                 "finished_at": None,
                 "error": None,
-                "validation": preflight,
+                "validation": None,
                 "config": config,
                 "steps": [],
-                "progress": {"completed": 0, "total": 0, "percent": 0, "label": "Starting"},
+                "progress": {
+                    "completed": 0,
+                    "total": 0,
+                    "percent": 0,
+                    "label": "Validating inputs",
+                    "detail": "Starting the preflight check",
+                    "indeterminate": True,
+                },
                 "logs": [],
                 "artifacts": [],
                 "download_url": None,

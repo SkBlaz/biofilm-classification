@@ -42,6 +42,12 @@ let previousRunStatus = null;
 
 function value(id) { return document.querySelector(`#${id}`).value.trim(); }
 function escapeHtml(text) { return String(text).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
+function setFormMessage(message = '', tone = '') {
+  formMessage.textContent = message;
+  formMessage.classList.toggle('is-error', tone === 'error');
+  formMessage.classList.toggle('is-success', tone === 'success');
+  formMessage.classList.toggle('is-info', tone === 'info');
+}
 
 function setWorkflow(workflow) {
   document.querySelectorAll('.workflow-option').forEach((option) => option.classList.toggle('active', option.dataset.workflow === workflow));
@@ -170,8 +176,9 @@ function renderValidation(report) {
   validationMessage.textContent = report.ok ? 'All uploaded inputs passed preflight.' : 'Preflight needs attention.';
   const sections = Object.entries(report).filter(([, section]) => section && typeof section === 'object').map(([name, section]) => {
     if (section.features_read !== undefined) {
+      const errors = (section.errors || []).map((error) => `<li>${escapeHtml(error)}</li>`).join('');
       const warnings = (section.warnings || []).map((warning) => `<li>${escapeHtml(warning)}</li>`).join('');
-      return `<section class="validation-section"><strong>${escapeHtml(name.replace('_', ' '))}</strong><p>${section.rows} rows · ${section.features_read} features</p>${warnings ? `<ul>${warnings}</ul>` : ''}</section>`;
+      return `<section class="validation-section"><strong>${escapeHtml(name.replace('_', ' '))}</strong><p>${section.rows} rows · ${section.features_read} features</p>${errors ? `<ul class="validation-errors">${errors}</ul>` : ''}${warnings ? `<ul>${warnings}</ul>` : ''}</section>`;
     }
     const labels = Object.entries(section.images_per_label || {}).map(([label, count]) => `<li>${escapeHtml(label)}: ${count}</li>`).join('');
     return `<section class="validation-section"><strong>${escapeHtml(name.replace('_', ' '))}</strong><p>${section.total_images || 0} image(s)</p>${labels ? `<ul>${labels}</ul>` : ''}</section>`;
@@ -224,12 +231,17 @@ function renderEta(status, progress) {
 
 function renderProgress(progress, steps, status) {
   const percent = Math.max(0, Math.min(100, Number(progress?.percent) || 0));
+  const indeterminate = Boolean(progress?.indeterminate) && ['starting', 'running'].includes(status);
   progressFill.style.width = `${percent}%`;
-  progressFill.classList.toggle('is-running', ['starting', 'running'].includes(status));
+  progressBar.classList.toggle('is-running', indeterminate);
+  progressBar.classList.toggle('is-indeterminate', indeterminate);
   progressBar.setAttribute('aria-valuenow', percent);
+  progressBar.setAttribute('aria-valuetext', indeterminate ? (progress?.label || 'Working') : `${percent}%`);
   progressLabel.textContent = progress?.label || 'Ready';
-  progressValue.textContent = `${percent}%`;
-  progressSteps.textContent = progress?.total ? `${progress.completed} of ${progress.total} stages complete` : 'No stages started';
+  progressValue.textContent = indeterminate ? 'Checking…' : `${percent}%`;
+  progressSteps.textContent = progress?.total
+    ? `${progress.completed} of ${progress.total} stages complete`
+    : indeterminate ? 'Preflight check in progress' : 'No stages started';
   const current = (steps || []).find((step) => step.status === 'running');
   progressDetail.textContent = current?.detail || progress?.detail || 'The active stage will appear here.';
 }
@@ -294,8 +306,8 @@ function renderState(nextState) {
   statusWarning.classList.toggle('hidden', !['failed', 'cancelled'].includes(nextState.status));
   downloadButton.classList.toggle('hidden', !nextState.download_url);
   if (nextState.download_url) downloadButton.href = nextState.download_url;
-  if (nextState.status === 'completed') formMessage.textContent = `Job ${nextState.job_id.slice(0, 8)} completed. Inspect the files on the right or download the results ZIP.`;
-  if (nextState.status === 'failed') formMessage.textContent = nextState.error || 'The job failed. Review its log.';
+  if (nextState.status === 'completed') setFormMessage(`Job ${nextState.job_id.slice(0, 8)} completed. Inspect the files on the right or download the results ZIP.`, 'success');
+  if (nextState.status === 'failed') setFormMessage(nextState.error || 'The job failed. Review its log.', 'error');
   previousRunStatus = nextState.status;
 }
 
@@ -312,22 +324,44 @@ async function poll(refresh = false) {
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
-  formMessage.textContent = '';
   try {
     if (pendingUploads) throw new Error('Please wait for uploads to finish.');
     if (!uploadJobId) throw new Error('Upload the required input files first.');
     const config = configFromForm();
-    const preflight = await post('/api/preflight', config);
-    renderValidation(preflight.report);
-    if (!preflight.report.ok) throw new Error('Preflight validation failed.');
-    await post('/api/run', config);
+    const inputDescription = config.feature_file ? 'Validating the uploaded feature table' : 'Validating uploaded images';
+    renderState({
+      ...(latestState || {}),
+      status: 'starting',
+      job_id: config.job_id,
+      current_step: null,
+      error: null,
+      steps: [],
+      progress: {
+        completed: 0,
+        total: 0,
+        percent: 0,
+        label: 'Validating inputs',
+        detail: inputDescription,
+        indeterminate: true,
+      },
+      logs: [inputDescription],
+      artifacts: [],
+      download_url: null,
+    });
+    setFormMessage('Preflight validation is running…', 'info');
+    runButton.disabled = true;
+    renderState(await post('/api/run', config));
+    setFormMessage('Pipeline started. Validating uploaded inputs…', 'info');
     await poll();
   } catch (error) {
-    formMessage.textContent = error.message;
+    await poll();
+    setFormMessage(error.message, 'error');
+  } finally {
+    runButton.disabled = false;
   }
 });
 
-stopButton.addEventListener('click', async () => { try { await post('/api/stop'); } catch (error) { formMessage.textContent = error.message; } });
+stopButton.addEventListener('click', async () => { try { await post('/api/stop'); } catch (error) { setFormMessage(error.message, 'error'); } });
 resetButton.addEventListener('click', async () => {
   try {
     renderState(await post('/api/reset'));
@@ -338,8 +372,8 @@ resetButton.addEventListener('click', async () => {
     document.querySelector('#trainingFileStatus').textContent = 'No training images uploaded.';
     document.querySelector('#inferenceFileStatus').textContent = 'No inference images uploaded.';
     document.querySelector('#featureFileStatus').textContent = 'No feature table uploaded.';
-    formMessage.textContent = 'Ready for a new isolated job.';
-  } catch (error) { formMessage.textContent = error.message; }
+    setFormMessage('Ready for a new isolated job.', 'info');
+  } catch (error) { setFormMessage(error.message, 'error'); }
 });
 document.querySelector('#refreshButton').addEventListener('click', () => poll(true));
 
@@ -368,7 +402,7 @@ async function boot() {
     await poll();
   } catch (error) {
     connectionText.textContent = 'Offline';
-    formMessage.textContent = error.message;
+    setFormMessage(error.message, 'error');
   }
 }
 

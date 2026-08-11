@@ -48,7 +48,11 @@ h1,h2,p { margin-top:0; } h1 { margin-bottom:8px; font-size:27px; line-height:1.
 .result-delivery { display:grid; gap:3px; margin-top:17px; padding:11px 12px; border:1px solid #cfe4d9; border-radius:7px; background:var(--green-pale); color:var(--muted); font-size:11px; }
 .result-delivery strong { color:var(--ink); font-size:12px; }
 .result-delivery b { color:var(--green); }
-.form-message { min-height:20px; margin:11px 0 0; color:#ba5c47; font-size:12px; } .form-message.success { color:var(--green); }
+.form-message { min-height:20px; margin:11px 0 0; color:var(--muted); font-size:12px; white-space:pre-line; }
+.form-message.is-error { padding:10px 12px; border:1px solid #d78484; border-radius:7px; background:#fff1f1; color:#9f3030; font-weight:650; line-height:1.5; }
+.form-message.is-success { color:var(--green); }
+.form-message.is-info { color:var(--muted); }
+.validation-errors { color:#9f3030; font-weight:650; }
 .panel-heading,.inspector-heading { display:flex; align-items:end; justify-content:space-between; } .panel-heading { margin:4px 0 17px; }
 .icon-button { width:32px; height:32px; border:1px solid var(--line); border-radius:5px; background:var(--panel); color:var(--green); font-size:20px; line-height:1; } .icon-button:hover { border-color:var(--green); background:var(--green-pale); }
 .pipeline-track { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); min-height:143px; border:1px solid var(--line); border-radius:7px; background:var(--panel); box-shadow:var(--shadow); overflow:hidden; }
@@ -59,6 +63,7 @@ h1,h2,p { margin-top:0; } h1 { margin-bottom:8px; font-size:27px; line-height:1.
 .progress-bar { position:relative; height:8px; overflow:hidden; border-radius:99px; background:#e7eeea; }
 .progress-fill { display:block; width:0; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--green),var(--green-bright)); transition:width .35s ease; }
 .progress-bar.is-running::after { content:""; position:absolute; top:0; bottom:0; left:-25%; width:25%; border-radius:inherit; background:rgba(255,255,255,.55); animation:progress-sweep 1.2s linear infinite; }
+.progress-bar.is-indeterminate::after { width:38%; background:linear-gradient(90deg,transparent,var(--green-bright),transparent); }
 .progress-meta { margin-top:7px; color:var(--muted); font-size:10px; }
 @keyframes progress-sweep { to { left:100%; } }
 .pipeline-step { position:relative; min-width:0; padding:22px 16px 16px; border-right:1px solid var(--line); } .pipeline-step:last-child { border-right:0; }

@@ -18,10 +18,12 @@ import feature_ranking_lite
 from feature_ranking_lite import (
     compute_ablation_scores,
     configured_parallelism,
+    emit_pipeline_progress,
     get_adaptive_cv,
     get_benchmark_runtime_config,
     partial_evaluation_path,
     prepare_fold_features,
+    search_fit_count,
 )
 
 
@@ -138,6 +140,22 @@ class TestBenchmarkRuntimeConfig(unittest.TestCase):
         self.assertEqual(transformed_test.shape, (4, 2))
         self.assertEqual(effective_components, 2)
         self.assertIsNone(transformer)
+
+    def test_search_fit_count_includes_candidates_and_folds(self):
+        random_search = feature_ranking_lite.RandomizedSearchCV(
+            feature_ranking_lite.DummyClassifier(), {"strategy": ["most_frequent", "prior"]}, n_iter=2
+        )
+        grid_search = feature_ranking_lite.GridSearchCV(feature_ranking_lite.DummyClassifier(), {"strategy": ["most_frequent", "prior"]})
+
+        self.assertEqual(search_fit_count(random_search, 3), 6)
+        self.assertEqual(search_fit_count(grid_search, 3), 6)
+
+    def test_progress_event_is_machine_readable(self):
+        with self.assertLogs(feature_ranking_lite.logger, level="INFO") as captured:
+            emit_pipeline_progress("Benchmark", 2, 5, 3, 10, "Evaluation 4 of 10", sub_total=6)
+
+        self.assertIn('MICROICS_PROGRESS {"phase":"Benchmark"', captured.output[0])
+        self.assertIn('"sub_total":6', captured.output[0])
 
 
 class TestAblationEvaluation(unittest.TestCase):
