@@ -69,9 +69,14 @@ for arg in "$@"; do
 done
 
 case "$REPLICATION_UNIT" in
-    position|well|plate|date) ;;
-    *) echo "ERROR: replication unit must be position, well, plate, or date"; exit 1 ;;
+    position|well|date) ;;
+    *) echo "ERROR: replication unit must be position, well, or date"; exit 1 ;;
 esac
+
+NESTED_CV_FLAG=""
+if [ -n "$ALL_LEARNERS_FLAG" ] || [ "$LEARNER" = "rf" ] || [ "$LEARNER" = "gridsearch" ]; then
+    NESTED_CV_FLAG="--nested-cv"
+fi
 
 if [ "$LEARNING_TASK" = "generate_features" ] && [ -n "$UNLABELLED_FLAG" ]; then
 	if [ -z "$IMAGINE_INFERENCE_INPUTS" ] || [ -z "$IMAGINE_INFERENCE_DATAFILE" ]; then
@@ -264,7 +269,7 @@ if [ $LEARNING_TASK = "learning_benchmark" ]; then
 	fi
 	# Ensure visualizations directory exists
 	mkdir -p "${RESULTS_FOLDER_VISUALIZATIONS}" "${OUTPUT_RESULTS_FOLDER}/validation"
-	run_step "validate training features" python validate_inputs.py --images "${INPUT_IMAGE_FOLDER}" --features "${RESULTS_CREATE_DF}" --output "${OUTPUT_RESULTS_FOLDER}/validation/feature_validation.json"
+	run_step "validate training features" python validate_inputs.py --images "${INPUT_IMAGE_FOLDER}" --features "${RESULTS_CREATE_DF}" --replication-unit "${REPLICATION_UNIT}" ${NESTED_CV_FLAG} --output "${OUTPUT_RESULTS_FOLDER}/validation/feature_validation.json"
 	# calculating feature rankings + intermediary frames etc.
 	run_step "run learning benchmark" python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" --replication_unit "${REPLICATION_UNIT}" --learner "${LEARNER}" --correlation-threshold "${CORRELATION_THRESHOLD}" ${ALL_LEARNERS_FLAG}
 	run_step "visualize benchmark results" python visualize_benchmark.py
@@ -279,7 +284,7 @@ if [ $LEARNING_TASK = "learning_benchmark_save_models" ]; then
 	fi
 	# Ensure visualizations directory exists
 	mkdir -p "${RESULTS_FOLDER_VISUALIZATIONS}" "${OUTPUT_RESULTS_FOLDER}/validation"
-	run_step "validate training features" python validate_inputs.py --images "${INPUT_IMAGE_FOLDER}" --features "${RESULTS_CREATE_DF}" --output "${OUTPUT_RESULTS_FOLDER}/validation/feature_validation.json"
+	run_step "validate training features" python validate_inputs.py --images "${INPUT_IMAGE_FOLDER}" --features "${RESULTS_CREATE_DF}" --replication-unit "${REPLICATION_UNIT}" ${NESTED_CV_FLAG} --output "${OUTPUT_RESULTS_FOLDER}/validation/feature_validation.json"
 	# calculating feature rankings + intermediary frames etc. + save models for inference
 	run_step "run learning benchmark and save models" python feature_ranking_lite.py --parallelism "${INPUT_PARALLELISM}" --files "${RESULTS_CREATE_DF}" --fout "${RESULTS_RANKING_FILE}" --save_models --replication_unit "${REPLICATION_UNIT}" --learner "${LEARNER}" --correlation-threshold "${CORRELATION_THRESHOLD}" ${ALL_LEARNERS_FLAG}
 	run_step "visualize benchmark results" python visualize_benchmark.py

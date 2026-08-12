@@ -25,16 +25,70 @@ MODEL_DISPLAY_NAMES = {
 }
 
 
+def canonical_model_name(model_name: object) -> str:
+    """Return the stable learner key used by current and legacy result files."""
+    raw_name = re.sub(r"\s+", " ", str(model_name)).strip()
+    lowered = raw_name.lower()
+    if lowered in MODEL_DISPLAY_NAMES:
+        return lowered
+    if "randomforestclassifier" in lowered:
+        return "rf"
+    if "dummyclassifier" in lowered:
+        return "dummy"
+    if "decisiontreeclassifier" in lowered:
+        return "decisiontree"
+    if "logisticregression" in lowered:
+        return "logistic"
+    if "xgbclassifier" in lowered:
+        return "xgb"
+    if "gridsearchcv" in lowered or "kneighborsclassifier" in lowered:
+        return "gridsearch"
+    return raw_name or "model"
+
+
 def _model_report_name(model_name: object, max_length: int = 80) -> tuple[str, str]:
     """Return readable, filesystem-safe names for current and legacy reports."""
     raw_name = re.sub(r"\s+", " ", str(model_name)).strip() or "model"
-    display_name = MODEL_DISPLAY_NAMES.get(raw_name, raw_name)
-    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", raw_name).strip("_") or "model"
+    canonical_name = canonical_model_name(raw_name)
+    display_name = MODEL_DISPLAY_NAMES.get(canonical_name, raw_name)
+    safe_source = canonical_name if canonical_name in MODEL_DISPLAY_NAMES else raw_name
+    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", safe_source).strip("_") or "model"
     if len(safe_name) > max_length:
         digest = hashlib.sha256(raw_name.encode("utf-8")).hexdigest()[:12]
         safe_name = f"{safe_name[: max_length - len(digest) - 1].rstrip('_')}_{digest}"
         display_name = f"Legacy model {digest}"
     return display_name, safe_name
+
+
+def _boolean_values(values: pd.Series) -> pd.Series:
+    """Normalize booleans stored by pandas as bools or TSV strings."""
+    return values.astype(str).str.strip().str.lower().isin({"true", "1", "yes"})
+
+
+def _preferred_configuration(frame: pd.DataFrame) -> pd.DataFrame:
+    """Select the predeclared all-feature configuration without test-score cherry-picking."""
+    candidates = frame.copy()
+    if "thr_features" in candidates:
+        with_thresholds = candidates[_boolean_values(candidates["thr_features"])]
+        if not with_thresholds.empty:
+            candidates = with_thresholds
+
+    if "component_setting" in candidates:
+        all_features = candidates[candidates["component_setting"].astype(str).str.lower() == "all"]
+        if not all_features.empty:
+            return all_features
+
+    if "n_components" in candidates:
+        all_features = candidates[candidates["n_components"].astype(str).str.lower() == "all"]
+        if not all_features.empty:
+            return all_features
+
+    if "n_components" not in candidates:
+        return candidates
+    numeric_components = pd.to_numeric(candidates["n_components"], errors="coerce")
+    if numeric_components.notna().any():
+        return candidates[numeric_components == numeric_components.max()]
+    return candidates
 
 
 def _ranking_features(rankings: pd.DataFrame, top_n: int) -> list[str]:
@@ -45,8 +99,21 @@ def _ranking_features(rankings: pd.DataFrame, top_n: int) -> list[str]:
     return rankings.sort_values(score_columns[0], ascending=False)[feature_column].astype(str).head(top_n).tolist()
 
 
+def _classification_scope(source: Path) -> tuple[str, str]:
+    """Return filename and title labels that keep benchmark variants separate."""
+    scope = source.stem.removeprefix("classification_")
+    if scope in {"", "classification"}:
+        return "", "All generated columns"
+    safe_scope = re.sub(r"[^A-Za-z0-9_-]+", "_", scope).strip("_")
+    display_scope = {
+        "all": "All generated columns",
+        "no_counts_features": "Without count-derived columns",
+    }.get(scope, scope.replace("_", " ").capitalize())
+    return f"{safe_scope}_", display_scope
+
+
 def write_confusion_matrices(classification_file: str | Path, output_dir: str | Path) -> list[Path]:
-    """Write raw TSV and PNG confusion matrices for each benchmarked learner."""
+    """Write matrices for each learner's predeclared all-feature evaluation."""
     source = Path(classification_file)
     if not source.is_file():
         return []
@@ -59,12 +126,11 @@ def write_confusion_matrices(classification_file: str | Path, output_dir: str | 
         return []
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
+    scope_prefix, scope_display = _classification_scope(source)
     outputs: list[Path] = []
-    for model_name, model_frame in frame.groupby("model", sort=True):
-        model_frame = model_frame.copy()
-        model_frame["configuration"] = model_frame["n_components"].astype(str) + "|" + model_frame["thr_features"].astype(str)
-        best_configuration = model_frame.groupby("configuration")["accuracy"].mean().idxmax()
-        selected = model_frame[model_frame["configuration"] == best_configuration]
+    frame["canonical_model"] = frame["model"].map(canonical_model_name)
+    for model_name, model_frame in frame.groupby("canonical_model", sort=True):
+        selected = _preferred_configuration(model_frame)
         true_values = [value for values in selected["test_set"] for value in str(values).split(",")]
         predictions = [value for values in selected["predicted_set"] for value in str(values).split(",")]
         if len(true_values) != len(predictions):
@@ -74,18 +140,122 @@ def write_confusion_matrices(classification_file: str | Path, output_dir: str | 
         display_name, safe_name = _model_report_name(model_name)
         table = pd.DataFrame(matrix, index=labels, columns=labels)
         table.index.name = "true"
-        table.to_csv(destination / f"confusion_matrix_{safe_name}.tsv", sep="\t")
+        report_stem = f"confusion_matrix_{scope_prefix}{safe_name}"
+        table.to_csv(destination / f"{report_stem}.tsv", sep="\t")
+        row_totals = table.sum(axis=1).replace(0, np.nan)
+        normalized_table = table.div(row_totals, axis=0).fillna(0.0)
+        normalized_table.index.name = "true"
+        normalized_table.to_csv(destination / f"{report_stem}_normalized.tsv", sep="\t")
         plt.figure(figsize=(max(5, len(labels) * 1.2), max(4, len(labels) * 0.9)))
-        sns.heatmap(table, annot=True, fmt="d", cmap="Blues", cbar=False)
-        plt.title(f"Held-out confusion matrix: {display_name}")
+        sns.heatmap(normalized_table, annot=True, fmt=".1%", cmap="Blues", cbar=False, vmin=0, vmax=1)
+        mean_accuracy = pd.to_numeric(selected["accuracy"], errors="coerce").mean()
+        plt.title(f"Held-out confusion matrix: {display_name}\n{scope_display}; mean accuracy {mean_accuracy:.3f}")
         plt.xlabel("Predicted label")
         plt.ylabel("True label")
         plt.tight_layout()
-        image_path = destination / f"confusion_matrix_{safe_name}.png"
+        image_path = destination / f"{report_stem}.png"
         plt.savefig(image_path, dpi=180)
         plt.close()
         outputs.append(image_path)
     return outputs
+
+
+def write_classification_plot(classification_file: str | Path, output_dir: str | Path) -> Path | None:
+    """Plot held-out accuracy for current short learner names and legacy estimator strings."""
+    source = Path(classification_file)
+    if not source.is_file():
+        return None
+    frame = pd.read_csv(source, sep="\t")
+    required = {"model", "n_components", "accuracy"}
+    if not required.issubset(frame.columns):
+        return None
+    frame = frame.copy()
+    frame["accuracy"] = pd.to_numeric(frame["accuracy"], errors="coerce")
+    frame = frame.dropna(subset=["accuracy"])
+    if frame.empty:
+        return None
+    frame["canonical_model"] = frame["model"].map(canonical_model_name)
+    frame["display_model"] = frame["canonical_model"].map(lambda value: MODEL_DISPLAY_NAMES.get(value, value))
+    frame["components"] = frame["n_components"].astype(str)
+    preferred_order = list(MODEL_DISPLAY_NAMES)
+    present = frame["canonical_model"].drop_duplicates().tolist()
+    model_order = [MODEL_DISPLAY_NAMES[key] for key in preferred_order if key in present]
+    model_order.extend(MODEL_DISPLAY_NAMES.get(key, key) for key in present if key not in preferred_order)
+
+    destination = Path(output_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    plt.figure(figsize=(9, max(4, len(model_order) * 0.75 + 2)))
+    sns.barplot(
+        data=frame,
+        y="display_model",
+        x="accuracy",
+        hue="components",
+        order=model_order,
+        palette="colorblind",
+        alpha=0.7,
+        capsize=0.15,
+    )
+    plt.title(source.stem)
+    plt.ylabel("")
+    plt.xlabel("Held-out accuracy")
+    plt.xlim(0, 1)
+    plt.legend(title="Components", loc="lower left")
+    plt.tight_layout()
+    output = destination / f"{source.stem}.pdf"
+    plt.savefig(output, dpi=300)
+    plt.close()
+    return output
+
+
+def write_ablation_plot(
+    ablation_file: str | Path,
+    output_dir: str | Path,
+    total_features: int | None = None,
+) -> Path | None:
+    """Plot every evaluated RF subset and state that counts refer to generated columns."""
+    source = Path(ablation_file)
+    if not source.is_file():
+        return None
+    frame = pd.read_csv(source, sep="\t")
+    if not {"top_n", "accuracy"}.issubset(frame.columns):
+        return None
+    frame = frame.copy()
+    frame["top_n"] = pd.to_numeric(frame["top_n"], errors="coerce")
+    frame["accuracy"] = pd.to_numeric(frame["accuracy"], errors="coerce")
+    frame = frame.dropna(subset=["top_n", "accuracy"]).sort_values("top_n")
+    if frame.empty:
+        return None
+    best = frame.loc[frame["accuracy"].idxmax()]
+    if total_features is None:
+        total_features = (
+            int(frame["total_features"].dropna().iloc[0])
+            if "total_features" in frame and frame["total_features"].notna().any()
+            else int(frame["top_n"].max())
+        )
+
+    destination = Path(output_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    plt.figure(figsize=(9, 6))
+    sns.lineplot(data=frame, x="top_n", y="accuracy")
+    plt.vlines(best["top_n"], 0, best["accuracy"], color="red", linestyle="dashed")
+    plt.plot(best["top_n"], best["accuracy"], "ro")
+    plt.annotate(
+        f"Highest observed subset (exploratory): {int(best['top_n'])} of {total_features} generated columns\n"
+        f"Accuracy: {best['accuracy']:.3f}",
+        xy=(best["top_n"], best["accuracy"]),
+        xytext=(8, 8),
+        textcoords="offset points",
+    )
+    plt.title("RF feature-subset sensitivity (exploratory)")
+    plt.xlabel("Top generated feature columns considered (RF ranking)")
+    plt.ylabel("Mean held-out accuracy for each fixed subset size")
+    plt.xlim(left=0)
+    plt.ylim(0, 1)
+    plt.tight_layout()
+    output = destination / "ablation_rf.pdf"
+    plt.savefig(output, dpi=300)
+    plt.close()
+    return output
 
 
 def write_feature_correlation(

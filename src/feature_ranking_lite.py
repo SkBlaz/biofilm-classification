@@ -18,19 +18,18 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.exceptions import DataConversionWarning
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score, make_scorer
-from sklearn.model_selection import GridSearchCV, GroupKFold, KFold, ParameterGrid, RandomizedSearchCV, StratifiedKFold
-
-try:
-    from sklearn.model_selection import StratifiedGroupKFold
-except ImportError:  # pragma: no cover - only older scikit-learn versions
-    StratifiedGroupKFold = None
+from sklearn.model_selection import GridSearchCV, ParameterGrid, RandomizedSearchCV
 from sklearn.neighbors import KNeighborsClassifier
 from xgboost import XGBClassifier
 
 try:
     from benchmark_outputs import write_confusion_matrices, write_feature_boxplots, write_feature_correlation
+    from cv_planning import get_adaptive_cv
+    from input_validation import assess_replication_units
 except ImportError:  # Package import from the repository root.
     from .benchmark_outputs import write_confusion_matrices, write_feature_boxplots, write_feature_correlation
+    from .cv_planning import get_adaptive_cv
+    from .input_validation import assess_replication_units
 
 warnings.simplefilter(action="ignore", category=DataConversionWarning)
 
@@ -67,8 +66,7 @@ logger = logging.getLogger(__name__)
 np.random.seed(123)
 
 PARALLELISM = -1
-MIN_CV_SPLITS = 2
-PARTIAL_CACHE_VERSION = 2
+PARTIAL_CACHE_VERSION = 4
 PROGRESS_PREFIX = "MICROICS_PROGRESS "
 
 
@@ -106,7 +104,9 @@ def get_benchmark_runtime_config():
         }
     return {
         "n_iter": 10,
-        "repetitions": 3,
+        # Every splitter, search, and estimator is deliberately seeded. Repeating
+        # this exact plan only duplicates predictions and understates uncertainty.
+        "repetitions": 1,
         "n_components": [16, 32, 64, 128, 256, 512, "all"],
     }
 
@@ -367,67 +367,6 @@ def name_manipulator_date(value: str):
     return (value[:8], re.search(r"st--([^-_]+)-", value).group(1))
 
 
-def get_adaptive_cv(y, max_splits=5, groups=None):
-    """Build an adaptive CV splitter for classification targets.
-
-    Returns a tuple ``(cv_splitter, n_splits, min_class_count, strategy, reason)``.
-    Uses ``StratifiedKFold`` when each class has at least ``MIN_CV_SPLITS`` samples;
-    otherwise falls back to ``KFold`` with the same adaptive split count.
-    """
-    y = np.asarray(y)
-    n_samples = len(y)
-    if n_samples < MIN_CV_SPLITS:
-        raise ValueError(f"Cannot create cross-validation splitter: at least {MIN_CV_SPLITS} samples are required, got {n_samples}")
-
-    group_values = np.asarray(groups) if groups is not None else None
-    if group_values is not None and len(group_values) != n_samples:
-        raise ValueError("Replication groups must have one value per sample")
-    unique_groups = np.unique(group_values) if group_values is not None else None
-    if unique_groups is not None and len(unique_groups) < MIN_CV_SPLITS:
-        raise ValueError(f"Cannot create grouped cross-validation splitter: at least {MIN_CV_SPLITS} groups are required")
-    target_splits = min(max_splits, max(MIN_CV_SPLITS, n_samples // 2))
-    if unique_groups is not None:
-        target_splits = min(target_splits, len(unique_groups))
-    _, class_counts = np.unique(y, return_counts=True)
-    min_class_count = class_counts.min()
-
-    if unique_groups is not None:
-        n_splits = min(target_splits, len(unique_groups))
-        if StratifiedGroupKFold is not None and min_class_count >= MIN_CV_SPLITS:
-            class_count_info = ", ".join(str(count) for count in sorted(class_counts))
-            reason = (
-                f"StratifiedGroupKFold enabled for {len(unique_groups)} replication groups; selected {n_splits} folds "
-                f"(class counts: {class_count_info})"
-            )
-            return (
-                StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=42),
-                n_splits,
-                min_class_count,
-                "stratified-group",
-                reason,
-            )
-        reason = f"GroupKFold enabled for {len(unique_groups)} replication groups; selected {n_splits} folds"
-        logger.warning(reason)
-        return GroupKFold(n_splits=n_splits), n_splits, min_class_count, "group", reason
-
-    if min_class_count >= MIN_CV_SPLITS:
-        class_count_info = ", ".join(str(count) for count in sorted(class_counts))
-        n_splits = min(target_splits, min_class_count)
-        reason = (
-            f"StratifiedKFold enabled because minimum class count is {min_class_count}; selected {n_splits} folds from target {target_splits} "
-            f"(class counts: {class_count_info})"
-        )
-        return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42), n_splits, min_class_count, "stratified", reason
-
-    class_count_info = ", ".join(str(count) for count in sorted(class_counts))
-    reason = (
-        f"Falling back to KFold because minimum class count is {min_class_count}; using {target_splits} folds "
-        f"with minimum class count {min_class_count} (class counts: {class_count_info})"
-    )
-    logger.warning(reason)
-    return KFold(n_splits=target_splits, shuffle=True, random_state=42), target_splits, min_class_count, "kfold", reason
-
-
 def do_classification_simple(
     X,
     ys,
@@ -644,7 +583,7 @@ def do_classification_simple(
                                         "n_components": desc_components,
                                         "thr_features": thr_features,
                                         "fold": i,
-                                        "accuracy": float(output[5]),
+                                        "accuracy": float(output[6]),
                                         "svd_transformer": None,
                                     }
                                 )
@@ -773,6 +712,7 @@ def do_classification_simple(
                             "RESULT",
                             model_name,
                             upsampling,
+                            desc_components,
                             effective_components,
                             i,
                             acc,
@@ -806,6 +746,7 @@ def do_classification_simple(
         "model",
         "upsampling",
         "n_components",
+        "effective_n_components",
         "fold",
         "accuracy",
         "test_set",
@@ -1063,6 +1004,8 @@ def compute_ablation_scores(xs, y, replication_unit=None, report_progress=False)
     split_iterator = skf.split(X_init, y_init, group_ids) if group_ids is not None else skf.split(X_init, y_init)
     splits = list(split_iterator)
     top_feature_counts = list(range(1, X_init.shape[1], 20))
+    if X_init.shape[1] not in top_feature_counts:
+        top_feature_counts.append(X_init.shape[1])
     fold_accuracies = {top_n: [] for top_n in top_feature_counts}
     forest_jobs = configured_parallelism()
     progress_total = len(splits) * (len(top_feature_counts) + 1)
@@ -1116,7 +1059,7 @@ def compute_ablation_scores(xs, y, replication_unit=None, report_progress=False)
     for top_n in top_feature_counts:
         mean_acc = np.mean(fold_accuracies[top_n])
         logger.info(f"Testing top features: {top_n} out of {X_init.shape[1]} (acc: {mean_acc})")
-        out_df.append({"top_n": top_n, "accuracy": mean_acc})
+        out_df.append({"top_n": top_n, "accuracy": mean_acc, "total_features": X_init.shape[1]})
     return pd.DataFrame(out_df)
 
 
@@ -1168,7 +1111,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--replication_unit",
         "--replication-unit",
-        choices=["position", "well", "plate", "date"],
+        choices=["position", "well", "date"],
         default=None,
         help="Keep all samples from the selected replication unit in one CV fold",
     )
@@ -1203,6 +1146,23 @@ if __name__ == "__main__":
     for file in files:
         logger.info(f"Processing {file}")
         data = load_data(file)
+        if arguments.replication_unit:
+            nested_tuning = all_learners or arguments.learner in {"rf", "gridsearch"}
+            replication_report = assess_replication_units(
+                data.index.astype(str).tolist(),
+                data["label"].astype(str).tolist(),
+                selected_unit=arguments.replication_unit,
+                require_nested_cv=nested_tuning,
+            )
+            if not replication_report["ok"]:
+                raise ValueError(replication_report["errors"][0])
+            selected_report = replication_report["units"][arguments.replication_unit]
+            logger.info(
+                "Replication preflight passed for %s: %s groups, %s outer folds",
+                arguments.replication_unit,
+                selected_report["group_count"],
+                selected_report["outer_folds"],
+            )
         dates = []
 
         for date in data.index.tolist():

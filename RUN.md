@@ -80,13 +80,23 @@ src/visualize_benchmark.py            benchmark reports
 
 The GUI execution adapter is `gui/execution.py`; it prepares job-local paths and argument lists while leaving algorithms in `src/`.
 
+Benchmark plots can be regenerated without repeating model training:
+
+```bash
+PYTHONPATH=src python src/visualize_benchmark.py /path/to/results
+```
+
+The command reads existing `classification_*.tsv` and `ablation_ranking_all.tsv` files and writes PDFs under the result folder's `visualizations/` directory.
+
 ## Input contracts
 
 Labelled image filenames must retain the naming convention expected by `src/input_validation.py`. Unlabelled inference images do not require embedded class labels.
 
 A complete training table is tab-separated and contains `sampleName`, `label`, and numeric feature columns. A compatible inference table contains `sampleName` and the numeric columns required by the selected saved model. Generated feature columns are retained even when they contain zero, `NaN`, or infinite values; the learning and inference loaders apply the established value-level imputation consistently.
 
-Voxel sizes are measured in micrometres. Select the actual acquisition values in the GUI. The replication unit (`position`, `well`, `plate`, or `date`) controls which related images remain grouped during model evaluation.
+Voxel sizes are measured in micrometres. Select the actual acquisition values in the GUI. The replication unit (`position`, `well`, or `date`) controls which related images remain grouped during model evaluation. After training data is uploaded, the GUI checks each unit against the same outer and nested cross-validation splitters used by learning. Units that cannot keep every class in every fold are disabled with an exact reason. Availability is statistical rather than biological: select a feasible unit only when it represents independent experimental material.
+
+Well groups include acquisition date, and position groups include acquisition date and well, so repeated names such as `C05` or `pos001` from unrelated parents are not merged. Full pipeline runs repeat this feasibility check on the generated feature table immediately before training. Train-only feature tables therefore need parseable MicroICS `sampleName` values in addition to their explicit `label` column.
 
 ## Local development checks
 

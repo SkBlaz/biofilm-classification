@@ -23,6 +23,7 @@ from gui.app import (
     create_results_zip,
     preflight_error,
     receive_upload,
+    replication_options,
     reset_pipeline,
     runtime,
     start_pipeline,
@@ -53,6 +54,15 @@ def labelled_image_name() -> str:
 
 def training_table() -> bytes:
     return b"sampleName\tlabel\tfeature\n01012026--s--Lm--st--L1--p--C01--pos001--tm--24--ch--Syto9--z--21\tL1\t1\n"
+
+
+def replication_table() -> bytes:
+    rows = ["sampleName\tlabel\tfeature"]
+    for label, prefix in (("L1", "C"), ("L2", "D")):
+        for number in range(1, 6):
+            name = f"01012026--s--Lm--st--{label}--p--{prefix}{number:02d}--pos001--tm--24--ch--Syto9--z--21"
+            rows.append(f"{name}\t{label}\t{number}")
+    return ("\n".join(rows) + "\n").encode()
 
 
 class TestJobUploads(unittest.TestCase):
@@ -116,6 +126,62 @@ class TestDirectExecution(unittest.TestCase):
             self.assertEqual([step.step_id for step in steps], ["models", "reports"])
             self.assertIn("feature_ranking_lite.py", " ".join(steps[0].commands[0]))
             self.assertIn("--save_models", steps[0].commands[0])
+
+    def test_full_plan_rechecks_generated_features_with_selected_replication_unit(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            (paths.training_images / labelled_image_name()).touch()
+            (paths.inference_images / "unknown.tif").touch()
+            config = validate_config(
+                {
+                    "workflow": "full",
+                    "job_id": paths.job_id,
+                    "replication_unit": "well",
+                    "learner": "rf",
+                }
+            )
+
+            steps = build_execution_steps(config)
+            validation_command = next(step.commands[0] for step in steps if step.step_id == "validate")
+
+            self.assertIn("--replication-unit", validation_command)
+            self.assertEqual(validation_command[validation_command.index("--replication-unit") + 1], "well")
+            self.assertIn("--nested-cv", validation_command)
+
+    def test_replication_options_block_date_before_training(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            (paths.feature_files / "training.tsv").write_bytes(replication_table())
+
+            report = replication_options(
+                {
+                    "job_id": paths.job_id,
+                    "feature_file": "training.tsv",
+                    "replication_unit": "date",
+                    "learner": "rf",
+                    "all_learners": False,
+                }
+            )
+
+            self.assertFalse(report["ok"])
+            self.assertFalse(report["units"]["date"]["ok"])
+            self.assertTrue(report["units"]["well"]["ok"])
+            self.assertIn("Date cannot be used", report["errors"][0])
+
+    def test_plate_is_not_accepted_as_a_replication_unit(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            (paths.feature_files / "training.tsv").write_bytes(replication_table())
+
+            with self.assertRaisesRegex(ValueError, "available unit"):
+                validate_config(
+                    {
+                        "workflow": "train",
+                        "job_id": paths.job_id,
+                        "feature_file": "training.tsv",
+                        "replication_unit": "plate",
+                    }
+                )
 
     def test_inference_plan_accepts_precomputed_features_and_prior_models(self):
         with temporary_jobs_root():
@@ -240,6 +306,23 @@ class TestPreflightFailureDetails(unittest.TestCase):
 
         self.assertIn("- Images: Invalid image filename: bad-one.tif", message)
         self.assertIn("- Images: Invalid image filename: bad-two.tif", message)
+
+    def test_preflight_error_lists_exact_replication_failure(self):
+        report = {
+            "replication": {
+                "ok": False,
+                "errors": [
+                    "Date cannot be used for grouped training: "
+                    "Cannot create grouped cross-validation splitter: at least 2 groups are required, got 1"
+                ],
+            },
+            "ok": False,
+        }
+
+        message = preflight_error(report)
+
+        self.assertIn("- Replication: Date cannot be used for grouped training", message)
+        self.assertIn("at least 2 groups are required, got 1", message)
 
 
 class TestResultsAndRecovery(unittest.TestCase):
@@ -401,6 +484,9 @@ class TestHTTPAndImage(unittest.TestCase):
         self.assertIn("navigator.clipboard?.writeText", javascript)
         self.assertIn("fallbackCopyText", javascript)
         self.assertIn("event.stopPropagation()", javascript)
+        self.assertNotIn('value="plate"', html)
+        self.assertIn("/api/replication-options", javascript)
+        self.assertIn("Checking grouped cross-validation feasibility", javascript)
 
 
 if __name__ == "__main__":

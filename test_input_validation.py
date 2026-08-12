@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.input_validation import replication_group, validate_feature_table, validate_image_directory
+from src.input_validation import assess_replication_units, replication_group, validate_feature_table, validate_image_directory
 
 
 class TestInputValidation(unittest.TestCase):
@@ -129,9 +129,34 @@ class TestInputValidation(unittest.TestCase):
     def test_replication_group_is_explicit(self):
         sample = "04072023--s--Lm--st--L1323--p--C06--pos004--tm--24--ch--Syto9--z--21"
         self.assertEqual(replication_group(sample, "date"), "04072023")
-        self.assertEqual(replication_group(sample, "plate"), "L1323")
-        self.assertEqual(replication_group(sample, "well"), "C06")
-        self.assertEqual(replication_group(sample, "position"), "004")
+        self.assertEqual(replication_group(sample, "well"), "04072023::C06")
+        self.assertEqual(replication_group(sample, "position"), "04072023::C06::004")
+        with self.assertRaisesRegex(ValueError, "date, well, or position"):
+            replication_group(sample, "plate")
+
+    def test_replication_groups_do_not_merge_leaf_values_across_parents(self):
+        first = "04072023--s--Lm--st--L1--p--C06--pos004--tm--24--ch--Syto9--z--21"
+        other_date = "05072023--s--Lm--st--L1--p--C06--pos004--tm--24--ch--Syto9--z--21"
+        other_well = "04072023--s--Lm--st--L1--p--D06--pos004--tm--24--ch--Syto9--z--21"
+
+        self.assertNotEqual(replication_group(first, "well"), replication_group(other_date, "well"))
+        self.assertNotEqual(replication_group(first, "position"), replication_group(other_well, "position"))
+
+    def test_replication_assessment_blocks_one_date_but_allows_balanced_wells(self):
+        names = []
+        labels = []
+        for label, prefix in (("L1", "C"), ("L2", "D")):
+            for number in range(1, 6):
+                names.append(f"01012026--s--Lm--st--{label}--p--{prefix}{number:02d}--pos001--tm--24--ch--Syto9--z--21")
+                labels.append(label)
+
+        report = assess_replication_units(names, labels, selected_unit="date", require_nested_cv=True)
+
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["units"]["date"]["status"], "unavailable")
+        self.assertTrue(report["units"]["well"]["ok"])
+        self.assertEqual(report["units"]["well"]["groups_per_class"], {"L1": 5, "L2": 5})
+        self.assertIn("Date cannot be used", report["errors"][0])
 
     def test_feature_report_requires_sample_name(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

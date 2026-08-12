@@ -9,12 +9,13 @@ from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import KFold, StratifiedKFold
+from sklearn.model_selection import StratifiedKFold
 
 # Add src directory to path
 sys.path.insert(0, "src")
 
 import feature_ranking_lite
+from cv_planning import assess_grouped_cv
 from feature_ranking_lite import (
     compute_ablation_scores,
     configured_parallelism,
@@ -42,17 +43,10 @@ class TestAdaptiveCV(unittest.TestCase):
         self.assertEqual(strategy, "stratified")
         self.assertIn("StratifiedKFold enabled", reason)
 
-    def test_falls_back_to_kfold_for_singleton_class(self):
-        """Should fall back to KFold when stratification is impossible."""
+    def test_rejects_singleton_class_instead_of_reporting_invalid_scores(self):
         y = np.array([0, 0, 1])
-        cv, n_splits, min_class_count, strategy, reason = get_adaptive_cv(y, max_splits=5)
-
-        self.assertIsInstance(cv, KFold)
-        self.assertEqual(n_splits, 2)
-        self.assertEqual(cv.n_splits, n_splits)
-        self.assertEqual(min_class_count, 1)
-        self.assertEqual(strategy, "kfold")
-        self.assertIn("Falling back to KFold", reason)
+        with self.assertRaisesRegex(ValueError, "each class requires at least 2 samples"):
+            get_adaptive_cv(y, max_splits=5)
 
     def test_empty_target_raises_value_error(self):
         """Should reject empty target arrays."""
@@ -75,6 +69,15 @@ class TestAdaptiveCV(unittest.TestCase):
         for train_indices, test_indices in cv.split(np.zeros((len(y), 1)), y, groups):
             self.assertTrue(set(groups[train_indices]).isdisjoint(groups[test_indices]))
 
+    def test_nested_plan_rejects_two_class_pure_groups_per_class(self):
+        labels = np.array(["A", "A", "B", "B"])
+        groups = np.array(["A1", "A2", "B1", "B2"])
+
+        report = assess_grouped_cv(labels, groups, require_nested_cv=True)
+
+        self.assertFalse(report["ok"])
+        self.assertIn("nested model tuning", report["errors"][0])
+
 
 class TestBenchmarkRuntimeConfig(unittest.TestCase):
     """Test benchmark runtime tuning for CI and local runs."""
@@ -92,7 +95,7 @@ class TestBenchmarkRuntimeConfig(unittest.TestCase):
             config = get_benchmark_runtime_config()
 
         self.assertEqual(config["n_iter"], 10)
-        self.assertEqual(config["repetitions"], 3)
+        self.assertEqual(config["repetitions"], 1)
         self.assertEqual(config["n_components"], [16, 32, 64, 128, 256, 512, "all"])
 
     def test_configured_parallelism_honors_requested_worker_limit(self):
@@ -105,7 +108,7 @@ class TestBenchmarkRuntimeConfig(unittest.TestCase):
 
         self.assertNotEqual(date_path, well_path)
         self.assertIn("_repdate_", date_path)
-        self.assertIn("/v2_", date_path)
+        self.assertIn("/v4_", date_path)
 
     def test_fold_preprocessing_is_reusable_across_learners(self):
         x_train = np.arange(60, dtype=float).reshape(10, 6)
@@ -175,7 +178,8 @@ class TestAblationEvaluation(unittest.TestCase):
             second = compute_ablation_scores(features, labels, replication_unit="date")
 
         pd.testing.assert_frame_equal(first, second)
-        self.assertEqual(first["top_n"].tolist(), [1, 21])
+        self.assertEqual(first["top_n"].tolist(), [1, 21, 22])
+        self.assertEqual(first["total_features"].tolist(), [22, 22, 22])
 
 
 if __name__ == "__main__":

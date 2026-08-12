@@ -15,6 +15,11 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+try:
+    from cv_planning import assess_grouped_cv
+except ImportError:
+    from .cv_planning import assess_grouped_cv
+
 IMAGE_PATTERN = re.compile(
     r"^(?P<date>\d{8})[-_]s[-_](?P<species>[^_-]+)[-_]st[-_](?P<label>[^_-]+)"
     r"[-_]p[-_](?P<well>[^_-]+)[-_]pos(?P<position>[^_-]+)[-_]tm[-_](?P<time>[^_-]+)"
@@ -49,6 +54,7 @@ MICROICS_PREFIXES = (
     "vol3D",
     "compactness",
 )
+REPLICATION_UNITS = ("date", "well", "position")
 
 
 def parse_image_name(filename: str) -> dict[str, str] | None:
@@ -58,7 +64,6 @@ def parse_image_name(filename: str) -> dict[str, str] | None:
     if not match:
         return None
     fields = match.groupdict()
-    fields["plate"] = fields["label"]
     return fields
 
 
@@ -77,7 +82,6 @@ def sample_fields(sample_name: str) -> dict[str, str] | None:
                 "date": tokens[0],
                 "species": tokens[2],
                 "label": tokens[st_index + 1],
-                "plate": tokens[st_index + 1],
                 "well": tokens[plate_index + 1],
                 "position": tokens[plate_index + 2].removeprefix("pos"),
                 "time": tokens[plate_index + 3].removeprefix("tm"),
@@ -239,12 +243,115 @@ def validate_feature_table(path: str | Path, require_label: bool = True) -> dict
 
 def replication_group(sample_name: str, unit: str) -> str:
     """Return the user-selected replication unit from a sample name."""
-    if unit not in {"position", "well", "plate", "date"}:
-        raise ValueError("Replication unit must be position, well, plate, or date")
+    if unit not in REPLICATION_UNITS:
+        raise ValueError("Replication unit must be date, well, or position")
     fields = sample_fields(sample_name)
     if not fields:
         raise ValueError(f"Could not parse replication fields from sample name: {sample_name}")
-    return fields[unit]
+    if unit == "date":
+        return fields["date"]
+    if unit == "well":
+        return "::".join((fields["date"], fields["well"]))
+    return "::".join((fields["date"], fields["well"], fields["position"]))
+
+
+def assess_replication_units(
+    sample_names,
+    labels,
+    selected_unit: str | None = None,
+    require_nested_cv: bool = True,
+) -> dict[str, Any]:
+    """Assess every supported replication unit against the real CV splitters."""
+    names = [str(value) for value in sample_names]
+    label_values = [str(value).strip() for value in labels]
+    units: dict[str, dict[str, Any]] = {}
+    for unit in REPLICATION_UNITS:
+        try:
+            groups = [replication_group(name, unit) for name in names]
+            unit_report = assess_grouped_cv(label_values, groups, require_nested_cv=require_nested_cv)
+        except ValueError as exc:
+            unit_report = {
+                "ok": False,
+                "status": "unavailable",
+                "samples": len(names),
+                "group_count": 0,
+                "groups_per_class": {},
+                "outer_folds": 0,
+                "inner_folds": [],
+                "warnings": [],
+                "errors": [str(exc)],
+            }
+        units[unit] = unit_report
+
+    errors: list[str] = []
+    selected_report = units.get(selected_unit) if selected_unit else None
+    if selected_unit and selected_report is None:
+        errors.append("Choose a supported unit of replication")
+    elif selected_report is not None and not selected_report["ok"]:
+        reason = selected_report.get("errors", ["grouped cross-validation is not feasible"])[0]
+        errors.append(f"{selected_unit.capitalize()} cannot be used for grouped training: {reason}")
+
+    return {
+        "selected_unit": selected_unit or "",
+        "require_nested_cv": require_nested_cv,
+        "units": units,
+        "errors": errors,
+        "warnings": list(selected_report.get("warnings", [])) if selected_report else [],
+        "ok": bool(selected_report and selected_report.get("ok")) if selected_unit else any(report["ok"] for report in units.values()),
+    }
+
+
+def assess_replication_from_images(
+    directory: str | Path,
+    selected_unit: str | None = None,
+    require_nested_cv: bool = True,
+) -> dict[str, Any]:
+    """Assess labelled image filenames without loading image pixels."""
+    root = Path(directory)
+    parsed = []
+    files = sorted(path for path in root.iterdir() if path.is_file() and path.suffix.lower() in {".tif", ".tiff"}) if root.is_dir() else []
+    for path in files:
+        fields = parse_image_name(path.name)
+        if fields:
+            parsed.append((path.name, fields["label"]))
+    return assess_replication_units(
+        [name for name, _label in parsed],
+        [label for _name, label in parsed],
+        selected_unit=selected_unit,
+        require_nested_cv=require_nested_cv,
+    )
+
+
+def assess_replication_from_feature_table(
+    path: str | Path,
+    selected_unit: str | None = None,
+    require_nested_cv: bool = True,
+) -> dict[str, Any]:
+    """Assess replication using the exact rows that model training will consume."""
+    try:
+        frame = pd.read_csv(path, sep="\t")
+    except Exception as exc:
+        return {
+            "selected_unit": selected_unit or "",
+            "units": {},
+            "errors": [f"Could not read feature table: {exc}"],
+            "warnings": [],
+            "ok": False,
+        }
+    if "sampleName" not in frame or "label" not in frame:
+        return {
+            "selected_unit": selected_unit or "",
+            "units": {},
+            "errors": ["Replication feasibility requires sampleName and label columns"],
+            "warnings": [],
+            "ok": False,
+        }
+    return assess_replication_units(
+        frame["sampleName"].tolist(),
+        frame["label"].tolist(),
+        selected_unit=selected_unit,
+        require_nested_cv=require_nested_cv,
+    )
 
 
 def write_json_report(report: dict[str, Any], output: str | Path) -> None:

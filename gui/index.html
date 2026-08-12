@@ -83,8 +83,9 @@
         </fieldset>
 
         <div class="field-group" id="replicationField">
-          <div class="field-label"><label for="replicationUnit">Unit of replication</label><button class="help-button" data-help-title="Unit of replication" data-help-text="Keeps all images from one position, well, plate, or date together during cross-validation." type="button" aria-label="Help for replication unit">?</button></div>
-          <select id="replicationUnit"><option value="date" selected>Date</option><option value="plate">Plate</option><option value="well">Well</option><option value="position">Imaging position (pos)</option></select>
+          <div class="field-label"><label for="replicationUnit">Unit of replication</label><button class="help-button" data-help-title="Unit of replication" data-help-text="Keeps all images from one position, well, or date together during cross-validation. Availability is calculated from the uploaded classes and replication groups." type="button" aria-label="Help for replication unit">?</button></div>
+          <select id="replicationUnit"><option value="">Upload training data to check availability</option><option value="date" selected>Date</option><option value="well">Well</option><option value="position">Imaging position (pos)</option></select>
+          <small id="replicationStatus">Availability will be checked from the uploaded training data.</small>
         </div>
 
         <fieldset class="learner-picker" id="modelFields">
@@ -138,6 +139,6 @@
       <p id="helpModalText"></p><button class="button primary help-modal-close" id="dismissHelpModal" type="button">Got it</button>
     </div>
   </div>
-  <script src="/app.js?v=20260811-1"></script>
+  <script src="/app.js?v=20260811-2"></script>
 </body>
 </html>
