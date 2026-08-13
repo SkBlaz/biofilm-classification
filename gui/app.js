@@ -34,7 +34,6 @@ const helpModalText = document.querySelector('#helpModalText');
 const stepIcons = { features: '1', validate: '✓', models: '2', reports: '▧', inference: '3' };
 let uploadJobId = '';
 let featureFileName = '';
-let replicationRequest = 0;
 let trainingUploadCount = 0;
 let inferenceUploadCount = 0;
 let pendingUploads = 0;
@@ -117,13 +116,11 @@ function setWorkflow(workflow) {
   document.querySelector('#featureFileField').classList.toggle('hidden', !['train', 'inference', 'full'].includes(workflow));
   document.querySelector('#modelJobField').classList.toggle('hidden', workflow !== 'inference');
   document.querySelector('#modelFields').classList.toggle('hidden', !['train', 'full'].includes(workflow));
-  document.querySelector('#replicationField').classList.toggle('hidden', !['train', 'full'].includes(workflow));
   document.querySelector('#voxelFields').classList.toggle('hidden', workflow === 'train');
 }
 
 document.querySelectorAll('input[name="workflow"]').forEach((input) => input.addEventListener('change', (event) => {
   setWorkflow(event.target.value);
-  refreshReplicationOptions();
 }));
 
 function renderModelJobs(jobs) {
@@ -148,7 +145,6 @@ async function loadDefaults() {
   document.querySelector('#voxelSizeX').value = config.voxel_size_x;
   document.querySelector('#voxelSizeY').value = config.voxel_size_y;
   document.querySelector('#voxelSizeZ').value = config.voxel_size_z;
-  document.querySelector('#replicationUnit').value = config.replication_unit;
   document.querySelector('#learner').value = config.learner;
   renderModelJobs(payload.model_jobs);
 }
@@ -175,7 +171,6 @@ async function uploadFiles(input, kind, statusElement) {
     else inferenceUploadCount += files.length;
     const total = kind === 'training' ? trainingUploadCount : inferenceUploadCount;
     statusElement.textContent = `${total} image${total === 1 ? '' : 's'} uploaded to job ${uploadJobId.slice(0, 8)}.`;
-    if (kind === 'training') await refreshReplicationOptions();
   } catch (error) {
     statusElement.textContent = error.message;
   } finally {
@@ -199,7 +194,6 @@ async function uploadFeatureFile(input) {
     uploadJobId = payload.job_id;
     featureFileName = payload.file;
     statusElement.textContent = `${payload.file} uploaded to job ${uploadJobId.slice(0, 8)}.`;
-    await refreshReplicationOptions();
   } catch (error) {
     statusElement.textContent = error.message;
   } finally {
@@ -224,68 +218,9 @@ function configFromForm() {
     voxel_size_x: Number(value('voxelSizeX')),
     voxel_size_y: Number(value('voxelSizeY')),
     voxel_size_z: Number(value('voxelSizeZ')),
-    replication_unit: value('replicationUnit'),
     all_learners: document.querySelector('input[name="learner_mode"]:checked').value === 'all',
     learner: value('learner'),
   };
-}
-
-const replicationLabels = { date: 'Date', well: 'Well', position: 'Imaging position (pos)' };
-
-function resetReplicationOptions() {
-  const selector = document.querySelector('#replicationUnit');
-  Object.entries(replicationLabels).forEach(([unit, label]) => {
-    const option = [...selector.options].find((item) => item.value === unit);
-    option.disabled = false;
-    option.textContent = label;
-  });
-  document.querySelector('#replicationStatus').textContent = 'Availability will be checked from the uploaded training data.';
-}
-
-function renderReplicationOptions(report) {
-  const selector = document.querySelector('#replicationUnit');
-  const status = document.querySelector('#replicationStatus');
-  const previous = selector.value;
-  Object.entries(replicationLabels).forEach(([unit, label]) => {
-    const option = [...selector.options].find((item) => item.value === unit);
-    const assessment = report?.units?.[unit];
-    option.disabled = !assessment?.ok;
-    const groups = assessment?.group_count ? ` · ${assessment.group_count} groups` : '';
-    option.textContent = assessment ? `${label} — ${assessment.status}${groups}` : `${label} — unavailable`;
-  });
-
-  const selected = report?.units?.[previous];
-  if (previous && selected?.ok) {
-    selector.value = previous;
-    const nested = selected.inner_folds?.length ? `; inner folds ${Math.min(...selected.inner_folds)}–${Math.max(...selected.inner_folds)}` : '';
-    status.textContent = `${replicationLabels[previous]} is technically ${selected.status}: ${selected.group_count} groups, ${selected.outer_folds} outer folds${nested}. Confirm that this represents independent experimental material.`;
-    return;
-  }
-
-  selector.value = '';
-  if (previous && selected?.errors?.length) {
-    status.textContent = `${replicationLabels[previous]} is unavailable: ${selected.errors[0]}`;
-  } else {
-    status.textContent = 'Choose a technically feasible unit that represents independent experimental material.';
-  }
-}
-
-async function refreshReplicationOptions() {
-  const workflow = document.querySelector('input[name="workflow"]:checked').value;
-  if (!['train', 'full'].includes(workflow) || !uploadJobId || (!featureFileName && trainingUploadCount === 0)) {
-    replicationRequest += 1;
-    resetReplicationOptions();
-    return;
-  }
-  const request = ++replicationRequest;
-  const status = document.querySelector('#replicationStatus');
-  status.textContent = 'Checking grouped cross-validation feasibility…';
-  try {
-    const payload = await post('/api/replication-options', configFromForm());
-    if (request === replicationRequest) renderReplicationOptions(payload.report);
-  } catch (error) {
-    if (request === replicationRequest) status.textContent = `Could not assess replication units: ${error.message}`;
-  }
 }
 
 function renderValidation(report) {
@@ -299,11 +234,6 @@ function renderValidation(report) {
   validationPanel.classList.toggle('is-valid', report.ok === true);
   validationMessage.textContent = report.ok ? 'All uploaded inputs passed preflight.' : 'Preflight needs attention.';
   const sections = Object.entries(report).filter(([, section]) => section && typeof section === 'object').map(([name, section]) => {
-    if (name === 'replication') {
-      const units = Object.entries(section.units || {}).map(([unit, assessment]) => `<li>${escapeHtml(replicationLabels[unit] || unit)}: ${escapeHtml(assessment.status || 'unavailable')} · ${assessment.group_count || 0} groups${assessment.errors?.length ? ` — ${escapeHtml(assessment.errors[0])}` : ''}</li>`).join('');
-      const errors = (section.errors || []).map((error) => `<li>${escapeHtml(error)}</li>`).join('');
-      return `<section class="validation-section"><strong>Grouped training feasibility</strong>${errors ? `<ul class="validation-errors">${errors}</ul>` : ''}${units ? `<ul>${units}</ul>` : ''}</section>`;
-    }
     if (section.features_read !== undefined) {
       const errors = (section.errors || []).map((error) => `<li>${escapeHtml(error)}</li>`).join('');
       const warnings = (section.warnings || []).map((warning) => `<li>${escapeHtml(warning)}</li>`).join('');
@@ -458,9 +388,6 @@ form.addEventListener('submit', async (event) => {
     if (pendingUploads) throw new Error('Please wait for uploads to finish.');
     if (!uploadJobId) throw new Error('Upload the required input files first.');
     const config = configFromForm();
-    if (['train', 'full'].includes(config.workflow) && !config.replication_unit) {
-      throw new Error('Choose an available unit of replication before starting training.');
-    }
     const inputDescription = config.feature_file ? 'Validating the uploaded feature table' : 'Validating uploaded images';
     renderState({
       ...(latestState || {}),
@@ -502,8 +429,6 @@ resetButton.addEventListener('click', async () => {
     featureFileName = '';
     trainingUploadCount = 0;
     inferenceUploadCount = 0;
-    replicationRequest += 1;
-    resetReplicationOptions();
     document.querySelector('#trainingFileStatus').textContent = 'No training images uploaded.';
     document.querySelector('#inferenceFileStatus').textContent = 'No inference images uploaded.';
     document.querySelector('#featureFileStatus').textContent = 'No feature table uploaded.';
@@ -519,10 +444,7 @@ function syncLearnerMode() {
 }
 document.querySelectorAll('input[name="learner_mode"]').forEach((input) => input.addEventListener('change', () => {
   syncLearnerMode();
-  refreshReplicationOptions();
 }));
-document.querySelector('#learner').addEventListener('change', refreshReplicationOptions);
-document.querySelector('#replicationUnit').addEventListener('change', refreshReplicationOptions);
 
 function closeHelpModal() { helpModal.classList.add('hidden'); }
 document.querySelectorAll('[data-help-title]').forEach((button) => button.addEventListener('click', () => {

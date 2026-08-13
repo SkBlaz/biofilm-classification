@@ -36,13 +36,7 @@ try:
         unique_upload_path,
         validate_job_id,
     )
-    from src.input_validation import (
-        REPLICATION_UNITS,
-        assess_replication_from_feature_table,
-        assess_replication_from_images,
-        validate_feature_table,
-        validate_image_directory,
-    )
+    from src.input_validation import validate_feature_table, validate_image_directory
 except ModuleNotFoundError:  # Direct ``python gui/app.py`` execution.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from gui.execution import (
@@ -58,13 +52,7 @@ except ModuleNotFoundError:  # Direct ``python gui/app.py`` execution.
         unique_upload_path,
         validate_job_id,
     )
-    from src.input_validation import (
-        REPLICATION_UNITS,
-        assess_replication_from_feature_table,
-        assess_replication_from_images,
-        validate_feature_table,
-        validate_image_directory,
-    )
+    from src.input_validation import validate_feature_table, validate_image_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 GUI_DIR = Path(__file__).resolve().parent
@@ -163,7 +151,6 @@ def default_config() -> dict[str, object]:
         "correlation_threshold": 0.8,
         "all_learners": False,
         "learner": "rf",
-        "replication_unit": "date",
         **DEFAULT_VOXEL_DIMENSIONS,
     }
 
@@ -321,11 +308,6 @@ def validate_config(raw: dict) -> dict:
             raise ValueError(f"Voxel size {axis.upper()} must be a positive number")
         voxel_dimensions[key] = dimension
 
-    replication_unit = str(config.get("replication_unit", "date"))
-    if workflow in {"train", "full"} and replication_unit not in REPLICATION_UNITS:
-        raise ValueError("Choose an available unit of replication")
-    if replication_unit not in REPLICATION_UNITS:
-        replication_unit = "date"
     learner = str(config.get("learner", "rf"))
     if learner not in {"rf", "dummy", "decisiontree", "logistic", "xgb", "gridsearch"}:
         raise ValueError("Choose a supported learner")
@@ -371,7 +353,6 @@ def validate_config(raw: dict) -> dict:
         "correlation_threshold": correlation_threshold,
         "all_learners": bool(config.get("all_learners")),
         "learner": learner,
-        "replication_unit": replication_unit,
         **voxel_dimensions,
     }
 
@@ -387,42 +368,8 @@ def preflight_config(config: dict) -> dict:
         report["features"] = validate_feature_table(config["feature_file"], require_label=workflow != "inference")
     if workflow in {"inference", "full"} and not (workflow == "inference" and config.get("feature_file")):
         report["inference_images"] = validate_image_directory(config["inference_images"], labelled=False)
-    if workflow in {"train", "full"}:
-        nested_tuning = bool(config.get("all_learners")) or config.get("learner") in {"rf", "gridsearch"}
-        if config.get("feature_file"):
-            report["replication"] = assess_replication_from_feature_table(
-                config["feature_file"],
-                selected_unit=config["replication_unit"],
-                require_nested_cv=nested_tuning,
-            )
-        else:
-            report["replication"] = assess_replication_from_images(
-                config["training_images"],
-                selected_unit=config["replication_unit"],
-                require_nested_cv=nested_tuning,
-            )
     report["ok"] = bool(report) and all(section.get("ok", False) for section in report.values() if isinstance(section, dict))
     return report
-
-
-def replication_options(raw: dict) -> dict:
-    """Return fast metadata-only feasibility for the uploaded training input."""
-    job_id = validate_job_id(str(raw.get("job_id", "")))
-    paths = job_paths(job_id)
-    selected_unit = str(raw.get("replication_unit", "")) or None
-    nested_tuning = bool(raw.get("all_learners")) or str(raw.get("learner", "rf")) in {"rf", "gridsearch"}
-    feature_file = uploaded_feature_path(paths, raw.get("feature_file"))
-    if feature_file:
-        return assess_replication_from_feature_table(
-            feature_file,
-            selected_unit=selected_unit,
-            require_nested_cv=nested_tuning,
-        )
-    return assess_replication_from_images(
-        paths.training_images,
-        selected_unit=selected_unit,
-        require_nested_cv=nested_tuning,
-    )
 
 
 def preflight_error(report: dict) -> str:
@@ -937,12 +884,6 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 config = validate_config(read_json(self))
                 json_response(self, {"config": config, "report": preflight_config(config)})
-            except (FileNotFoundError, ValueError) as exc:
-                json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-            return
-        if parsed.path == "/api/replication-options":
-            try:
-                json_response(self, {"report": replication_options(read_json(self))})
             except (FileNotFoundError, ValueError) as exc:
                 json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return

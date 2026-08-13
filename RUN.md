@@ -94,9 +94,7 @@ Labelled image filenames must retain the naming convention expected by `src/inpu
 
 A complete training table is tab-separated and contains `sampleName`, `label`, and numeric feature columns. A compatible inference table contains `sampleName` and the numeric columns required by the selected saved model. Generated feature columns are retained even when they contain zero, `NaN`, or infinite values; the learning and inference loaders apply the established value-level imputation consistently.
 
-Voxel sizes are measured in micrometres. Select the actual acquisition values in the GUI. The replication unit (`position`, `well`, or `date`) controls which related images remain grouped during model evaluation. After training data is uploaded, the GUI checks each unit against the same outer and nested cross-validation splitters used by learning. Units that cannot keep every class in every fold are disabled with an exact reason. Availability is statistical rather than biological: select a feasible unit only when it represents independent experimental material.
-
-Well groups include acquisition date, and position groups include acquisition date and well, so repeated names such as `C05` or `pos001` from unrelated parents are not merged. Full pipeline runs repeat this feasibility check on the generated feature table immediately before training. Train-only feature tables therefore need parseable MicroICS `sampleName` values in addition to their explicit `label` column.
+Voxel sizes are measured in micrometres. Select the actual acquisition values in the GUI. Learning intentionally follows the published main-branch evaluation protocol: ordinary stratified cross-validation, three seeded benchmark repetitions, and the original generated-column ablation. Training tables therefore require `sampleName` and `label`, but `sampleName` does not need to encode a selectable replication unit.
 
 ## Local development checks
 

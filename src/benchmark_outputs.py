@@ -24,6 +24,8 @@ MODEL_DISPLAY_NAMES = {
     "xgb": "XGBoost",
 }
 
+LEGACY_SVD_COMPONENTS = {16, 32, 64, 128, 256, 512}
+
 
 def canonical_model_name(model_name: object) -> str:
     """Return the stable learner key used by current and legacy result files."""
@@ -68,6 +70,12 @@ def _boolean_values(values: pd.Series) -> pd.Series:
 def _preferred_configuration(frame: pd.DataFrame) -> pd.DataFrame:
     """Select the predeclared all-feature configuration without test-score cherry-picking."""
     candidates = frame.copy()
+    if "component_setting" in candidates:
+        settings = candidates["component_setting"].astype(str).str.strip().str.lower()
+        all_features = candidates[settings.isin({"all", "all_columns"})]
+        if not all_features.empty:
+            return all_features
+
     if "thr_features" in candidates:
         with_thresholds = candidates[_boolean_values(candidates["thr_features"])]
         if not with_thresholds.empty:
@@ -89,6 +97,49 @@ def _preferred_configuration(frame: pd.DataFrame) -> pd.DataFrame:
     if numeric_components.notna().any():
         return candidates[numeric_components == numeric_components.max()]
     return candidates
+
+
+def _configuration_key(row: pd.Series) -> str:
+    """Return a distinct key for every preprocessing configuration, including legacy TSVs."""
+    explicit = str(row.get("component_setting", "")).strip().lower()
+    if explicit and explicit != "nan":
+        return explicit
+    components = str(row.get("n_components", "unknown")).strip()
+    threshold_flag = str(row.get("thr_features", "true")).strip().lower() in {"true", "1", "yes"}
+    if components.lower() == "all":
+        return "all_columns" if threshold_flag else "threshold_only"
+    try:
+        numeric_components = int(float(components))
+    except ValueError:
+        numeric_components = None
+    if numeric_components in LEGACY_SVD_COMPONENTS:
+        # Older result files ran both threshold-flag values for SVD even though
+        # the flag did not alter those arrays. Treat them as one configuration.
+        return f"svd_{numeric_components}"
+    # Before component_setting was recorded, the all-column and threshold-only
+    # endpoints were written as their actual numeric column counts.
+    return "all_columns" if threshold_flag else "threshold_only"
+
+
+def _configuration_display(key: str) -> str:
+    if key in {"all", "all_columns"}:
+        return "All generated columns"
+    if key == "threshold_only":
+        return "Threshold-derived columns only"
+    match = re.fullmatch(r"svd_(.+?)(?:_(all_columns|threshold_only))?", key)
+    if match:
+        suffix = "" if match.group(2) in {None, "all_columns"} else " (threshold-derived input)"
+        return f"SVD {match.group(1)} components{suffix}"
+    return key.replace("_", " ").capitalize()
+
+
+def _configuration_order(key: str) -> tuple[int, float, str]:
+    if key in {"all", "all_columns"}:
+        return 0, 0, key
+    if key == "threshold_only":
+        return 1, 0, key
+    match = re.match(r"svd_([0-9.]+)", key)
+    return 2, float(match.group(1)) if match else float("inf"), key
 
 
 def _ranking_features(rankings: pd.DataFrame, top_n: int) -> list[str]:
@@ -148,8 +199,8 @@ def write_confusion_matrices(classification_file: str | Path, output_dir: str | 
         normalized_table.to_csv(destination / f"{report_stem}_normalized.tsv", sep="\t")
         plt.figure(figsize=(max(5, len(labels) * 1.2), max(4, len(labels) * 0.9)))
         sns.heatmap(normalized_table, annot=True, fmt=".1%", cmap="Blues", cbar=False, vmin=0, vmax=1)
-        mean_accuracy = pd.to_numeric(selected["accuracy"], errors="coerce").mean()
-        plt.title(f"Held-out confusion matrix: {display_name}\n{scope_display}; mean accuracy {mean_accuracy:.3f}")
+        overall_accuracy = float(np.trace(matrix) / matrix.sum()) if matrix.sum() else float("nan")
+        plt.title(f"Held-out confusion matrix: {display_name}\n{scope_display}; accuracy {overall_accuracy:.1%}")
         plt.xlabel("Predicted label")
         plt.ylabel("True label")
         plt.tight_layout()
@@ -176,30 +227,35 @@ def write_classification_plot(classification_file: str | Path, output_dir: str |
         return None
     frame["canonical_model"] = frame["model"].map(canonical_model_name)
     frame["display_model"] = frame["canonical_model"].map(lambda value: MODEL_DISPLAY_NAMES.get(value, value))
-    frame["components"] = frame["n_components"].astype(str)
+    frame["configuration_key"] = frame.apply(_configuration_key, axis=1)
+    frame["configuration"] = frame["configuration_key"].map(_configuration_display)
     preferred_order = list(MODEL_DISPLAY_NAMES)
     present = frame["canonical_model"].drop_duplicates().tolist()
     model_order = [MODEL_DISPLAY_NAMES[key] for key in preferred_order if key in present]
     model_order.extend(MODEL_DISPLAY_NAMES.get(key, key) for key in present if key not in preferred_order)
+    configuration_keys = sorted(frame["configuration_key"].drop_duplicates(), key=_configuration_order)
+    configuration_order = [_configuration_display(key) for key in configuration_keys]
 
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
-    plt.figure(figsize=(9, max(4, len(model_order) * 0.75 + 2)))
+    plt.figure(figsize=(12, max(4.5, len(model_order) * 0.9 + 2)))
     sns.barplot(
         data=frame,
         y="display_model",
         x="accuracy",
-        hue="components",
+        hue="configuration",
+        hue_order=configuration_order,
         order=model_order,
         palette="colorblind",
         alpha=0.7,
         capsize=0.15,
     )
-    plt.title(source.stem)
+    _scope_prefix, scope_display = _classification_scope(source)
+    plt.title(f"Held-out classification accuracy — {scope_display}")
     plt.ylabel("")
     plt.xlabel("Held-out accuracy")
     plt.xlim(0, 1)
-    plt.legend(title="Components", loc="lower left")
+    plt.legend(title="Configuration", loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=False)
     plt.tight_layout()
     output = destination / f"{source.stem}.pdf"
     plt.savefig(output, dpi=300)
@@ -226,7 +282,10 @@ def write_ablation_plot(
     if frame.empty:
         return None
     best = frame.loc[frame["accuracy"].idxmax()]
-    if total_features is None:
+    family_aware = "total_feature_families" in frame and frame["total_feature_families"].notna().any()
+    if family_aware:
+        total_features = int(frame["total_feature_families"].dropna().iloc[0])
+    elif total_features is None:
         total_features = (
             int(frame["total_features"].dropna().iloc[0])
             if "total_features" in frame and frame["total_features"].notna().any()
@@ -239,16 +298,31 @@ def write_ablation_plot(
     sns.lineplot(data=frame, x="top_n", y="accuracy")
     plt.vlines(best["top_n"], 0, best["accuracy"], color="red", linestyle="dashed")
     plt.plot(best["top_n"], best["accuracy"], "ro")
-    plt.annotate(
-        f"Highest observed subset (exploratory): {int(best['top_n'])} of {total_features} generated columns\n"
-        f"Accuracy: {best['accuracy']:.3f}",
-        xy=(best["top_n"], best["accuracy"]),
-        xytext=(8, 8),
-        textcoords="offset points",
+    selected_columns = (
+        f"; {int(best['selected_columns'])} generated columns" if family_aware and pd.notna(best.get("selected_columns")) else ""
     )
-    plt.title("RF feature-subset sensitivity (exploratory)")
-    plt.xlabel("Top generated feature columns considered (RF ranking)")
-    plt.ylabel("Mean held-out accuracy for each fixed subset size")
+    unit = "feature families" if family_aware else "generated columns"
+    plt.annotate(
+        "Highest observed subset (exploratory)\n"
+        f"{int(best['top_n'])} of {total_features} {unit}{selected_columns}\n"
+        f"Accuracy: {best['accuracy']:.3f}",
+        xy=(0.02, 0.98),
+        xycoords="axes fraction",
+        ha="left",
+        va="top",
+        bbox={"boxstyle": "round,pad=0.4", "facecolor": "white", "edgecolor": "#777777", "alpha": 0.9},
+    )
+    plt.title("Tuned RF feature-family ablation (exploratory)" if family_aware else "RF feature-subset sensitivity (exploratory)")
+    plt.xlabel(
+        "Top measurement feature families considered (fold-local RF ranking)"
+        if family_aware
+        else "Top generated feature columns considered (RF ranking)"
+    )
+    plt.ylabel(
+        "Mean held-out accuracy (same nested evaluation as classification)"
+        if family_aware
+        else "Mean held-out accuracy for each fixed subset size"
+    )
     plt.xlim(left=0)
     plt.ylim(0, 1)
     plt.tight_layout()

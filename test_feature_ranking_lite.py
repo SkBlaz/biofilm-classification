@@ -4,7 +4,9 @@ Unit tests for adaptive CV selection in feature_ranking_lite.py.
 """
 
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -17,8 +19,10 @@ sys.path.insert(0, "src")
 import feature_ranking_lite
 from cv_planning import assess_grouped_cv
 from feature_ranking_lite import (
+    benchmark_configurations,
     compute_ablation_scores,
     configured_parallelism,
+    convert_to_one_hot,
     emit_pipeline_progress,
     get_adaptive_cv,
     get_benchmark_runtime_config,
@@ -95,20 +99,20 @@ class TestBenchmarkRuntimeConfig(unittest.TestCase):
             config = get_benchmark_runtime_config()
 
         self.assertEqual(config["n_iter"], 10)
-        self.assertEqual(config["repetitions"], 1)
+        self.assertEqual(config["repetitions"], 3)
         self.assertEqual(config["n_components"], [16, 32, 64, 128, 256, 512, "all"])
 
     def test_configured_parallelism_honors_requested_worker_limit(self):
         with patch.object(feature_ranking_lite, "PARALLELISM", 3):
             self.assertEqual(configured_parallelism(), 3)
 
-    def test_partial_cache_separates_replication_strategies(self):
+    def test_partial_cache_is_pinned_to_published_main_protocol(self):
         date_path = partial_evaluation_path("partial", "all", 0, 16, True, "rf", 0, "date")
         well_path = partial_evaluation_path("partial", "all", 0, 16, True, "rf", 0, "well")
 
-        self.assertNotEqual(date_path, well_path)
-        self.assertIn("_repdate_", date_path)
-        self.assertIn("/v4_", date_path)
+        self.assertEqual(date_path, well_path)
+        self.assertIn("_reppublished-main_", date_path)
+        self.assertIn("/v6_", date_path)
 
     def test_fold_preprocessing_is_reusable_across_learners(self):
         x_train = np.arange(60, dtype=float).reshape(10, 6)
@@ -144,6 +148,48 @@ class TestBenchmarkRuntimeConfig(unittest.TestCase):
         self.assertEqual(effective_components, 2)
         self.assertIsNone(transformer)
 
+    def test_benchmark_configurations_preserve_published_threshold_flag_repetitions(self):
+        configurations = benchmark_configurations([16, 32, "all"], feature_count=100, threshold_feature_count=20)
+
+        self.assertEqual(
+            configurations,
+            [
+                (16, True, "svd_16"),
+                (16, False, "svd_16"),
+                (32, True, "svd_32"),
+                (32, False, "svd_32"),
+                ("all", True, "all_columns"),
+                ("all", False, "threshold_only"),
+            ],
+        )
+
+    def test_classification_ignores_replication_groups_for_published_protocol(self):
+        rng = np.random.default_rng(7)
+        labels = pd.Series(["A"] * 9 + ["B"] * 9)
+        features = pd.DataFrame(
+            rng.normal(size=(len(labels), 4)),
+            index=[f"sample-{index}" for index in range(len(labels))],
+            columns=[f"feature-{index}" for index in range(4)],
+        )
+        runtime = {"n_iter": 1, "repetitions": 1, "n_components": ["all"]}
+
+        with (
+            tempfile.TemporaryDirectory() as temporary_directory,
+            patch.object(feature_ranking_lite, "get_benchmark_runtime_config", return_value=runtime),
+        ):
+            data_path = Path(temporary_directory) / "datafile.tsv"
+            feature_ranking_lite.do_classification_simple(
+                features,
+                labels,
+                str(data_path),
+                learner="dummy",
+                replication_unit="date",
+            )
+            classification = pd.read_csv(Path(temporary_directory) / "classification_all.tsv", sep="\t")
+
+        self.assertEqual(len(classification), 6)
+        self.assertEqual(set(classification["component_setting"]), {"all_columns"})
+
     def test_search_fit_count_includes_candidates_and_folds(self):
         random_search = feature_ranking_lite.RandomizedSearchCV(
             feature_ranking_lite.DummyClassifier(), {"strategy": ["most_frequent", "prior"]}, n_iter=2
@@ -161,25 +207,40 @@ class TestBenchmarkRuntimeConfig(unittest.TestCase):
         self.assertIn('"sub_total":6', captured.output[0])
 
 
-class TestAblationEvaluation(unittest.TestCase):
-    def test_ablation_is_deterministic_and_honors_replication_groups(self):
-        rng = np.random.default_rng(42)
-        sample_names = [
-            f"{date}--s--Lm--st--{label}--p--C01--pos001--tm--24--ch--Syto9--z--21"
-            for date in ("01012026", "02012026", "03012026", "04012026")
-            for label in ("L1", "L2")
-            for _ in range(2)
-        ]
-        labels = pd.Series([label for _date in range(4) for label in ("L1", "L2") for _ in range(2)], index=sample_names)
-        features = pd.DataFrame(rng.normal(size=(len(sample_names), 22)), index=sample_names)
+class TestConvertToOneHot(unittest.TestCase):
+    """Keep the categorical-ranking coverage added on the default branch."""
 
-        with patch.object(feature_ranking_lite, "PARALLELISM", 1):
-            first = compute_ablation_scores(features, labels, replication_unit="date")
-            second = compute_ablation_scores(features, labels, replication_unit="date")
+    def test_expands_low_cardinality_categorical_columns(self):
+        data = pd.DataFrame({"numeric": [1, 2, 3], "strain": ["A", "A", "B"]})
+
+        converted, feature_groups = convert_to_one_hot(data)
+
+        self.assertListEqual(list(converted.columns), ["numeric", "strain_A", "strain_B"])
+        self.assertDictEqual(feature_groups, {"numeric": ["numeric"], "strain": ["strain_A", "strain_B"]})
+
+    def test_skips_high_cardinality_categorical_columns(self):
+        data = pd.DataFrame({"numeric": [1, 2, 3], "sample_id": ["A", "B", "C"]})
+
+        converted, feature_groups = convert_to_one_hot(data)
+
+        self.assertListEqual(list(converted.columns), ["numeric"])
+        self.assertDictEqual(feature_groups, {"numeric": ["numeric"]})
+
+
+class TestAblationEvaluation(unittest.TestCase):
+    def test_ablation_preserves_published_column_counts_and_ignores_replication_groups(self):
+        rng = np.random.default_rng(42)
+        labels = pd.Series(["L1"] * 12 + ["L2"] * 12)
+        features = pd.DataFrame(rng.normal(size=(len(labels), 42)), index=[f"sample-{index}" for index in range(len(labels))])
+
+        np.random.seed(123)
+        first = compute_ablation_scores(features, labels, replication_unit="date")
+        np.random.seed(123)
+        second = compute_ablation_scores(features, labels, replication_unit="date")
 
         pd.testing.assert_frame_equal(first, second)
-        self.assertEqual(first["top_n"].tolist(), [1, 21, 22])
-        self.assertEqual(first["total_features"].tolist(), [22, 22, 22])
+        self.assertEqual(first.columns.tolist(), ["top_n", "accuracy"])
+        self.assertEqual(first["top_n"].tolist(), [1, 21, 41])
 
 
 if __name__ == "__main__":

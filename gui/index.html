@@ -82,12 +82,6 @@
           </div>
         </fieldset>
 
-        <div class="field-group" id="replicationField">
-          <div class="field-label"><label for="replicationUnit">Unit of replication</label><button class="help-button" data-help-title="Unit of replication" data-help-text="Keeps all images from one position, well, or date together during cross-validation. Availability is calculated from the uploaded classes and replication groups." type="button" aria-label="Help for replication unit">?</button></div>
-          <select id="replicationUnit"><option value="">Upload training data to check availability</option><option value="date" selected>Date</option><option value="well">Well</option><option value="position">Imaging position (pos)</option></select>
-          <small id="replicationStatus">Availability will be checked from the uploaded training data.</small>
-        </div>
-
         <fieldset class="learner-picker" id="modelFields">
           <legend>Learners <button class="help-button" data-help-title="Learner selection" data-help-text="Choose one learner for a focused run, or benchmark every supported learner." type="button" aria-label="Help for Learner selection">?</button></legend>
           <div class="learner-mode-choices"><label class="learner-option active" data-learner-mode="single"><input name="learner_mode" type="radio" value="single" checked><span class="workflow-copy"><b>One learner</b><small>Focused, faster training</small></span></label><label class="learner-option" data-learner-mode="all"><input name="learner_mode" type="radio" value="all"><span class="workflow-copy"><b>All learners</b><small>Benchmark every algorithm</small></span></label></div>
