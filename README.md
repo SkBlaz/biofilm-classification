@@ -56,6 +56,6 @@ See [RUN.md](RUN.md) for the runtime and API details and [APPROACH.md](APPROACH.
 
 ## Citation
 
-Nika Janež et al., “MicroICS: predictive phenotyping of *Listeria monocytogenes* biofilms from three-dimensional structural features,” *npj Biofilms and Microbiomes* (2026). DOI: [10.1038/s41522-026-01083-8](https://doi.org/10.1038/s41522-026-01083-8).
+Janež, Škrlj, Osojnik et al., “MicroICS: predictive phenotyping of *Listeria monocytogenes* biofilms from three-dimensional structural features,” *npj Biofilms and Microbiomes* (2026). DOI: [10.1038/s41522-026-01083-8](https://doi.org/10.1038/s41522-026-01083-8).
 
 The repository also includes [CITATION.cff](CITATION.cff) for GitHub’s **Cite this repository** feature.
