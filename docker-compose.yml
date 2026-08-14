@@ -40,7 +40,7 @@ services:
 
   imagine-test-learning-benchmark:
     <<: *base-test
-    command: ["2", "ci_datafile.tsv", "5", "learning_benchmark"]
+    command: ["2", "ci_datafile.tsv", "5", "learning_benchmark", "--replication-unit", "position"]
 
   imagine-test-data-visualization:
     <<: *base-test
@@ -48,7 +48,7 @@ services:
 
   imagine-test-learning-benchmark-save-models:
     <<: *base-test
-    command: ["2", "ci_datafile.tsv", "5", "learning_benchmark_save_models"]
+    command: ["2", "ci_datafile.tsv", "5", "learning_benchmark_save_models", "--replication-unit", "position"]
 
   imagine-test-inference-fast:
     <<: *base-test
