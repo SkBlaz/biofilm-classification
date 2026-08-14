@@ -61,6 +61,7 @@ Keep newest entry at the top.
 
 | Date (UTC) | Bot/Agent | PR/Commit | AGENTS.md update summary |
 |---|---|---|---|
+| 2026-08-14 | Codex | current change | Random Forest and KNN hyperparameter search grids trimmed to eliminate HPO scaling bottlenecks on high-dimensional feature tables. |
 | 2026-08-13 | Codex | current change | GUI and CLI learning are pinned to the published main-branch protocol: ordinary stratified CV, three seeded benchmark repetitions, duplicate threshold-flag component passes, and full-table generated-column RF ablation. |
 | 2026-08-12 | Codex | current change | Standalone benchmark replotting, stable learner names, non-duplicated seeded evaluation, distinct normalized fixed-configuration confusion matrices, and explicit ablation column counts documented. |
 | 2026-08-10 | Codex | current change | Standalone single-container GUI/pipeline image, direct per-job execution, explicit browser result delivery, and `/data` persistence documented. |
