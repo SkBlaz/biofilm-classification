@@ -52,10 +52,9 @@ if not TPOT_AVAILABLE or not AUTOGLUON_AVAILABLE:
 
 
 parameters = {
-    "n_neighbors": list(range(3, 50, 2)),  # Test odd values for better balancing in ties
-    "metric": ["minkowski", "euclidean", "manhattan", "chebyshev", "hamming", "jaccard"],
-    "weights": ["uniform", "distance"],  # Test both weighting strategies
-    "p": [1, 2, 3],  # Minkowski distance with Manhattan (1), Euclidean (2), etc.
+    "n_neighbors": [3, 5, 7, 11, 15, 21, 31],
+    "metric": ["euclidean", "manhattan"],
+    "weights": ["uniform", "distance"],
 }
 
 
@@ -68,9 +67,9 @@ PARTIAL_CACHE_VERSION = 6
 PROGRESS_PREFIX = "MICROICS_PROGRESS "
 
 RF_PARAM_DISTRIBUTIONS = {
-    "n_estimators": np.arange(100, 1001, 100),
-    "max_features": ["sqrt", "log2", None] + list(np.arange(0.1, 0.6, 0.1)),
-    "max_depth": [None] + list(np.arange(5, 31, 5)),
+    "n_estimators": np.arange(10, 101, 10),
+    "max_features": ["sqrt", "log2", 0.1, 0.2, 0.3],
+    "max_depth": list(np.arange(5, 31, 5)),
     "min_samples_split": np.arange(2, 21, 2),
     "min_samples_leaf": np.arange(1, 11, 1),
     "bootstrap": [True, False],
