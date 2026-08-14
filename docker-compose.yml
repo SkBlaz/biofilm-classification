@@ -1,16 +1,58 @@
 name: microics
 
 # Optional developer convenience. The production image does not require Compose.
+
+x-base: &base
+  image: 'jsi/imagine:latest'
+  build:
+    context: .
+    dockerfile: Dockerfile
+
+x-base-test: &base-test
+  <<: *base
+  working_dir: /opt/microics
+  environment:
+    - CI=true
+    - IMAGINE_IMAGES=/opt/microics/images
+    - IMAGINE_RESULTS=/opt/microics/results
+  volumes:
+    - type: bind
+      source: examples/test_images
+      target: /opt/microics/images
+      read_only: true
+    - type: bind
+      source: examples/test_images_results
+      target: /opt/microics/results
+  entrypoint: ["bash", "src/run_analysis.sh"]
+
 services:
   microics:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: microics:dev
+    <<: *base
     ports:
       - "8765:8765"
     volumes:
       - microics-data:/data
+
+  # CI test services
+  imagine-test-generate-features:
+    <<: *base-test
+    command: ["4", "datafile.tsv", "15", "generate_features"]
+
+  imagine-test-learning-benchmark:
+    <<: *base-test
+    command: ["2", "ci_datafile.tsv", "5", "learning_benchmark"]
+
+  imagine-test-data-visualization:
+    <<: *base-test
+    command: ["2", "ci_datafile.tsv", "5", "data_visualization"]
+
+  imagine-test-learning-benchmark-save-models:
+    <<: *base-test
+    command: ["2", "ci_datafile.tsv", "5", "learning_benchmark_save_models"]
+
+  imagine-test-inference-fast:
+    <<: *base-test
+    command: ["2", "ci_datafile.tsv", "5", "inference"]
 
 volumes:
   microics-data:
