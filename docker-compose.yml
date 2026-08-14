@@ -10,7 +10,7 @@ x-base: &base
 
 x-base-test: &base-test
   <<: *base
-  working_dir: /opt/microics
+  working_dir: /opt/microics/src
   environment:
     - CI=true
     - IMAGINE_IMAGES=/opt/microics/images
@@ -23,7 +23,7 @@ x-base-test: &base-test
     - type: bind
       source: examples/test_images_results
       target: /opt/microics/results
-  entrypoint: ["bash", "src/run_analysis.sh"]
+  entrypoint: ["bash", "run_analysis.sh"]
 
 services:
   microics:

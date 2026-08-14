@@ -24,6 +24,10 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
 
 COPY . /opt/microics
 
+# Copy test datafiles to src directory for CI compatibility
+RUN cp /opt/microics/ci_datafile.tsv /opt/microics/src/ && \
+    cp /opt/microics/datafile.tsv /opt/microics/src/
+
 RUN mkdir -p /data/jobs \
     && chmod +x /opt/microics/src/run_analysis.sh /opt/microics/src/remove_layers.sh
 
