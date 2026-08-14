@@ -1,89 +1,58 @@
-# visualize classifications
-import glob
+"""Create standalone plots from completed MicroICS benchmark TSV files."""
+
+from __future__ import annotations
+
+import argparse
 import os
+from pathlib import Path
 
-import matplotlib.pyplot as plt
 import pandas as pd
-import seaborn as sns
 
-# plt.rcParams.update({
-#    "text.usetex": True,
-#    "font.family": "sans-serif",
-#    "font.sans-serif": "Helvetica",
-# })
+try:
+    from benchmark_outputs import write_ablation_plot, write_classification_plot, write_confusion_matrices
+except ImportError:  # Package import from the repository root.
+    from .benchmark_outputs import write_ablation_plot, write_classification_plot, write_confusion_matrices
 
 
-def extract_class(model_name):
-    if "RandomForestClassifier" in model_name:
-        return "RandomForestClassifier"
-    else:
-        return model_name.split("(")[0]
+def create_benchmark_plots(results_folder: str | Path) -> list[Path]:
+    """Render all available classification files and the RF ablation report."""
+    results = Path(results_folder)
+    output_dir = results / "visualizations"
+    outputs: list[Path] = []
+    for classification_file in sorted(results.glob("classification*.tsv")):
+        output = write_classification_plot(classification_file, output_dir)
+        if output:
+            outputs.append(output)
+        outputs.extend(write_confusion_matrices(classification_file, output_dir))
 
-
-results_folder = "/imagine/results"
-
-for result in glob.glob(results_folder + "/classification*"):
-    dfx = pd.read_csv(result, sep="\t")
-    dfx = dfx[dfx["n_components"] != 580]
-    models = dfx.model.values.tolist()
-    models_tmp = []
-    for model in models:
-        if "autogluon" in model:
-            models_tmp.append("AutoGluon")
-        else:
-            models_tmp.append(model)
-    models = [extract_class(x) for x in models_tmp]
-    models = [x.replace("GridSearchCV", "KNN-grid") for x in models]
-    models = [x.replace("DummyClassifier", "MajorityClassifier") for x in models]
-    dfx.model = models
-    dfx = dfx.sort_values(by=["accuracy"])
-    plt.clf()
-    plt.cla()
-    plt.title(result.split("/")[-1].replace(".tsv", ""))
-    order = [
-        "MajorityClassifier",
-        "LogisticRegression",
-        "DecisionTreeClassifier",
-        "KNN-grid",
-        "RandomForestClassifier",
-        "XGBClassifier",
-        "AutoGluon",
-    ]
-    sns.barplot(
-        y=dfx.model,
-        x=dfx.accuracy,
-        color="black",
-        err_kws={"linewidth": 0.5},
-        capsize=0.5,
-        palette="colorblind",
-        hue=dfx.n_components,
-        alpha=0.5,
-        order=order,
+    total_features = None
+    data_file = results / "datafile.tsv"
+    if data_file.is_file():
+        data_columns = pd.read_csv(data_file, sep="\t", nrows=0).columns
+        total_features = sum(column not in {"sampleName", "label"} for column in data_columns)
+    ablation_output = write_ablation_plot(
+        results / "ablation_ranking_all.tsv",
+        output_dir,
+        total_features=total_features,
     )
-    plt.ylabel("")
-    plt.xlabel("Accuracy")
-    plt.legend(loc="lower left")
-    plt.tight_layout()
-    img_name = result.split("/")[-1].replace(".tsv", "")
-    plt.savefig(f"{results_folder}/visualizations/{img_name}.pdf", dpi=300)
-    print(f"{img_name}.pdf")
+    if ablation_output:
+        outputs.append(ablation_output)
+    return outputs
 
-plt.clf()
-plt.cla()
-ablation_df = pd.read_csv(os.path.join(results_folder, "ablation_ranking_all.tsv"), sep="\t")
-ablation_df = ablation_df[ablation_df.top_n < 1000]
-max_top_n = ablation_df[ablation_df.accuracy == max(ablation_df.accuracy)]
-max_top_n_row = max_top_n.iloc[0]
 
-sns.lineplot(x=ablation_df.top_n, y=ablation_df.accuracy)
-plt.vlines(max_top_n_row.top_n, 0, max_top_n_row.accuracy, color="red", linestyle="dashed")
-plt.plot(max_top_n_row.top_n, max_top_n_row.accuracy, "ro")
-plt.text(
-    max_top_n_row.top_n + 15,
-    max_top_n_row.accuracy,
-    f"Num features: {int(max_top_n_row.top_n)}, accuracy: {round(float(max_top_n_row.accuracy), 3)}",
-)
-plt.xlabel("Top n features considered (RF ranking)")
-plt.ylabel("Mean accuracy (3-fold cross validation)")
-plt.tight_layout()
-plt.savefig(f"{results_folder}/visualizations/ablation_rf.pdf", dpi=300)
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "results_folder",
+        nargs="?",
+        default=os.environ.get("IMAGINE_RESULTS", "/imagine/results"),
+        help="Folder containing classification and ablation TSV files",
+    )
+    arguments = parser.parse_args()
+    for output in create_benchmark_plots(arguments.results_folder):
+        print(output.name)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

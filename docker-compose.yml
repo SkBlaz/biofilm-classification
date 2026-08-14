@@ -1,113 +1,68 @@
-name: imagine
+name: microics
+
+# Optional developer convenience. The production image does not require Compose.
 
 x-base: &base
   image: 'jsi/imagine:latest'
+  build:
+    context: .
+    dockerfile: Dockerfile
 
-x-base-test-config: &base-test-config
+x-base-test: &base-test
   <<: *base
+  working_dir: /opt/microics/src
   environment:
     - CI=true
+    - IMAGINE_IMAGES=/opt/microics/images
+    - IMAGINE_RESULTS=/opt/microics/results
   volumes:
     - type: bind
       source: examples/test_images
-      target: /imagine/images
+      target: /opt/microics/images
       read_only: true
     - type: bind
       source: examples/test_images_results
-      target: /imagine/results
+      target: /opt/microics/results
+  entrypoint: ["bash", "run_analysis.sh"]
 
 services:
-  imagine:
+  microics:
     <<: *base
-    build:
-      context: .
-      dockerfile: Dockerfile
+    ports:
+      - "8765:8765"
     volumes:
-      - type: bind
-        source: '${IMAGINE_IMAGES}'
-        target: /imagine/images
-        read_only: true
-      - type: bind
-        source: '${IMAGINE_RESULTS}'
-        target: /imagine/results
-      - type: bind
-        source: '${IMAGINE_INFERENCE_INPUTS:-.}'
-        target: /imagine/inference_inputs
-        read_only: true
-      - type: bind
-        source: '${IMAGINE_INFERENCE_OUTPUTS:-.}'
-        target: /imagine/inference_outputs
-      - type: bind
-        source: '${IMAGINE_INFERENCE_DATAFILE:-.}'
-        target: /imagine/inference_datafile
-    environment:
-      - IMAGINE_INFERENCE_INPUTS=/imagine/inference_inputs
-      - IMAGINE_INFERENCE_OUTPUTS=/imagine/inference_outputs
-      - IMAGINE_INFERENCE_DATAFILE=/imagine/inference_datafile
+      - microics-data:/data
 
+  # CI test services
   imagine-test-generate-features:
-    <<: *base-test-config
-    command:
-      - '4'
-      - datafile.tsv
-      - '15'
-      - generate_features
+    <<: *base-test
+    command: ["4", "datafile.tsv", "15", "generate_features"]
 
   imagine-test-learning-benchmark:
-    <<: *base-test-config
-    command:
-      - '2'
-      - ci_datafile.tsv
-      - '5'
-      - learning_benchmark
+    <<: *base-test
+    command: ["2", "ci_datafile.tsv", "5", "learning_benchmark", "--replication-unit", "position"]
 
   imagine-test-data-visualization:
-    <<: *base-test-config
-    command:
-      - '2'
-      - ci_datafile.tsv
-      - '5'
-      - data_visualization
+    <<: *base-test
+    command: ["2", "ci_datafile.tsv", "5", "data_visualization"]
 
   imagine-test-learning-benchmark-save-models:
-    <<: *base-test-config
-    command:
-      - '2'
-      - ci_datafile.tsv
-      - '5'
-      - learning_benchmark_save_models
-
-  imagine-test-inference:
-    <<: *base-test-config
-    command:
-      - '4'
-      - '-'
-      - '10'
-      - inference
-      - '/imagine/results/models'
-      - '/imagine/images'
-      - '/imagine/results/inference_output'
-
-  imagine-test-inference-env:
-    <<: *base-test-config
-    environment:
-      - IMAGINE_INFERENCE_INPUTS=/imagine/images
-      - IMAGINE_INFERENCE_OUTPUTS=/imagine/results/inference_output_env
-    command:
-      - '4'
-      - '-'
-      - '10'
-      - inference
+    <<: *base-test
+    command: ["2", "ci_datafile.tsv", "5", "learning_benchmark_save_models", "--replication-unit", "position"]
 
   imagine-test-inference-fast:
-    <<: *base-test-config
+    <<: *base-test
     volumes:
       - type: bind
         source: test_inference_fast.py
-        target: /opt/imagine/test_inference_fast.py
+        target: /opt/microics/test_inference_fast.py
         read_only: true
       - type: bind
         source: examples/test_images_results
-        target: /imagine/results
-    entrypoint: python
-    command: test_inference_fast.py
+        target: /opt/microics/results
+    working_dir: /opt/microics
+    entrypoint: ["python"]
+    command: ["test_inference_fast.py"]
+
+volumes:
+  microics-data:

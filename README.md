@@ -1,4 +1,3 @@
-
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="logo_dark.png">
@@ -7,46 +6,56 @@
   </picture>
 </p>
 
-# Image classification suite MicroICS
+# MicroICS
 
-![Feature Generation](https://github.com/SkBlaz/biofilm-classification/actions/workflows/feature-generation.yml/badge.svg)
-![Inference](https://github.com/SkBlaz/biofilm-classification/actions/workflows/inference.yml/badge.svg)
-![Learning Benchmark](https://github.com/SkBlaz/biofilm-classification/actions/workflows/learning-benchmark.yml/badge.svg)
-![Data Visualization](https://github.com/SkBlaz/biofilm-classification/actions/workflows/visualization.yml/badge.svg)
-![Ruff](https://github.com/SkBlaz/biofilm-classification/actions/workflows/ruff.yml/badge.svg)
+MicroICS turns 3D biofilm TIFF images into quantitative structural features, compares machine-learning classifiers, saves trained models, and predicts labels for new images.
 
-Welcome to Image classification suite MicroICS, a Python-based software for efficient classification of 3D biofilm images. The following links lead to two main documentation components, software itself (engineering aspects, running it), and algorithmic aspects.
+## Standalone web application
 
-1. [Running the software](RUN.md)
+The production image contains the web interface, MicroICS source, Python, and the complete scientific environment. Docker is the only host-side runtime requirement; Python, Conda, Git, Docker Compose, repository mounts, and Docker-socket access are not required to run a built image.
 
-2. [Approach overview](APPROACH.md)
+Build and start it from a source checkout:
 
-3. [Continuous Integration](.github/CI.md)
-
-# Citation
-Official paper can be found at
+```bash
+docker build -t microics .
+docker run --rm -p 8765:8765 microics
 ```
-TY  - JOUR
-AU  - Janež, Nika
-AU  - Škrlj, Blaž
-AU  - Osojnik, Aljaž
-AU  - Ladányi, Márta
-AU  - Breskvar, Martin
-AU  - Petković, Matej
-AU  - Kokot, Boštjan
-AU  - Čotar, Petra
-AU  - Papić, Bojan
-AU  - Golob, Majda
-AU  - Peternel, Tjaša
-AU  - Sabotič, Jerica
-PY  - 2026
-DA  - 2026/07/08
-TI  - MicroICS: predictive phenotyping of Listeria monocytogenes biofilms from three-dimensional structural features
-JO  - npj Biofilms and Microbiomes
-AB  - Biofilms underpin microbial survival, yet their three-dimensional structure remains difficult to quantify systematically. We present the Microbial Image Classification Suite (MicroICS), an open-source framework for predictive phenotyping of microbial communities from 3D biofilm images. MicroICS consists of three independent but interoperable modules: feature extraction from 3D biofilm images, machine learning-based classification, and an inference module for applying trained models to new, unseen images. Each module can be run independently, and the classification module accepts externally generated features, enabling integration with existing quantitative image analysis tools. As a pilot study, we demonstrate the framework using eight epidemiologically diverse Listeria monocytogenes strains, with strain differentiation and trait-based grouping as proof-of-principle tasks. MicroICS extracted over 2,700 quantitative structural features from Syto 9-labelled biofilm images. An optimised random forest model achieved human baseline-level accuracy in strain classification on previously unseen images, including biofilms experimentally perturbed by food extracts. BiofilmQ-derived features incorporated into the classification module yielded higher accuracy with fewer features than either tool alone, confirming the framework’s extensibility. Extending the framework to clonal complex-based clinical grouping demonstrates utility beyond strain identity. MicroICS is applicable to any organism or condition for which suitable 3D biofilm images can be obtained.
-SN  - 2055-5008
-UR  - https://doi.org/10.1038/s41522-026-01083-8
-DO  - 10.1038/s41522-026-01083-8
-ID  - Janež2026
-ER  - 
+
+Open <http://localhost:8765>. The browser uploads inputs into an isolated job, computation runs inside that same container, and the completed job can be downloaded as a ZIP file. To keep jobs, models, and results after removing the container, optionally attach a named volume:
+
+```bash
+docker run --rm -p 8765:8765 -v microics-data:/data microics
 ```
+
+The application stores each run under `/data/jobs/<job-id>/` and never needs access to host filesystem paths. The image accepts `.tif` and `.tiff` uploads and compatible pre-generated `.tsv`/`.txt` feature tables.
+
+For convenience on Unix-like development systems, `bash run_gui.sh` builds and starts the same standalone image. `docker-compose.yml` is an optional equivalent for development; the application does not invoke or depend on Compose.
+
+## Workflows
+
+The GUI supports the real MicroICS stages:
+
+1. generate features from labelled or unlabelled images;
+2. train one learner or compare all learners from a complete feature table;
+3. run inference from uploaded images or a compatible precomputed data file using models from a completed training job;
+4. run labelled feature generation, training, and image inference together.
+
+Before generating features, enter the X, Y, and Z voxel dimensions from the microscope metadata. GUI and command-line learning use the published main-branch benchmark protocol so newly generated results remain directly comparable with the published results.
+
+## Development validation
+
+With the Python dependencies installed locally, run:
+
+```bash
+PYTHONPATH=src python run_tests.py
+python -m ruff check .
+python -m ruff format --check .
+```
+
+See [RUN.md](RUN.md) for the runtime and API details and [APPROACH.md](APPROACH.md) for the methodology.
+
+## Citation
+
+Janež, Škrlj, Osojnik et al., “MicroICS: predictive phenotyping of *Listeria monocytogenes* biofilms from three-dimensional structural features,” *npj Biofilms and Microbiomes* (2026). DOI: [10.1038/s41522-026-01083-8](https://doi.org/10.1038/s41522-026-01083-8).
+
+The repository also includes [CITATION.cff](CITATION.cff) for GitHub’s **Cite this repository** feature.

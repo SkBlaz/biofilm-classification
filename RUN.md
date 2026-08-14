@@ -1,334 +1,107 @@
-# Docker images
-We prepared a Docker image that can be used to run the processing pipeline.
-A Docker image can contain anything; in our case, it contains a Python installation with all required dependencies,
-together with the most important part - the code that actually does image processing for the Imagine project. Make sure you have docker `Docker version 27.0.0` or later.
+# Running MicroICS
 
-Think of a Docker image as a template with pre-defined behavior (the behavior is defined by the image creator). 
-In order to obtain any Docker image, one must first build it. This is achieved by using Dockerfiles (blueprints/recipes),
-simple text files with a specific syntax. One can be found in the same folder as this README.
+## Standalone container
 
-Once the Dockerfile (the blueprint for the software) is created, the image can be built. The build process creates a piece of executable code.
-However, since images can (vaguely) be considered as templates, it is natural to assume that one can make several instances 
-of such an image - those are called containers. 
+Build the one production/runtime image:
 
-## Why use containers?
-The purpose of containerization is to remove the need to install all the software that is required in order to run a 
-specific piece of code - these software are called dependencies. In our case, that code does image processing, 
-machine learning and visualizations. All dependencies are installed within the Docker image so that the user of the image
-does not have to worry about that. 
-
-The only software that one must install in order to create Docker containers for the Imagine project are these:
-- git; to clone the Imagine project repository and obtain the source code
-- docker; to build and run Docker images
-
-Each image can also expose parameters, that the user of the image can specify during the creation of a container. In our 
-case, an example of such parameter is the path to the image folder.
-
-## Generating and running the containers
-In order to use the containers, one must first build them locally. 
-Container(s) should be build only the very first time or after changes have been made to the actual pipeline.
-
-First, install Docker:
-- Linux users (Ubuntu): https://docs.docker.com/engine/install/ubuntu/ 
-- Windows users: https://docs.docker.com/desktop/install/windows-install/
-
-Then, build the container (commands bellow assume you are running them from the same directory as this README):
-```sh
-docker compose build --no-cache
+```bash
+docker build -t microics .
 ```
 
-## Testing if everything works
-For testing purposes, commands below use predefined paths to data. The paths are specified in `docker-compose.yml` - do not change them.
-Run the following commands one after another and wait for each of them to finish. The testing data is available in `./examples/test_images` folder. 
+Start the web application:
 
-### Basic functionality tests
-All commands should run and produce results (in folder `./examples/test_images_results`) without errors:
-
-```sh
-# 1. Generate features from test images
-docker compose run --rm imagine-test-generate-features
-
-# 2. Run learning benchmark (classification without model saving)
-docker compose run --rm imagine-test-learning-benchmark
-
-# 3. Generate data visualizations
-docker compose run --rm imagine-test-data-visualization
+```bash
+docker run --rm -p 8765:8765 microics
 ```
 
-### Expected results after basic tests:
-- `./examples/test_images_results/data.tsv` - Final dataset with extracted features
-- `./examples/test_images_results/rankings.tsv` - Feature importance rankings  
-- `./examples/test_images_results/classification.tsv` - Classification results
-- `./examples/test_images_results/visualizations/` - Generated visualization plots
+Open <http://localhost:8765>. The liveness check is available at <http://localhost:8765/api/health>.
 
-### New inference functionality tests
-To test the complete inference pipeline including model saving and inference on new data:
+The image starts `gui/app.py` on `0.0.0.0:8765`. The GUI directly starts the existing scripts under `src/` inside the same container. It does not invoke Docker or Docker Compose and does not require a source mount or access to `/var/run/docker.sock`.
 
-```sh
-# 4. Run learning benchmark with model saving (required for inference)
-docker compose run --rm imagine-test-learning-benchmark-save-models
+To persist runtime data, attach a volume to `/data`:
 
-# 5. Run inference using the saved models on the same test images (parameter mode)
-docker compose run --rm imagine-test-inference
-
-# 6. Run inference using environment variables (environment variable mode)
-docker compose run --rm imagine-test-inference-env
+```bash
+docker run --rm -p 8765:8765 -v microics-data:/data microics
 ```
 
-### Expected results after inference tests:
-- `./examples/test_images_results/models/` - Directory containing saved trained models:
-  - `*_model.joblib` - Trained model files
-  - `*_metadata.joblib` - Model metadata files with feature names and target mappings
-- `./examples/test_images_results/inference_output/` - Directory containing inference results (parameter mode):
-  - `*_predictions.tsv` - Predictions for each input image with confidence scores
-  - `*_probabilities.tsv` - Prediction probabilities if available
-  - `inference_summary.tsv` - Summary of predictions from all models
-  - `explanations/` - SHAP explanations for model predictions (feature importance):
-    - `*_shap_values.csv` - SHAP values for each prediction (binary/regression models)
-    - `*_shap_class_*.csv` - SHAP values for each class (multi-class models)
-    - `*_summary_plot.png` - Visual summary of feature importance
-    - `*_feature_importance.csv` - Mean absolute SHAP values ranking features by importance
-- `./examples/test_images_results/inference_output_env/` - Directory containing environment variable inference results:
-  - Same structure as above but from environment variable mode test
+Compose remains an optional development shortcut only:
 
-### Verification commands:
-You can verify the tests completed successfully by checking the generated files:
-
-```sh
-# Check that basic results exist
-ls -la examples/test_images_results/
-ls -la examples/test_images_results/visualizations/
-
-# Check that models were saved (after step 4)
-ls -la examples/test_images_results/models/
-
-# Check that inference results exist (after step 5 - parameter mode)  
-ls -la examples/test_images_results/inference_output/
-
-# Check that environment variable inference results exist (after step 6)
-ls -la examples/test_images_results/inference_output_env/
+```bash
+docker compose up --build
 ```
 
-**Success criteria**: All commands should complete without errors, and the expected directories and files should be created with non-zero file sizes.
+## Browser workflow
 
+Inputs are supplied with the browser, rather than by entering host paths. Image uploads accept `.tif` and `.tiff`; compatible precomputed feature tables accept `.tsv` and `.txt`.
 
-## Mounting volumes of data into the containers
-The prepared Docker image is used to create containers that do the actual work. The input data needs to be accessible to the containers. We use Docker volumes to mount the data into the containers.
-To simplify the usage of the Imagine Docker image, we prepared a Compose file (docker-compose.yml) which does all the required volume mounting for you.
-All one needs to do is to provide environment variables with correct paths.
+Available operations are:
 
-One should specify the environment variables in one of two ways:
-1. For each experiment, edit the `.env` file and change the paths:
-```sh
-docker compose run --rm imagine <PARAMETERS>
+- **Generate labelled features**: upload labelled TIFFs and produce `results/datafile.tsv`.
+- **Generate unlabelled features**: upload inference TIFFs and produce `results/unknown_features.tsv`.
+- **Train models**: upload a complete labelled feature table and write rankings, reports, and models below `results/`.
+- **Inference**: choose an earlier persisted training job and upload either images or a compatible precomputed feature table. Predictions are written below `inference/`.
+- **All together**: upload training and inference images and run generation, training, and inference sequentially.
+
+Completed output is available from the job’s **Download results ZIP** link. A failed computation changes only that job to `failed`; the server remains available for another request.
+
+Choosing a feature table selects the input only. No output folder needs to be selected: generated files appear in **Inspect results** in the browser, and **Download results ZIP** saves a copy to the browser’s configured download location. Internally, the job keeps them under `/data/jobs/<job-id>/output/`.
+
+## Runtime filesystem
+
+Each browser run receives an unpredictable UUID and owns this structure:
+
+```text
+/data/jobs/<job-id>/
+├── input/
+│   ├── training-images/
+│   ├── inference-images/
+│   └── feature-files/
+├── work/
+│   ├── pipeline.log
+│   └── inference-features/
+├── output/
+│   ├── results/
+│   └── inference/
+└── job.json
 ```
 
-2. Create a different env file for each experiment and pass the env file (specify the whole env file name, including the file extension) as a parameter to the docker compose command :
-```sh
-docker compose --env-file my-env-file run --rm imagine <PARAMETERS>
-```
-(note: if `my-env-file` is not an `.env` file, please use appropriate postfix (e.g., `.txt`))
+Uploaded names are reduced to a filename and validated by extension before a destination inside the job input directory is created. Existing files receive a unique suffix, so uploads cannot traverse outside a job or silently overwrite another input.
 
-Windows and Linux hosts differ in the way how they mount folders to docker volumes. 
-The two (toy example) commands below showcase the slight difference between running Docker images on Windows and Unix hosts.
+## Direct scientific entry points
 
-* IMAGINE_IMAGES=./my_folder/test_images
-* IMAGINE_RESULTS=./my_folder/test_results
+The GUI is the default image command, but scientific modules remain reusable. From a source development environment, the primary entry points are:
 
-For Windows users:
-* IMAGINE_IMAGES=/c/my_folder/test_images
-* IMAGINE_RESULTS=/c/my_folder/test_results
-
-The expected result is the same in both cases. The only thing that differs is the way that the input/output folders are mounted into the containers. 
-It is important to note that Windows requires absolute paths to mount volumes whereas Linux does not. 
-Therefore, in order to mount a volume from Windows folder `c:\my_folder\test_images`, one must write it as `/c/my_folder/test_images`.
-
-## Using the Docker image
-The image that we prepared (tagged jsi/imagine:latest) accepts several parameters. One of those parameters is called "task" which translates to "what we want to do" with the image.
-Other parameters, that are required to run that specific task, are task-dependent. 
-
-**Note: Keep in mind that the order of parameters matters!**
-
-The following use-cases use the folders specified in the `.env` file.
-
-
-### Task: Generate features
-This task has the following parameters:
-- the number of parallel threads to use: 4
-- the desired name of the dataset that we will create: datafile.tsv
-- the number of top features to visualize: 10
-- the task: generate_features
-
-```sh
-docker compose run --rm imagine 4 datafile.tsv 10 generate_features
+```text
+src/run_analysis.sh                   feature generation and legacy orchestration
+src/feature_ranking_lite.py           ranking, benchmarking, and saved models
+src/inference.py                      image or precomputed-table inference
+src/visualize_benchmark.py            benchmark reports
 ```
 
-The results of this task will be in the folder, that is mapped to the `/imagine/results` within the container (`/c/my_folder/test_results` in this case).
+The GUI execution adapter is `gui/execution.py`; it prepares job-local paths and argument lists while leaving algorithms in `src/`.
 
-### Task: Learning benchmark
-Learning benchmark contains the gist of this software - a collection of machine learning algorithms that attempt to approximate the strain based on thousands of generated features. Current implementation is fully automated; by running the command below, you can simulate how well the algorithm learns to associate labels with feature space. The run includes the currently selected tree-based ensembles, as well as simple baselines (majority) that should be indicative of how well a naive approach would perform.
+Benchmark plots can be regenerated without repeating model training:
 
-This task has the following parameters:
-- ...
-- ...
-- the task: learning_benchmark
-
-```sh
-docker compose run --rm imagine 4 datafile.tsv 10 learning_benchmark
+```bash
+PYTHONPATH=src python src/visualize_benchmark.py /path/to/results
 ```
 
-(i.e., we just replace "generate_features" with "learning_benchmark")
+The command reads existing `classification_*.tsv` and `ablation_ranking_all.tsv` files and writes PDFs under the result folder's `visualizations/` directory.
 
-The process will start from the working folder (`/imagine/results`) and conduct the basic machine learning benchmark.
+## Input contracts
 
-### Task: Learning benchmark with model saving
-This is identical to the learning benchmark task above, but additionally saves the trained models for later use in inference. Use this task when you plan to apply the trained models to new data.
+Labelled image filenames must retain the naming convention expected by `src/input_validation.py`. Unlabelled inference images do not require embedded class labels.
 
-```sh
-docker compose run --rm imagine 4 datafile.tsv 10 learning_benchmark_save_models
+A complete training table is tab-separated and contains `sampleName`, `label`, and numeric feature columns. A compatible inference table contains `sampleName` and the numeric columns required by the selected saved model. Generated feature columns are retained even when they contain zero, `NaN`, or infinite values; the learning and inference loaders apply the established value-level imputation consistently.
+
+Voxel sizes are measured in micrometres. Select the actual acquisition values in the GUI. Learning intentionally follows the published main-branch evaluation protocol: ordinary stratified cross-validation, three seeded benchmark repetitions, and the original generated-column ablation. Training tables therefore require `sampleName` and `label`, but `sampleName` does not need to encode a selectable replication unit.
+
+## Local development checks
+
+Run from the repository root after installing `src/requirements.docker.txt` and Ruff:
+
+```bash
+PYTHONPATH=src python run_tests.py
+python -m ruff check .
+python -m ruff format --check .
 ```
-
-The trained models will be saved in the `models/` subdirectory of your results folder.
-
-## How results look like/interpretation
-
-In folder `results_example` you have an example results of an actual run (`bash run_docker_image_everything.sh`). The output of the final run (results folder) has the following structure:
-
-```
-├── analysis
-│   ├── SUMMARYCustomAlgos.tsv_max.txt
-│   ├── SUMMARYCustomAlgos.tsv_mean.txt
-....
-....
-│   └── SUMMARYDiffGlobal.tsv_var.txt
-├── classification.tsv
-├── data.tsv
-├── data.tsvintermediary_aggregated.tsv
-├── feature_generator
-│   ├── 04072023_s_Lm_st_L1323_p_C04_pos001_tm_24_ch_Syto9_z_21CustomAlgos.txt
-....
-....
-│   └── 30052023_s_Lm_st_L634_p_D05_pos005_tm_24_ch_Syto9_z_21DiffGlobal.txt
-├── rankings.tsv
-├── raw
-│   ├── CustomAlgos.tsv
-│   └── DiffGlobal.tsv
-```
-
-
-File descriptions:
-
-* `analysis` -> Aggregated statistics for each image, input for creating `data.tsv`
-* `data.tsv` -> file containing final features and samples, input for learning
-* `data.tsvintermediary_aggregated.tsv` -> Intermediary feature-related results, for inspection (Nika's request)
-* `feature_generator` -> Features, generated for each image. Multiple files, used to create final dataset
-* `rankings.tsv` -> outputs of feature ranking. For each feature, we compute the strength of its relation with target - bigger values imply higher association (more important features)
-* `classification.tsv` -> Results of machine learning classification. Data is split into 10 parts, one is hidden, remaining are used to predict the label of that part (repeated for each part). `results` also contain labels where the algorith wasn't successful (for debugging)
-* `raw` -> Raw outputs of feature generation, useful for inspection
-
-## Task: Visualization
-
-To run visualization, simply change the task to `data_visualization`, for example,
-
-```sh
-docker compose run --rm imagine 4 data.tsv 50 data_visualization
-```
-
-This will produce a folder called `tmp` in the results folder. The folder contains all visualizations of top n features, grouped by strains.
-
-## Task: Inference
-
-To run inference on new images using pre-trained models, use the `inference` task. This requires that models have been previously trained using the `learning_benchmark_save_models` task.
-
-The inference task automatically generates SHAP (SHapley Additive exPlanations) explanations that provide model-agnostic insights into which features contributed most to each prediction. These explanations help understand and interpret the model's decision-making process.
-
-### Environment Variable Mode (Recommended)
-
-For easier configuration and better integration with Docker Compose workflows, you can use environment variables to control inference paths. Create or update your `.env` file:
-
-```env
-# Main workflow paths
-IMAGINE_IMAGES=./training_images
-IMAGINE_RESULTS=./training_results
-
-# Inference-specific paths
-IMAGINE_INFERENCE_INPUTS=./new_images_to_classify
-IMAGINE_INFERENCE_OUTPUTS=./inference_results
-```
-
-Then run inference using the environment variables:
-
-```sh
-docker compose run --rm imagine 4 - 10 inference
-```
-
-The inference task will use:
-- Models from `${IMAGINE_RESULTS}/models` (where training models are stored)
-- Input images from `${IMAGINE_INFERENCE_INPUTS}`
-- Output results to `${IMAGINE_INFERENCE_OUTPUTS}`
-
-### Generate features for unlabelled prediction images
-
-If you want to prepare features for images that do not have labels in their filenames, set `IMAGINE_INFERENCE_INPUTS` to the image folder and `IMAGINE_INFERENCE_DATAFILE` to the folder where generated features should be written:
-
-```env
-IMAGINE_INFERENCE_INPUTS=/c/Users/nika/Desktop/E8_images_for_prediction_unlabelled
-IMAGINE_INFERENCE_DATAFILE=/c/Users/nika/Desktop/E8_images_for_prediction_unlabelled_results
-```
-
-Then run:
-
-```sh
-docker compose run --rm imagine 4 datafile.tsv 10 generate_features --unlabelled
-```
-
-The command will read `.tif` images from `${IMAGINE_INFERENCE_INPUTS}` and write the feature-generation outputs to `${IMAGINE_INFERENCE_DATAFILE}`. The final feature table will be `${IMAGINE_INFERENCE_DATAFILE}/unknown_features.tsv`.
-
-To run inference using that saved feature table, pass its basename instead of `-`:
-
-```sh
-docker compose run --rm imagine 4 unknown_features.tsv 10 inference
-```
-
-When inference generates features internally, its temporary feature table is `/tmp/inference/inference_data.tsv` inside the container. That path is not a host folder by default and disappears when the container is removed. Use `generate_features --unlabelled` when you need a persistent, easy-to-find feature table on the host machine.
-
-### Parameter Mode (Backward Compatible)
-
-You can also specify paths directly as parameters:
-
-```sh
-docker compose run --rm imagine 4 - 10 inference /path/to/models /path/to/images /path/to/output
-```
-
-### Example workflow:
-
-1. First, train models on your data:
-```sh
-# Set paths in .env file
-# IMAGINE_IMAGES=./my_training_images
-# IMAGINE_RESULTS=./my_training_results
-
-# Generate features and train models with model saving enabled
-docker compose run --rm imagine 4 datafile.tsv 10 generate_features
-docker compose run --rm imagine 4 datafile.tsv 10 learning_benchmark_save_models
-```
-
-2. Then use the trained models for inference on new images:
-```sh
-# Update .env file for inference
-# IMAGINE_INFERENCE_INPUTS=./new_images_to_classify
-# IMAGINE_INFERENCE_OUTPUTS=./inference_results
-
-# Run inference using environment variables
-docker compose run --rm imagine 4 - 10 inference
-
-# Or use direct parameters (backward compatible)
-docker compose run --rm imagine 4 - 10 inference ./my_training_results/models ./new_images ./inference_results
-```
-
-The inference results will include:
-- `{model_name}_predictions.tsv`: Predicted classes for each image
-- `{model_name}_probabilities.tsv`: Prediction probabilities (if available) 
-- `inference_summary.tsv`: Summary of predictions from all models
-
-**Note**: The inference mode automatically handles feature extraction from .tif images using the same pipeline as training, ensuring consistency between training and inference.

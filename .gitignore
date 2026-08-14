@@ -6,6 +6,8 @@ models/
 !ci_datafile.tsv
 inference_inputs/
 inference_outputs/
+.gui_uploads/
+microics-gui.log
 src/ranking_results/
 
 # Python
@@ -65,6 +67,7 @@ ipython_config.py
 # Environments
 .env
 .venv
+.microics-venv/
 env/
 venv/
 ENV/
@@ -86,8 +89,7 @@ venv.bak/
 ehthumbs.db
 Thumbs.db
 
-# Docker
-.dockerignore
+# Docker build artifacts
 /manual/_minted-manual
 /manual/manual.aux
 /manual/manual.log

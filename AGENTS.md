@@ -12,6 +12,8 @@ Use this repository to process 3D biofilm images and run feature generation, ran
 - `src/visualizations/`: visualization modules
 - `test_*.py`: unit tests
 - `run_tests.py`: test runner
+- `gui/execution.py`: per-job adapter from GUI requests to existing scientific entry points
+- `run_gui.sh`: optional Docker build/run convenience launcher for Unix-like systems
 - `src/requirements.docker.txt`: runtime Python dependencies used in Docker
 - `.github/workflows/`: CI workflows (Docker workflows + Ruff)
 - `RUN.md`: usage and Docker execution guide
@@ -59,5 +61,15 @@ Keep newest entry at the top.
 
 | Date (UTC) | Bot/Agent | PR/Commit | AGENTS.md update summary |
 |---|---|---|---|
+| 2026-08-14 | Codex | current change | Random Forest and KNN hyperparameter search grids trimmed to eliminate HPO scaling bottlenecks on high-dimensional feature tables. |
+| 2026-08-13 | Codex | current change | GUI and CLI learning are pinned to the published main-branch protocol: ordinary stratified CV, three seeded benchmark repetitions, duplicate threshold-flag component passes, and full-table generated-column RF ablation. |
+| 2026-08-12 | Codex | current change | Standalone benchmark replotting, stable learner names, non-duplicated seeded evaluation, distinct normalized fixed-configuration confusion matrices, and explicit ablation column counts documented. |
+| 2026-08-10 | Codex | current change | Standalone single-container GUI/pipeline image, direct per-job execution, explicit browser result delivery, and `/data` persistence documented. |
+| 2026-08-05 | Codex | current change | Single self-preparing Windows launcher, private GUI dependencies, bounded benchmark report names, and cross-platform installation/workflow guidance documented. |
+| 2026-08-04 | Codex | current change | GUI voxel-dimension propagation, visible logo treatment, and stop-versus-reset recovery behavior documented. |
+| 2026-08-03 | Codex | current change | Feature-table picker, legacy generated-value imputation contract, convention-free unlabelled preflight, prominent learner scope, and bounded all-learner resources documented. |
+| 2026-07-29 | Codex | current change | Sequential GUI workflow, complete external-table contract, imaging-position replication, Windows diagnostics, and writable generated-feature validation documented. |
+| 2026-07-21 | Codex | current change | Unix GUI launcher now diagnoses sudo misuse and Docker socket access. |
+| 2026-07-21 | Codex | current change | GUI preflight validation, grouped replication-aware benchmarking, resumable learner runs, organized reports, demo workflow, citation metadata, and UTF-8 Windows launcher documented. |
+| 2026-07-10 | Codex | current change | Windows GUI launcher and icon shortcut workflow documented. |
 | 2026-05-15 | @copilot | current PR | Initial detailed onboarding guide added. |
-

@@ -1,5 +1,6 @@
 import argparse
 import gc
+import json
 import logging
 import os
 import re
@@ -17,9 +18,16 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.exceptions import DataConversionWarning
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score, make_scorer
-from sklearn.model_selection import GridSearchCV, KFold, RandomizedSearchCV, StratifiedKFold
+from sklearn.model_selection import GridSearchCV, ParameterGrid, RandomizedSearchCV
 from sklearn.neighbors import KNeighborsClassifier
 from xgboost import XGBClassifier
+
+try:
+    from benchmark_outputs import write_confusion_matrices, write_feature_boxplots, write_feature_correlation
+    from cv_planning import get_adaptive_cv
+except ImportError:  # Package import from the repository root.
+    from .benchmark_outputs import write_confusion_matrices, write_feature_boxplots, write_feature_correlation
+    from .cv_planning import get_adaptive_cv
 
 warnings.simplefilter(action="ignore", category=DataConversionWarning)
 
@@ -44,10 +52,9 @@ if not TPOT_AVAILABLE or not AUTOGLUON_AVAILABLE:
 
 
 parameters = {
-    "n_neighbors": list(range(3, 50, 2)),  # Test odd values for better balancing in ties
-    "metric": ["minkowski", "euclidean", "manhattan", "chebyshev", "hamming", "jaccard"],
-    "weights": ["uniform", "distance"],  # Test both weighting strategies
-    "p": [1, 2, 3],  # Minkowski distance with Manhattan (1), Euclidean (2), etc.
+    "n_neighbors": [3, 5, 7, 11, 15, 21, 31],
+    "metric": ["euclidean", "manhattan"],
+    "weights": ["uniform", "distance"],
 }
 
 
@@ -56,7 +63,42 @@ logger = logging.getLogger(__name__)
 np.random.seed(123)
 
 PARALLELISM = -1
-MIN_CV_SPLITS = 2
+PARTIAL_CACHE_VERSION = 6
+PROGRESS_PREFIX = "MICROICS_PROGRESS "
+
+RF_PARAM_DISTRIBUTIONS = {
+    "n_estimators": np.arange(10, 101, 10),
+    "max_features": ["sqrt", "log2", 0.1, 0.2, 0.3],
+    "max_depth": list(np.arange(5, 31, 5)),
+    "min_samples_split": np.arange(2, 21, 2),
+    "min_samples_leaf": np.arange(1, 11, 1),
+    "bootstrap": [True, False],
+    "class_weight": [None, "balanced", "balanced_subsample"],
+}
+
+
+def emit_pipeline_progress(phase, phase_index, phase_total, completed, total, detail, sub_total=None):
+    """Emit a machine-readable progress event while retaining a useful text log."""
+    event = {
+        "phase": phase,
+        "phase_index": phase_index,
+        "phase_total": phase_total,
+        "completed": completed,
+        "total": total,
+        "detail": detail,
+    }
+    if sub_total is not None:
+        event["sub_total"] = sub_total
+    logger.info("%s%s", PROGRESS_PREFIX, json.dumps(event, separators=(",", ":")))
+
+
+def search_fit_count(model, n_splits):
+    """Return the number of fits that a verbose sklearn search will report."""
+    if isinstance(model, RandomizedSearchCV):
+        return model.n_iter * n_splits
+    if isinstance(model, GridSearchCV):
+        return len(ParameterGrid(model.param_grid)) * n_splits
+    return 1
 
 
 def get_benchmark_runtime_config():
@@ -69,9 +111,71 @@ def get_benchmark_runtime_config():
         }
     return {
         "n_iter": 10,
+        # Preserve the published benchmark protocol, including its three seeded
+        # repetitions, so GUI and command-line results remain comparable.
         "repetitions": 3,
         "n_components": [16, 32, 64, 128, 256, 512, "all"],
     }
+
+
+def configured_parallelism() -> int:
+    """Return the requested worker count for estimators and model searches."""
+    return PARALLELISM if PARALLELISM == -1 else max(1, PARALLELISM)
+
+
+def make_tuned_random_forest(cv, n_iter, search_jobs):
+    """Build the tuned RF used by classification and final-model training."""
+    return RandomizedSearchCV(
+        estimator=RandomForestClassifier(random_state=42, n_jobs=1),
+        param_distributions=RF_PARAM_DISTRIBUTIONS,
+        n_iter=n_iter,
+        scoring=make_scorer(f1_score, average="weighted"),
+        cv=cv,
+        verbose=0,
+        random_state=42,
+        n_jobs=search_jobs,
+        pre_dispatch=search_jobs if search_jobs > 0 else "2*n_jobs",
+    )
+
+
+def benchmark_configurations(component_counts, feature_count, threshold_feature_count):
+    """Return the published main-branch preprocessing evaluation sequence."""
+    configurations = []
+    for count in component_counts:
+        if count != "all" and count > feature_count:
+            continue
+        for threshold_features in (True, False):
+            if count == "all":
+                setting = "threshold_only" if not threshold_features and threshold_feature_count else "all_columns"
+            else:
+                setting = f"svd_{count}"
+            configurations.append((count, threshold_features, setting))
+    return configurations
+
+
+def partial_evaluation_path(partial_dir, filter_mode, repetition, n_components, thr_features, model_name, fold, replication_unit):
+    """Return a cache path pinned to the published-main evaluation protocol."""
+    del replication_unit
+    filename = (
+        f"v{PARTIAL_CACHE_VERSION}_{filter_mode}_partial_{repetition}_n{n_components}_"
+        f"thr{thr_features}_{model_name}_reppublished-main_fold{fold}.tsv"
+    )
+    return os.path.join(partial_dir, filename)
+
+
+def prepare_fold_features(x_train, x_test, n_components, thr_features, thr_indices):
+    """Prepare one fold once so every learner reuses the same transformed arrays."""
+    if not thr_features and n_components == "all" and len(thr_indices) > 0:
+        x_train = x_train[:, thr_indices]
+        x_test = x_test[:, thr_indices]
+
+    svd_transformer = None
+    if n_components != "all":
+        svd_transformer = TruncatedSVD(n_components=int(n_components), n_iter=15, random_state=42).fit(x_train)
+        x_train = svd_transformer.transform(x_train)
+        x_test = svd_transformer.transform(x_test)
+
+    return x_train, x_test, svd_transformer, x_train.shape[1]
 
 
 def get_out_dir(sub="ranking_results"):
@@ -160,8 +264,12 @@ def load_data(path_to_data: str):
     # nan --> -666
     for c in data.columns:
         if pd.api.types.is_numeric_dtype(data[c]):
-            max_val = data[c].replace(np.inf, np.nan).max()
-            data[c] = data[c].replace(np.inf, max_val + 3.14).fillna(-666)
+            finite = data[c].replace([np.inf, -np.inf], np.nan)
+            max_val = finite.max()
+            if pd.isna(max_val):
+                data[c] = finite.fillna(-666)
+            else:
+                data[c] = data[c].replace([np.inf, -np.inf], [max_val + 3.14, -666]).fillna(-666)
         else:
             data[c] = data[c].fillna("missing")
 
@@ -296,41 +404,18 @@ def name_manipulator_date(value: str):
     return (value[:8], re.search(r"st--([^-_]+)-", value).group(1))
 
 
-def get_adaptive_cv(y, max_splits=5):
-    """Build an adaptive CV splitter for classification targets.
-
-    Returns a tuple ``(cv_splitter, n_splits, min_class_count, strategy, reason)``.
-    Uses ``StratifiedKFold`` when each class has at least ``MIN_CV_SPLITS`` samples;
-    otherwise falls back to ``KFold`` with the same adaptive split count.
-    """
-    y = np.asarray(y)
-    n_samples = len(y)
-    if n_samples < MIN_CV_SPLITS:
-        raise ValueError(f"Cannot create cross-validation splitter: at least {MIN_CV_SPLITS} samples are required, got {n_samples}")
-
-    target_splits = min(max_splits, max(MIN_CV_SPLITS, n_samples // 2))
-    _, class_counts = np.unique(y, return_counts=True)
-    min_class_count = class_counts.min()
-
-    if min_class_count >= MIN_CV_SPLITS:
-        class_count_info = ", ".join(str(count) for count in sorted(class_counts))
-        n_splits = min(target_splits, min_class_count)
-        reason = (
-            f"StratifiedKFold enabled because minimum class count is {min_class_count}; selected {n_splits} folds from target {target_splits} "
-            f"(class counts: {class_count_info})"
-        )
-        return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42), n_splits, min_class_count, "stratified", reason
-
-    class_count_info = ", ".join(str(count) for count in sorted(class_counts))
-    reason = (
-        f"Falling back to KFold because minimum class count is {min_class_count}; using {target_splits} folds "
-        f"with minimum class count {min_class_count} (class counts: {class_count_info})"
-    )
-    logger.warning(reason)
-    return KFold(n_splits=target_splits, shuffle=True, random_state=42), target_splits, min_class_count, "kfold", reason
-
-
-def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models=False, all_learners=False):
+def do_classification_simple(
+    X,
+    ys,
+    path_to_data,
+    filter_mode="all",
+    save_models=False,
+    all_learners=False,
+    replication_unit=None,
+    learner="rf",
+    progress_phase_index=2,
+    progress_phase_total=5,
+):
     all_cols = X.columns
     thr_indices = []
     for enx, x in enumerate(all_cols):
@@ -342,20 +427,14 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
     catmap = dict(zip(y, ys.values))
     upsampling = 1
 
-    # Define hyperparameter grid for RandomForest tuning
-    rf_param_dist = {
-        "n_estimators": np.arange(100, 1001, 100),
-        "max_features": ["sqrt", "log2", None] + list(np.arange(0.1, 0.6, 0.1)),
-        "max_depth": [None] + list(np.arange(5, 31, 5)),
-        "min_samples_split": np.arange(2, 21, 2),
-        "min_samples_leaf": np.arange(1, 11, 1),
-        "bootstrap": [True, False],
-        "class_weight": [None, "balanced", "balanced_subsample"],
-    }
-
     # Create tuned RandomForest using RandomizedSearchCV
     # Adapt CV folds and iterations based on dataset and class size
     n_samples = X.shape[0]
+    if replication_unit:
+        logger.warning(
+            "Ignoring replication unit %s: published-main benchmark compatibility uses ordinary stratified cross-validation",
+            replication_unit,
+        )
     cv_rf, n_splits, min_class_count, cv_strategy, cv_reason = get_adaptive_cv(y, max_splits=5)
     runtime_config = get_benchmark_runtime_config()
     n_iter = runtime_config["n_iter"]
@@ -364,17 +443,10 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
         f"(strategy: {cv_strategy}, minimum class count: {min_class_count}). {cv_reason}"
     )
 
-    rf_base = RandomForestClassifier(random_state=42, n_jobs=-1)
-    tuned_rf = RandomizedSearchCV(
-        estimator=rf_base,
-        param_distributions=rf_param_dist,
-        n_iter=n_iter,
-        scoring=make_scorer(f1_score, average="weighted"),
-        cv=cv_rf,
-        verbose=0,  # Reduced verbosity for faster execution
-        random_state=42,
-        n_jobs=-1,
-    )
+    search_jobs = configured_parallelism()
+    # Parallelize the search, not both levels. Nested ``n_jobs=-1`` caused each
+    # outer worker to start another full worker pool for large feature tables.
+    tuned_rf = make_tuned_random_forest(cv_rf, n_iter, search_jobs)
 
     if all_learners:
         models = {
@@ -382,8 +454,13 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
             "decisiontree": tree.DecisionTreeClassifier(),
             "logistic": LogisticRegression(),
             "rf": tuned_rf,
-            "xgb": XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective="binary:logistic"),
-            "gridsearch": GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM),
+            "xgb": XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective="binary:logistic", n_jobs=search_jobs),
+            "gridsearch": GridSearchCV(
+                KNeighborsClassifier(),
+                parameters,
+                n_jobs=search_jobs,
+                pre_dispatch=search_jobs if search_jobs > 0 else "2*n_jobs",
+            ),
             #'tpot': TPOTClassifier(generations=5, population_size=20, cv=5, random_state=42, verbosity=2, n_jobs=PARALLELISM, memory='auto'),
         }
 
@@ -400,9 +477,22 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
             )
     else:
         # Default behavior: only RandomForest (fast)
-        models = {
+        learner_models = {
             "rf": tuned_rf,
+            "dummy": DummyClassifier(),
+            "decisiontree": tree.DecisionTreeClassifier(),
+            "logistic": LogisticRegression(),
+            "xgb": XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective="binary:logistic", n_jobs=search_jobs),
+            "gridsearch": GridSearchCV(
+                KNeighborsClassifier(),
+                parameters,
+                n_jobs=search_jobs,
+                pre_dispatch=search_jobs if search_jobs > 0 else "2*n_jobs",
+            ),
         }
+        if learner not in learner_models:
+            raise ValueError(f"Unsupported learner: {learner}")
+        models = {learner: learner_models[learner]}
 
     # Add autogluon model only if available
     if AUTOGLUON_AVAILABLE:
@@ -421,6 +511,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
 
     # Store CV results to find best hyperparameters for final model training
     cv_results = []
+    failed_models = []
 
     skf, outer_n_splits, outer_min_class_count, outer_cv_strategy, outer_cv_reason = get_adaptive_cv(y, max_splits=3)
     logger.info(
@@ -428,111 +519,63 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
         f"minimum class count: {outer_min_class_count}). {outer_cv_reason}"
     )
 
+    configurations = benchmark_configurations(runtime_config["n_components"], X.shape[1], len(thr_indices))
+    evaluation_total = runtime_config["repetitions"] * len(configurations) * outer_n_splits * len(models)
+    final_model_total = len(models) if save_models else 0
+    progress_total = evaluation_total + final_model_total
+    progress_completed = 0
+    phase_label = "Benchmark all features" if filter_mode == "all" else "Benchmark without count features"
+    emit_pipeline_progress(
+        phase_label,
+        progress_phase_index,
+        progress_phase_total,
+        progress_completed,
+        progress_total,
+        f"{phase_label}: planning {evaluation_total} cross-validation evaluations",
+    )
+
     for repetition in range(runtime_config["repetitions"]):
-        for n_components in runtime_config["n_components"]:
-            desc_components = n_components
+        for desc_components, thr_features, component_setting in configurations:
+            split_iterator = skf.split(X, y)
+            for i, (train_index, test_index) in enumerate(split_iterator):
+                x_train = X[train_index]
+                x_test = X[test_index]
+                y_train = y[train_index]
+                y_test = y[test_index]
+                x_train_model, x_test_model, svd_transformer, effective_components = prepare_fold_features(
+                    x_train,
+                    x_test,
+                    desc_components,
+                    thr_features,
+                    thr_indices,
+                )
 
-            # Skip if n_components exceeds available features
-            if n_components != "all" and n_components > X.shape[1]:
-                logger.info(f"Skipping n_components={n_components} as it exceeds available features ({X.shape[1]})")
-                continue
+                for model_name, model in models.items():
+                    partial_path = partial_evaluation_path(
+                        partial_dir,
+                        filter_mode,
+                        repetition,
+                        desc_components,
+                        thr_features,
+                        model_name,
+                        i,
+                        None,
+                    )
 
-            for thr_features in [True, False]:
-                for i, (train_index, test_index) in enumerate(skf.split(X, y)):
-                    x_train = X[train_index]
-                    x_test = X[test_index]
-                    y_train = y[train_index]
-                    y_test = y[test_index]
-
-                    if not thr_features and desc_components == "all" and len(thr_indices) > 0:
-                        x_train = x_train[:, thr_indices]
-                        x_test = x_test[:, thr_indices]
-
-                    for model_name, model in models.items():
-                        partial_path = (
-                            partial_dir
-                            + f"{filter_mode}_partial_{repetition}_n{desc_components}_thr{thr_features}_{model_name}_fold{i}.tsv"
+                    if os.path.isfile(partial_path):
+                        emit_pipeline_progress(
+                            phase_label,
+                            progress_phase_index,
+                            progress_phase_total,
+                            progress_completed,
+                            progress_total,
+                            f"{phase_label}: resuming evaluation {progress_completed + 1} of {evaluation_total} ({model_name}, fold {i + 1}/{outer_n_splits})",
                         )
-
-                        if os.path.isfile(partial_path):
-                            with open(partial_path) as f:
-                                output = f.read().strip().split("\t")
-                            outputs.append(output)
-                            logger.info(f"Loaded existing partial evaluation from {partial_path}, skipping model evaluation")
-                            continue
-
-                        model_for_fold = model
-                        if isinstance(model, RandomizedSearchCV | GridSearchCV):
-                            cv_inner, n_splits_inner, min_class_count_inner, inner_cv_strategy, inner_cv_reason = get_adaptive_cv(
-                                y_train, max_splits=5
-                            )
-                            logger.info(
-                                f"Using {n_splits_inner} inner CV folds for {model_name} on fold {i} "
-                                f"(strategy: {inner_cv_strategy}, minimum class count: {min_class_count_inner}). {inner_cv_reason}"
-                            )
-                            model_for_fold = clone(model).set_params(cv=cv_inner)
-
-                        logger.info(
-                            f"Running {n_components} {' '.join(str(model_for_fold).split())}, fold: {i}, filter mode: {filter_mode}"
-                        )
-
-                        # Prepare data with SVD if needed
-                        x_train_model = x_train.copy()
-                        x_test_model = x_test.copy()
-                        svd_transformer = None
-
-                        if desc_components != "all" or "TabPFN" in str(model_for_fold):
-                            svd_transformer = TruncatedSVD(n_components=n_components, n_iter=15, random_state=42).fit(x_train_model)
-                            x_train_model = svd_transformer.transform(x_train_model)
-                            x_test_model = svd_transformer.transform(x_test_model)
-                        else:
-                            n_components = x_train_model.shape[1]
-
-                        if "TabularPredictor" in str(model_for_fold) and AUTOGLUON_AVAILABLE:
-                            # if desc_components == "all":
-                            #    continue
-                            x_train_ag = pd.DataFrame(x_train_model)
-                            x_test_ag = pd.DataFrame(x_test_model)
-                            y_train_ag = pd.DataFrame(y_train)
-                            y_test_ag = pd.DataFrame(y_test)
-                            y_train_ag.columns = ["label"]
-                            y_test_ag.columns = ["label"]
-
-                            train_data = pd.concat([x_train_ag, y_train_ag], axis=1)
-                            test_data = pd.concat([x_test_ag, y_test_ag], axis=1)
-
-                            model_for_fold = TabularPredictor(label="label")
-                            predictor = (
-                                model_for_fold.fit(train_data, ag_args_fit={"num_cpus": PARALLELISM})
-                                if PARALLELISM != -1
-                                else model_for_fold.fit(train_data)
-                            )
-                            # predictor = model.fit(train_data)
-                            y_hat = predictor.predict(test_data)
-                            acc = accuracy_score(y_test_ag, y_hat)
-                            mname = str(model_for_fold)
-                            del model_for_fold
-                            model_for_fold = mname
-                            gc.collect()
-                        elif "TabularPredictor" in str(model_for_fold) and not AUTOGLUON_AVAILABLE:
-                            # Skip autogluon if not available
-                            logger.warning(f"Skipping {model_name} - autogluon not available")
-                            continue
-                        else:
-                            try:
-                                with warnings.catch_warnings():
-                                    warnings.simplefilter("ignore")
-                                    model_for_fold.fit(x_train_model, y_train)
-                                    y_hat = model_for_fold.predict(x_test_model)
-                            except Exception as e:
-                                logger.warning(
-                                    f"Repetition {repetition} with {desc_components} components (THR: {thr_features}) model {model_name} fold {i} raised {e} (filter mode {filter_mode})"
-                                )
-                                y_hat = np.ones(len(x_test_model))
-
-                            acc = accuracy_score(y_test, y_hat)
-
-                        # Store CV results for later use in final model training
+                        with open(partial_path) as f:
+                            output = f.read().strip().split("\t")
+                        if len(output) == 10:
+                            output.append(component_setting)
+                        outputs.append(output)
                         if save_models:
                             cv_results.append(
                                 {
@@ -541,31 +584,178 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                                     "n_components": desc_components,
                                     "thr_features": thr_features,
                                     "fold": i,
-                                    "accuracy": acc,
-                                    "svd_transformer": svd_transformer,
+                                    "accuracy": float(output[6]),
+                                    "svd_transformer": None,
                                 }
                             )
+                        logger.info(f"Loaded existing partial evaluation from {partial_path}, skipping model evaluation")
+                        progress_completed += 1
+                        emit_pipeline_progress(
+                            phase_label,
+                            progress_phase_index,
+                            progress_phase_total,
+                            progress_completed,
+                            progress_total,
+                            f"{phase_label}: completed {progress_completed} of {evaluation_total} evaluations",
+                        )
+                        continue
 
-                        test_map = ",".join([catmap[x] for x in y_test])
-                        output = [
-                            "RESULT",
-                            re.sub(r"\s+", " ", str(model_for_fold)),
-                            upsampling,
-                            n_components,
-                            i,
-                            acc,
-                            test_map,
-                            thr_features,
-                        ]
-                        with open(partial_path, "w") as f:
-                            f.write("\t".join([str(x) for x in output]))
-                            logger.info(f"Stored partial evaluation to {partial_path}")
-                        outputs.append([str(x) for x in output])
+                    model_for_fold = clone(model)
+                    if isinstance(model, RandomizedSearchCV | GridSearchCV):
+                        cv_inner, n_splits_inner, min_class_count_inner, inner_cv_strategy, inner_cv_reason = get_adaptive_cv(
+                            y_train, max_splits=5
+                        )
+                        logger.info(
+                            f"Using {n_splits_inner} inner CV folds for {model_name} on fold {i} "
+                            f"(strategy: {inner_cv_strategy}, minimum class count: {min_class_count_inner}). {inner_cv_reason}"
+                        )
+                        model_for_fold.set_params(cv=cv_inner)
+
+                    sub_total = (
+                        search_fit_count(model_for_fold, n_splits_inner)
+                        if isinstance(model_for_fold, RandomizedSearchCV | GridSearchCV)
+                        else 1
+                    )
+                    if isinstance(model_for_fold, RandomizedSearchCV | GridSearchCV):
+                        # Per-fit lines make long searches observable. Avoid hundreds of
+                        # thousands of lines for an exhaustive grid while still reporting
+                        # its exact planned fit count in the structured event below.
+                        model_for_fold.set_params(verbose=2 if sub_total <= 1000 else 1)
+                    component_label = (
+                        f"SVD {desc_components} components"
+                        if component_setting.startswith("svd_")
+                        else "all generated columns"
+                        if component_setting == "all_columns"
+                        else "threshold-derived columns only"
+                    )
+                    emit_pipeline_progress(
+                        phase_label,
+                        progress_phase_index,
+                        progress_phase_total,
+                        progress_completed,
+                        progress_total,
+                        f"{phase_label}: evaluation {progress_completed + 1} of {evaluation_total} — {model_name}, repetition {repetition + 1}/{runtime_config['repetitions']}, {component_label}, fold {i + 1}/{outer_n_splits}",
+                        sub_total=sub_total,
+                    )
+
+                    logger.info(
+                        f"Running {desc_components} ({effective_components} features) "
+                        f"{' '.join(str(model_for_fold).split())}, fold: {i}, filter mode: {filter_mode}"
+                    )
+
+                    model_failed = False
+                    if "TabularPredictor" in str(model_for_fold) and AUTOGLUON_AVAILABLE:
+                        # if desc_components == "all":
+                        #    continue
+                        x_train_ag = pd.DataFrame(x_train_model)
+                        x_test_ag = pd.DataFrame(x_test_model)
+                        y_train_ag = pd.DataFrame(y_train)
+                        y_test_ag = pd.DataFrame(y_test)
+                        y_train_ag.columns = ["label"]
+                        y_test_ag.columns = ["label"]
+
+                        train_data = pd.concat([x_train_ag, y_train_ag], axis=1)
+                        test_data = pd.concat([x_test_ag, y_test_ag], axis=1)
+
+                        model_for_fold = TabularPredictor(label="label")
+                        predictor = (
+                            model_for_fold.fit(train_data, ag_args_fit={"num_cpus": PARALLELISM})
+                            if PARALLELISM != -1
+                            else model_for_fold.fit(train_data)
+                        )
+                        # predictor = model.fit(train_data)
+                        y_hat = predictor.predict(test_data)
+                        acc = accuracy_score(y_test_ag, y_hat)
+                        mname = str(model_for_fold)
+                        del model_for_fold
+                        model_for_fold = mname
+                        gc.collect()
+                    elif "TabularPredictor" in str(model_for_fold) and not AUTOGLUON_AVAILABLE:
+                        # Skip autogluon if not available
+                        logger.warning(f"Skipping {model_name} - autogluon not available")
+                        continue
+                    else:
+                        try:
+                            with warnings.catch_warnings():
+                                warnings.simplefilter("ignore")
+                                model_for_fold.fit(x_train_model, y_train)
+                                y_hat = model_for_fold.predict(x_test_model)
+                        except Exception as e:
+                            model_failed = True
+                            failed_models.append(f"{model_name} fold {i}: {e}")
+                            logger.warning(
+                                f"Repetition {repetition} with {desc_components} components (THR: {thr_features}) model {model_name} fold {i} raised {e} (filter mode {filter_mode})"
+                            )
+                            y_hat = np.ones(len(x_test_model))
+
+                        acc = accuracy_score(y_test, y_hat)
+
+                    if model_failed:
+                        continue
+
+                    # Store CV results for later use in final model training
+                    if save_models:
+                        cv_results.append(
+                            {
+                                "model_name": model_name,
+                                "repetition": repetition,
+                                "n_components": desc_components,
+                                "thr_features": thr_features,
+                                "fold": i,
+                                "accuracy": acc,
+                                "svd_transformer": svd_transformer,
+                            }
+                        )
+
+                    test_map = ",".join([str(catmap[x]) for x in y_test])
+                    prediction_map = ",".join([str(catmap.get(int(x), x)) for x in np.asarray(y_hat)])
+                    output = [
+                        "RESULT",
+                        model_name,
+                        upsampling,
+                        desc_components,
+                        effective_components,
+                        i,
+                        acc,
+                        test_map,
+                        thr_features,
+                        prediction_map,
+                        component_setting,
+                    ]
+                    with open(partial_path, "w") as f:
+                        f.write("\t".join([str(x) for x in output]))
+                        logger.info(f"Stored partial evaluation to {partial_path}")
+                    outputs.append([str(x) for x in output])
+                    progress_completed += 1
+                    emit_pipeline_progress(
+                        phase_label,
+                        progress_phase_index,
+                        progress_phase_total,
+                        progress_completed,
+                        progress_total,
+                        f"{phase_label}: completed {progress_completed} of {evaluation_total} evaluations",
+                    )
+    if failed_models:
+        details = "; ".join(failed_models[:5])
+        logger.error(f"Benchmark incomplete; retaining {partial_dir} for resume. Failures: {details}")
+        raise RuntimeError(f"Benchmark incomplete ({len(failed_models)} failed evaluations). Re-run to resume from partial results.")
     if os.path.isdir(partial_dir):
         shutil.rmtree(partial_dir)
         logger.info("All model evaluation complete, deleted partial results")
     dfx = pd.DataFrame(outputs)
-    dfx.columns = ["tag", "model", "upsampling", "n_components", "fold", "accuracy", "test_set", "thr_features"]
+    dfx.columns = [
+        "tag",
+        "model",
+        "upsampling",
+        "n_components",
+        "effective_n_components",
+        "fold",
+        "accuracy",
+        "test_set",
+        "thr_features",
+        "predicted_set",
+        "component_setting",
+    ]
     # Handle case where path_to_data has no directory separator
     path_parts = path_to_data.split("/")[:-1]
     if path_parts:
@@ -574,7 +764,7 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
         base_dir = "."  # Current directory if no path is specified
     fout = base_dir + f"/classification_{filter_mode}.tsv"
     dfx = dfx.sort_values(by=["accuracy"])
-    dfx.to_csv(fout, sep="\t")
+    dfx.to_csv(fout, sep="\t", index=False)
 
     logger.info(f"Wrote classification outputs to {fout}")
 
@@ -619,6 +809,15 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
 
         # Train final models using best configurations on ALL data
         for model_name, config in best_configs.items():
+            final_number = progress_completed - evaluation_total + 1
+            emit_pipeline_progress(
+                phase_label,
+                progress_phase_index,
+                progress_phase_total,
+                progress_completed,
+                progress_total,
+                f"{phase_label}: fitting final {model_name} model ({final_number} of {final_model_total})",
+            )
             logger.info(
                 f"Training final {model_name} model with n_components={config['n_components']}, thr_features={config['thr_features']}"
             )
@@ -645,20 +844,30 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                         f"(strategy: {final_cv_strategy}, minimum class count: {min_class_count_final}). {final_cv_reason}"
                     )
 
-                    final_model = RandomizedSearchCV(
-                        estimator=RandomForestClassifier(random_state=42, n_jobs=-1),
-                        param_distributions=rf_param_dist,
-                        n_iter=n_iter_final,
-                        scoring=make_scorer(f1_score, average="weighted"),
-                        cv=cv_final,
-                        verbose=0,
-                        random_state=42,
-                        n_jobs=-1,
-                    )
+                    final_model = make_tuned_random_forest(cv_final, n_iter_final, search_jobs)
                 elif model_name == "xgb":
-                    final_model = XGBClassifier(n_estimators=100, max_depth=3, learning_rate=1, objective="binary:logistic")
+                    final_model = XGBClassifier(
+                        n_estimators=100,
+                        max_depth=3,
+                        learning_rate=1,
+                        objective="binary:logistic",
+                        n_jobs=search_jobs,
+                    )
                 elif model_name == "gridsearch":
-                    final_model = GridSearchCV(KNeighborsClassifier(), parameters, n_jobs=PARALLELISM)
+                    cv_final, n_splits_final, min_class_count_final, final_cv_strategy, final_cv_reason = get_adaptive_cv(y, max_splits=5)
+                    logger.info(
+                        f"Using {n_splits_final} CV folds for final KNN tuning with {X_final.shape[0]} samples "
+                        f"(strategy: {final_cv_strategy}, minimum class count: {min_class_count_final}). "
+                        f"{final_cv_reason}"
+                    )
+                    final_model = GridSearchCV(
+                        KNeighborsClassifier(),
+                        parameters,
+                        cv=cv_final,
+                        n_jobs=search_jobs,
+                        pre_dispatch=search_jobs if search_jobs > 0 else "2*n_jobs",
+                        verbose=0,
+                    )
                 elif model_name == "tpot" and TPOT_AVAILABLE:
                     final_model = TPOTClassifier(
                         generations=5,
@@ -689,6 +898,20 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
                     continue
 
                 try:
+                    final_sub_total = (
+                        search_fit_count(final_model, n_splits_final) if isinstance(final_model, RandomizedSearchCV | GridSearchCV) else 1
+                    )
+                    if isinstance(final_model, RandomizedSearchCV | GridSearchCV):
+                        final_model.set_params(verbose=2 if final_sub_total <= 1000 else 1)
+                    emit_pipeline_progress(
+                        phase_label,
+                        progress_phase_index,
+                        progress_phase_total,
+                        progress_completed,
+                        progress_total,
+                        f"{phase_label}: fitting final {model_name} model ({final_number} of {final_model_total})",
+                        sub_total=final_sub_total,
+                    )
                     # Train final model on all data
                     with warnings.catch_warnings():
                         warnings.simplefilter("ignore")
@@ -732,16 +955,30 @@ def do_classification_simple(X, ys, path_to_data, filter_mode="all", save_models
 
                 except Exception as e:
                     logger.error(f"Failed to train final model {model_name}: {e}")
-                    continue
+                progress_completed += 1
+                emit_pipeline_progress(
+                    phase_label,
+                    progress_phase_index,
+                    progress_phase_total,
+                    progress_completed,
+                    progress_total,
+                    f"{phase_label}: finished final {model_name} model ({final_number} of {final_model_total})",
+                )
 
 
-def do_classification_rfe(xs, y, path_to_data, tagname="all"):
-    # Do feature ranking on everything (yeah, this is just an ablation)
-    # Do learning with top n
-    model = RandomForestClassifier()
-    model.fit(xs, y)
-    importances = np.array(model.feature_importances_)
-    sorted_indices = np.argsort(importances)[::-1]
+def compute_ablation_scores(xs, y, replication_unit=None, report_progress=False):
+    """Reproduce the published main-branch RF feature-column ablation."""
+    if replication_unit:
+        logger.warning(
+            "Ignoring replication unit %s: published-main ablation uses ordinary stratified cross-validation",
+            replication_unit,
+        )
+
+    # This deliberately preserves the published protocol: rank once on the full
+    # labelled table, then evaluate increasingly large prefixes of that ranking.
+    ranking_model = RandomForestClassifier()
+    ranking_model.fit(xs, y)
+    sorted_indices = np.argsort(ranking_model.feature_importances_)[::-1]
 
     X_init = xs.values
     y_init = pd.Categorical(y.values).codes
@@ -750,29 +987,49 @@ def do_classification_rfe(xs, y, path_to_data, tagname="all"):
         f"RFE evaluation uses {rfe_n_splits} folds (strategy: {rfe_cv_strategy}, "
         f"minimum class count: {rfe_min_class_count}). {rfe_cv_reason}"
     )
+    splits = list(skf.split(X_init, y_init))
+    top_feature_counts = list(range(1, len(sorted_indices), 20))
+    progress_total = len(splits) * len(top_feature_counts)
+    progress_completed = 0
+
+    if report_progress:
+        emit_pipeline_progress(
+            "Feature ablation",
+            4,
+            5,
+            progress_completed,
+            progress_total,
+            f"Feature ablation: planning {len(top_feature_counts)} published feature-column subsets across {len(splits)} folds",
+        )
+
     out_df = []
-    for j in range(1, len(sorted_indices), 20):
-        X = X_init[:, sorted_indices[:j]]
-        y = y_init
-
-        accs = []
-        for i, (train_index, test_index) in enumerate(skf.split(X, y)):
+    for top_n in top_feature_counts:
+        X = X_init[:, sorted_indices[:top_n]]
+        accuracies = []
+        for fold_index, (train_index, test_index) in enumerate(splits):
+            if report_progress:
+                emit_pipeline_progress(
+                    "Feature ablation",
+                    4,
+                    5,
+                    progress_completed,
+                    progress_total,
+                    f"Feature ablation: testing top {top_n} of {X_init.shape[1]} generated columns, fold {fold_index + 1}/{len(splits)}",
+                )
             fresh_model = RandomForestClassifier()
+            fresh_model.fit(X[train_index], y_init[train_index])
+            y_hat = fresh_model.predict(X[test_index])
+            accuracies.append(accuracy_score(y_init[test_index], y_hat))
+            progress_completed += 1
 
-            x_train = X[train_index]
-            y_train = y[train_index]
+        mean_acc = np.mean(accuracies)
+        logger.info("Testing top features: %s out of %s (acc: %s)", top_n, len(sorted_indices), mean_acc)
+        out_df.append({"top_n": top_n, "accuracy": mean_acc})
+    return pd.DataFrame(out_df)
 
-            x_test = X[test_index]
-            y_test = y[test_index]
 
-            fresh_model.fit(x_train, y_train)
-            y_hat = fresh_model.predict(x_test)
-            acc = accuracy_score(y_test, y_hat)
-            accs.append(acc)
-        mean_acc = np.mean(accs)
-        logger.info(f"Testing top features: {j} out of {len(sorted_indices)} (acc: {mean_acc})")
-        out_df.append({"top_n": j, "accuracy": mean_acc})
-    dfx_out = pd.DataFrame(out_df)
+def do_classification_rfe(xs, y, path_to_data, tagname="all", replication_unit=None, report_progress=False):
+    dfx_out = compute_ablation_scores(xs, y, replication_unit=replication_unit, report_progress=report_progress)
     # Handle case where path_to_data has no directory separator
     path_parts = path_to_data.split("/")[:-1]
     if path_parts:
@@ -780,7 +1037,7 @@ def do_classification_rfe(xs, y, path_to_data, tagname="all"):
     else:
         base_dir = "."  # Current directory if no path is specified
     fout = base_dir + f"/ablation_ranking_{tagname}.tsv"
-    dfx_out.to_csv(fout, sep="\t")
+    dfx_out.to_csv(fout, sep="\t", index=False)
     print(dfx_out)
 
 
@@ -816,6 +1073,25 @@ if __name__ == "__main__":
         action="store_true",
         help="Enable all machine learning algorithms (default: False, only RandomForest)",
     )
+    parser.add_argument(
+        "--replication_unit",
+        "--replication-unit",
+        choices=["position", "well", "date"],
+        default=None,
+        help="Deprecated compatibility option; published-main evaluation always uses ordinary stratified folds",
+    )
+    parser.add_argument(
+        "--learner",
+        choices=["rf", "dummy", "decisiontree", "logistic", "xgb", "gridsearch"],
+        default="rf",
+        help="Single learner to benchmark when --all_learners is not used",
+    )
+    parser.add_argument(
+        "--correlation-threshold",
+        type=float,
+        default=0.8,
+        help="Absolute correlation threshold used to group redundant top features",
+    )
 
     try:
         arguments = parser.parse_args()
@@ -824,6 +1100,8 @@ if __name__ == "__main__":
         exit(999)
 
     PARALLELISM = int(arguments.parallelism)
+    if not 0 < arguments.correlation_threshold <= 1:
+        parser.error("--correlation-threshold must be between 0 and 1")
     save_models = arguments.save_models
     all_learners = arguments.all_learners
 
@@ -840,20 +1118,55 @@ if __name__ == "__main__":
 
         data = data.copy()
         data["date"] = dates
+        emit_pipeline_progress("Rank features", 1, 5, 0, 2, "Ranking features by acquisition date (1 of 2)")
         xs, y, _ = compute_rankings(data, file, skip=False, target_col="date")
         data = data.drop("date", axis=1)
 
+        emit_pipeline_progress("Rank features", 1, 5, 1, 2, "Ranking features by class label (2 of 2)")
         xs, y, _ = compute_rankings(data, file, skip=False, target_col="label")
+        emit_pipeline_progress("Rank features", 1, 5, 2, 2, "Feature ranking complete")
 
         assert "date" not in xs.columns
 
-        do_classification_simple(xs, y, file, save_models=save_models, all_learners=all_learners)
+        do_classification_simple(
+            xs,
+            y,
+            file,
+            save_models=save_models,
+            all_learners=all_learners,
+            replication_unit=arguments.replication_unit,
+            learner=arguments.learner,
+            progress_phase_index=2,
+        )
 
         xs_cols = [x for x in xs.columns.tolist() if "counts" not in x]
         xs_no_counts = xs[xs_cols]
 
-        do_classification_simple(xs_no_counts, y, file, "no_counts_features", save_models=save_models, all_learners=all_learners)
-        do_classification_rfe(xs, y, file)
+        do_classification_simple(
+            xs_no_counts,
+            y,
+            file,
+            "no_counts_features",
+            save_models=save_models,
+            all_learners=all_learners,
+            replication_unit=arguments.replication_unit,
+            learner=arguments.learner,
+            progress_phase_index=3,
+        )
+        do_classification_rfe(xs, y, file, replication_unit=arguments.replication_unit, report_progress=True)
+
+        output_dir = os.path.join(os.path.dirname(file), "visualizations")
+        emit_pipeline_progress("Write training outputs", 5, 5, 0, 4, "Writing confusion matrix for all features (1 of 4)")
+        write_confusion_matrices(os.path.join(os.path.dirname(file), "classification_all.tsv"), output_dir)
+        emit_pipeline_progress("Write training outputs", 5, 5, 1, 4, "Writing confusion matrix without count features (2 of 4)")
+        write_confusion_matrices(os.path.join(os.path.dirname(file), "classification_no_counts_features.tsv"), output_dir)
+        rankings_file = os.path.join(os.path.dirname(file), "rankings_label.tsv")
+        if os.path.isfile(rankings_file):
+            emit_pipeline_progress("Write training outputs", 5, 5, 2, 4, "Writing feature correlation report (3 of 4)")
+            write_feature_correlation(file, rankings_file, output_dir, threshold=arguments.correlation_threshold)
+            emit_pipeline_progress("Write training outputs", 5, 5, 3, 4, "Writing feature boxplots (4 of 4)")
+            write_feature_boxplots(file, rankings_file, output_dir)
+        emit_pipeline_progress("Write training outputs", 5, 5, 4, 4, "Training outputs complete")
 
 # Ref run
 # conda activate imagine; python feature_ranking_lite.py --files ../results_30_12_2023_2/data.tsv --fout ../benchmark
