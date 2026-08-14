@@ -10,7 +10,7 @@ import shutil
 import sys
 
 # Add src directory to path
-sys.path.insert(0, "/opt/imagine")
+sys.path.insert(0, "/opt/microics")
 
 from inference import load_models, run_inference
 
@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 def test_inference_with_pregenerated_features():
     """Test inference using pre-generated features from datafile.tsv."""
 
-    models_dir = "/imagine/results/models"
-    features_file = "/imagine/results/ci_datafile.tsv"
+    models_dir = "/opt/microics/results/models"
+    features_file = "/opt/microics/results/ci_datafile.tsv"
     temp_output_dir = "/tmp/inference_test_output"
 
     # Create temporary output directory
@@ -59,7 +59,7 @@ def test_inference_with_pregenerated_features():
             raise RuntimeError("No output files were generated")
 
         # Copy results to final location for verification
-        final_output_dir = "/imagine/results/inference_test_output"
+        final_output_dir = "/opt/microics/results/inference_test_output"
         if os.path.exists(final_output_dir):
             shutil.rmtree(final_output_dir)
         shutil.copytree(temp_output_dir, final_output_dir)
