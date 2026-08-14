@@ -52,7 +52,17 @@ services:
 
   imagine-test-inference-fast:
     <<: *base-test
-    command: ["2", "ci_datafile.tsv", "5", "inference"]
+    volumes:
+      - type: bind
+        source: test_inference_fast.py
+        target: /opt/microics/test_inference_fast.py
+        read_only: true
+      - type: bind
+        source: examples/test_images_results
+        target: /opt/microics/results
+    working_dir: /opt/microics
+    entrypoint: ["python"]
+    command: ["test_inference_fast.py"]
 
 volumes:
   microics-data:
