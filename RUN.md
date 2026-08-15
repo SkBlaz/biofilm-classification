@@ -39,10 +39,12 @@ Available operations are:
 - **Generate labelled features**: upload labelled TIFFs and produce `results/datafile.tsv`.
 - **Generate unlabelled features**: upload inference TIFFs and produce `results/unknown_features.tsv`.
 - **Train models**: upload a complete labelled feature table and write rankings, reports, and models below `results/`.
-- **Inference**: choose an earlier persisted training job and upload either images or a compatible precomputed feature table. Predictions are written below `inference/`.
+- **Inference**: choose an earlier persisted training job and upload either images or a compatible precomputed feature table (only one of the two is required). Predictions are written below `inference/`.
 - **All together**: upload training and inference images and run generation, training, and inference sequentially.
 
 Completed output is available from the job’s **Download results ZIP** link. A failed computation changes only that job to `failed`; the server remains available for another request.
+
+The **Trained models** dropdown on the Inference step lists each training job by creation date and learner(s) used (for example "Aug 15 2026, 08:03 · All learners (5 models)"), not just its job ID, so you can pick the correct one at a glance. Inference automatically loads and evaluates every model saved in the chosen job — if that job was trained with **All learners**, every learner's predictions are reported side by side, so there is no separate "all learners" toggle at the inference step.
 
 Choosing a feature table selects the input only. No output folder needs to be selected: generated files appear in **Inspect results** in the browser, and **Download results ZIP** saves a copy to the browser’s configured download location. Internally, the job keeps them under `/data/jobs/<job-id>/output/`.
 

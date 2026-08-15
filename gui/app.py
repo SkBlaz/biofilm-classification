@@ -190,7 +190,8 @@ def list_jobs() -> list[dict]:
         except (ValueError, FileNotFoundError):
             continue
         metadata = read_job_metadata(root.name)
-        has_models = any((paths.results / "models").glob("*_model.joblib"))
+        model_files = sorted((paths.results / "models").glob("*_model.joblib"))
+        has_models = bool(model_files)
         has_output = any(path.is_file() for path in paths.output.rglob("*"))
         jobs.append(
             {
@@ -202,6 +203,10 @@ def list_jobs() -> list[dict]:
                 "has_models": has_models,
                 "has_output": has_output,
                 "download_url": f"/api/jobs/{root.name}/download" if has_output else None,
+                "learner": metadata.get("learner"),
+                "all_learners": bool(metadata.get("all_learners")),
+                "model_count": len(model_files),
+                "model_names": [path.name.replace("_model.joblib", "") for path in model_files],
             }
         )
     return jobs
@@ -727,7 +732,14 @@ def start_pipeline(raw_config: dict) -> tuple[bool, str | None]:
                 "download_url": None,
             }
         )
-    write_job_metadata(job_id, status="starting", workflow=config["workflow"], error=None)
+    write_job_metadata(
+        job_id,
+        status="starting",
+        workflow=config["workflow"],
+        error=None,
+        learner=config.get("learner"),
+        all_learners=bool(config.get("all_learners")),
+    )
     thread = threading.Thread(target=run_pipeline, args=(config, job_id), daemon=True)
     with state_lock:
         runtime["thread"] = thread

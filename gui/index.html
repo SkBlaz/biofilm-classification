@@ -48,23 +48,23 @@
         </div>
 
         <div class="field-group" id="inferenceImagesField">
-          <div class="field-label"><label for="inferenceFilePicker">Images to classify</label><button class="help-button" data-help-title="Inference images" data-help-text="Upload unlabelled .tif or .tiff images. For inference-only jobs, a pre-generated feature table may be used instead." type="button" aria-label="Help for inference images">?</button></div>
+          <div class="field-label"><label for="inferenceFilePicker">Images to classify</label><button class="help-button" data-help-title="Inference images" data-help-text="Upload unlabelled .tif or .tiff images. Optional if you instead upload a compatible feature table below — you only need one of the two." type="button" aria-label="Help for inference images">?</button></div>
           <label class="file-button upload-button" for="inferenceFilePicker">Choose inference images</label>
           <input class="hidden" id="inferenceFilePicker" type="file" accept=".tif,.tiff,image/tiff" multiple>
-          <small class="file-picker-status" id="inferenceFileStatus">No inference images uploaded.</small>
+          <small class="file-picker-status" id="inferenceFileStatus">No inference images uploaded. Optional if you upload a feature table below.</small>
         </div>
 
         <div class="field-group" id="featureFileField">
-          <div class="field-label"><label for="featureFilePicker">Complete feature table</label><button class="help-button" data-help-title="Complete feature table" data-help-text="For training, upload a labelled table containing sampleName, label, and all desired features. For inference, upload a compatible table with sampleName and model features; raw images will not be regenerated." type="button" aria-label="Help for Complete feature table">?</button></div>
+          <div class="field-label"><label for="featureFilePicker">Complete feature table</label><button class="help-button" data-help-title="Complete feature table" data-help-text="For training, upload a labelled table containing sampleName, label, and all desired features. For inference, upload a compatible table with sampleName and model features instead of raw images — you only need one of the two; raw images will not be regenerated." type="button" aria-label="Help for Complete feature table">?</button></div>
           <label class="file-button upload-button" for="featureFilePicker">Choose feature table</label>
           <input class="hidden" id="featureFilePicker" type="file" accept=".tsv,.txt,text/tab-separated-values,text/plain">
-          <small class="file-picker-status" id="featureFileStatus">No feature table uploaded.</small>
+          <small class="file-picker-status" id="featureFileStatus">No feature table uploaded. Optional if you upload inference images above.</small>
         </div>
 
         <div class="field-group hidden" id="modelJobField">
-          <div class="field-label"><label for="modelJob">Trained models</label><button class="help-button" data-help-title="Trained models" data-help-text="Select a previous training job stored under /data that contains saved models." type="button" aria-label="Help for trained models">?</button></div>
+          <div class="field-label"><label for="modelJob">Trained models</label><button class="help-button" data-help-title="Trained models" data-help-text="Select a previous training job stored under /data that contains saved models. Every model saved in that job is used automatically — if it was trained with 'All learners', inference will evaluate with all of them and report one prediction column per learner." type="button" aria-label="Help for trained models">?</button></div>
           <select id="modelJob" name="model_job_id"><option value="">No trained model jobs available</option></select>
-          <small>Persist <code>/data</code> with a Docker volume to keep jobs across container replacement.</small>
+          <small id="modelJobHint">Options show when the job was trained and which learner(s) it used. Persist <code>/data</code> with a Docker volume to keep jobs across container replacement.</small>
         </div>
 
         <div class="field-row compact-row">
