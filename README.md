@@ -15,7 +15,7 @@ The tool is built as three interoperable modules that can be used together as a 
 2. Model training – trains and compares machine learning classifiers on those features, identifies the structural features that separate your groups, and saves the trained models.
 3. Inference – applies a saved model to new, unseen images to predict their labels.
 
-MicroICS can be installed in two ways: from the command line, as described below, or using Docker Desktop, which requires no command line setup and is explained in the accompanying guide /resources/installation_and_running_MicroICS/.
+MicroICS can be installed in two ways: from the command line, as described below, or using Docker Desktop, which requires no command line setup and is explained in the accompanying guide resources/installation_and_running_MicroICS.
 
 ## Standalone web application
 
