@@ -8,7 +8,14 @@
 
 # MicroICS
 
-MicroICS turns 3D biofilm TIFF images into quantitative structural features, compares machine-learning classifiers, saves trained models, and predicts labels for new images.
+MicroICS is a tool for linking the 3D structure of biofilms to biological properties or questions of interest. It does this by measuring thousands of structural features from 3D biofilm images and using machine learning to identify which of them relate to the biological grouping linked to the question in interest. It also enables you to apply what it learns to classify new images.
+
+The tool is built as three interoperable modules that can be used together as a pipeline or individually:
+1. Feature generation – measures structural features from 3D biofilm images and writes them to a table.
+2. Model training – trains and compares machine learning classifiers on those features, identifies the structural features that separate your groups, and saves the trained models.
+3. Inference – applies a saved model to new, unseen images to predict their labels.
+
+MicroICS can be installed in two ways: from the command line, as described below, or using Docker Desktop, which requires no command line setup and is explained in the accompanying guide /resources/installation_and_running_MicroICS/.
 
 ## Standalone web application
 
