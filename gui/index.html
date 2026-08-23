@@ -64,7 +64,9 @@
         <div class="field-group hidden" id="modelJobField">
           <div class="field-label"><label for="modelJob">Trained models</label><button class="help-button" data-help-title="Trained models" data-help-text="Select a previous training job stored under /data that contains saved models. Every model saved in that job is used automatically — if it was trained with 'All learners', inference will evaluate with all of them and report one prediction column per learner." type="button" aria-label="Help for trained models">?</button></div>
           <select id="modelJob" name="model_job_id"><option value="">No trained model jobs available</option></select>
-          <small id="modelJobHint">Options show when the job was trained and which learner(s) it used. Persist <code>/data</code> with a Docker volume to keep jobs across container replacement.</small>
+          <small id="modelJobHint">Options show when the job was trained and which learner(s) it used. Import a compatible <code>.joblib</code> model below, or delete an old selected job. Persist <code>/data</code> with a Docker volume to keep jobs across container replacement.</small>
+          <div class="model-management"><label class="file-button upload-button" for="modelFilePicker">Import .joblib files</label><input class="hidden" id="modelFilePicker" type="file" accept=".joblib,application/octet-stream" multiple><button class="button tertiary" id="deleteModelJobButton" type="button" disabled>Delete selected job</button></div>
+          <small class="file-picker-status" id="modelFileStatus">Select the model and matching metadata `.joblib` files together when available.</small>
         </div>
 
         <div class="field-row compact-row">

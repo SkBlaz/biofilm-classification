@@ -34,18 +34,30 @@ logger = logging.getLogger(__name__)
 CLI_USAGE = "Usage: python inference.py <models_dir> <images_dir> <output_dir> [--features_file FEATURES.tsv]"
 
 
+def model_file_candidates(models_dir):
+    """Return model joblibs, including imported files with generic names."""
+    return sorted(path for path in Path(models_dir).glob("*.joblib") if not path.name.endswith("_metadata.joblib"))
+
+
 def load_models(models_dir):
     """Load all trained models from the specified directory."""
     models = {}
     metadata = {}
 
-    model_files = glob.glob(os.path.join(models_dir, "*_model.joblib"))
+    model_files = model_file_candidates(models_dir)
     if not model_files:
         raise ValueError(f"No model files found in {models_dir}")
 
     for model_file in model_files:
-        model_name = os.path.basename(model_file).replace("_model.joblib", "")
-        metadata_file = model_file.replace("_model.joblib", "_metadata.joblib")
+        model_file = str(model_file)
+        model_name = Path(model_file).stem
+        if model_name.endswith("_model"):
+            model_name = model_name[: -len("_model")]
+        metadata_file = (
+            model_file.replace("_model.joblib", "_metadata.joblib")
+            if model_file.endswith("_model.joblib")
+            else os.path.splitext(model_file)[0] + "_metadata.joblib"
+        )
 
         try:
             # Load model
@@ -76,10 +88,9 @@ def validate_cli_inputs(models_dir, images_dir, features_file=None):
 
     if not os.path.isdir(models_dir):
         errors.append(f"Models directory does not exist: {models_dir}")
-    elif not any(Path(models_dir).glob("*_model.joblib")):
+    elif not model_file_candidates(models_dir):
         errors.append(
-            f"No model files matching '*_model.joblib' were found in: {models_dir}. "
-            "Run learning_benchmark_save_models first or verify model naming."
+            f"No model .joblib files were found in: {models_dir}. Run learning_benchmark_save_models first or verify model naming."
         )
 
     if features_file:
@@ -638,6 +649,18 @@ def generate_shap_explanations(models, metadata, all_predictions, output_dir):
                     plt.savefig(class_plot, bbox_inches="tight", dpi=150)
                     plt.close()
                     logger.info(f"Saved class-specific summary plot for {model_name}, class {class_name}")
+
+                    # Keep a compact per-feature view alongside the beeswarm.
+                    class_importance = pd.DataFrame({"feature": feature_names, "importance": np.abs(class_shap).mean(axis=0)})
+                    class_importance = class_importance.sort_values("importance", ascending=True).tail(25)
+                    class_importance.plot.barh(x="feature", y="importance", legend=False, figsize=(10, 8), color="#4e79a7")
+                    plt.title(f"{model_name}: mean absolute SHAP value — class {class_name}")
+                    plt.xlabel("Mean absolute contribution")
+                    plt.tight_layout()
+                    feature_plot = os.path.join(explanations_dir, f"{model_name}_feature_importance_class_{class_name}.png")
+                    plt.savefig(feature_plot, bbox_inches="tight", dpi=150)
+                    plt.close()
+                    logger.info(f"Saved per-feature explanation for {model_name}, class {class_name}")
 
             except Exception as e:
                 logger.warning(f"Could not generate plots for {model_name}: {e}")

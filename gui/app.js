@@ -30,6 +30,9 @@ const modelJob = document.querySelector('#modelJob');
 const helpModal = document.querySelector('#helpModal');
 const helpModalTitle = document.querySelector('#helpModalTitle');
 const helpModalText = document.querySelector('#helpModalText');
+const modelFilePicker = document.querySelector('#modelFilePicker');
+const modelFileStatus = document.querySelector('#modelFileStatus');
+const deleteModelJobButton = document.querySelector('#deleteModelJobButton');
 
 const stepIcons = { features: '1', validate: '✓', models: '2', reports: '▧', inference: '3' };
 let uploadJobId = '';
@@ -158,7 +161,45 @@ function renderModelJobs(jobs) {
   }
   modelJob.innerHTML = `<option value="">Select a training job</option>${jobs.map((job) => `<option value="${escapeHtml(job.job_id)}" title="${escapeHtml(job.job_id)}">${escapeHtml(describeModelJob(job))} · ${escapeHtml(job.job_id.slice(0, 8))}</option>`).join('')}`;
   if ([...modelJob.options].some((option) => option.value === selected)) modelJob.value = selected;
+  deleteModelJobButton.disabled = !modelJob.value;
 }
+
+modelJob.addEventListener('change', () => { deleteModelJobButton.disabled = !modelJob.value; });
+
+modelFilePicker.addEventListener('change', async () => {
+  const files = [...modelFilePicker.files];
+  if (!files.length) return;
+  try {
+    let payload = null;
+    for (const [index, file] of files.entries()) {
+      modelFileStatus.textContent = `Importing ${index + 1} of ${files.length}: ${file.name}…`;
+      const headers = {'Content-Type': file.type || 'application/octet-stream', 'X-Upload-Name': file.name, 'X-Upload-Kind': 'model'};
+      if (payload?.job_id) headers['X-Job-ID'] = payload.job_id;
+      const response = await fetch('/api/upload', { method: 'POST', headers, body: file });
+      payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Model import failed');
+    }
+    const defaults = await fetch('/api/defaults', {cache: 'no-store'}).then((result) => result.json());
+    renderModelJobs(defaults.model_jobs);
+    modelJob.value = payload.job_id;
+    deleteModelJobButton.disabled = false;
+    modelFileStatus.textContent = `Imported ${payload.file}. Select this job for inference.`;
+  } catch (error) { modelFileStatus.textContent = error.message; }
+  finally { modelFilePicker.value = ''; }
+});
+
+deleteModelJobButton.addEventListener('click', async () => {
+  const jobId = modelJob.value;
+  if (!jobId || !window.confirm('Delete this saved model job and all its results?')) return;
+  try {
+    const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, {method: 'DELETE'});
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'Could not delete model job');
+    const defaults = await fetch('/api/defaults', {cache: 'no-store'}).then((result) => result.json());
+    renderModelJobs(defaults.model_jobs);
+    setFormMessage('Saved model job deleted.', 'success');
+  } catch (error) { setFormMessage(error.message, 'error'); }
+});
 
 async function loadDefaults() {
   const response = await fetch('/api/defaults', { cache: 'no-store' });
