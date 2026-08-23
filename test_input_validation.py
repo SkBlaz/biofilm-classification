@@ -80,13 +80,18 @@ class TestInputValidation(unittest.TestCase):
                     "eigen-SUMMARYDiffGlobal.tsv_mean.txt": [3.0],
                     "globalMean-SUMMARYDiffGlobal.tsv_mean.txt": [4.0],
                     "mdiffs-SUMMARYDiffGlobal.tsv_mean.txt": [5.0],
+                    "OptimalThreshold-SUMMARYCustomAlgos.tsv_mean.txt": [0.2],
+                    "ObjectSizeMean-SUMMARYCustomAlgos.tsv_mean.txt": [12.0],
+                    "NearestNeighborDistanceMean-SUMMARYCustomAlgos.tsv_mean.txt": [3.0],
+                    "VoidSizeLargest-SUMMARYCustomAlgos.tsv_mean.txt": [30.0],
+                    "BiomassCenterOfMassHeight-SUMMARYCustomAlgos.tsv_mean.txt": [4.0],
                     "external_score": [6.0],
                 }
             ).to_csv(path, sep="\t", index=False)
 
             report = validate_feature_table(path)
 
-            self.assertEqual(report["microics_features"], 5)
+            self.assertEqual(report["microics_features"], 10)
             self.assertEqual(report["external_features"], 1)
             self.assertTrue(report["ok"])
 

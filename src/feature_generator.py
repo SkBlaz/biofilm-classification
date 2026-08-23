@@ -3,13 +3,15 @@ import logging
 import math
 import os
 import warnings
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import multipagetiff as mtif
 import numba
 import numpy as np
 import pandas as pd
-from scipy.ndimage import label
+from scipy.ndimage import center_of_mass, label
+from scipy.spatial import cKDTree
 
 warnings.simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 
@@ -31,6 +33,10 @@ ch.setFormatter(formatter)
 logger.addHandler(ch)
 
 CONNECTION_KERNEL = np.ones((3, 3), dtype=np.int32)
+
+# Keep the historical threshold grid so existing generated columns remain
+# compatible with previously prepared feature tables.
+SEGMENTATION_THRESHOLDS = np.arange(0.01, 0.3, 0.01)
 
 DEFAULT_VOXEL_DIMENSIONS = (0.13, 0.13, 0.5)
 
@@ -105,10 +111,8 @@ def calculate_spatial_spreading(image_stack):
 
 
 def get_cell_count(intensity_matrix, threshold=0.3, visualizations=False):
-    norm_mat = intensity_matrix / np.max(intensity_matrix)
-    norm_mat[np.where(norm_mat > threshold)] = 1
-    norm_mat[np.where(norm_mat <= threshold)] = 0
-    labeled, ncomponents = label(norm_mat, CONNECTION_KERNEL)
+    norm_mat = normalize_intensity(intensity_matrix)
+    labeled, ncomponents = label(norm_mat > threshold, CONNECTION_KERNEL)
 
     if visualizations:
         plt.imshow(labeled)
@@ -116,6 +120,157 @@ def get_cell_count(intensity_matrix, threshold=0.3, visualizations=False):
         plt.clf()
 
     return ncomponents, labeled
+
+
+def get_cell_count_only(intensity_matrix: np.ndarray, threshold: float, workspace: np.ndarray) -> int:
+    """Count components using a caller-owned label buffer.
+
+    The threshold scan calls this hundreds of times per image. Reusing the
+    output buffer avoids retaining a large temporary label array for every
+    candidate threshold.
+    """
+    norm_mat = normalize_intensity(intensity_matrix)
+    return int(label(norm_mat > threshold, CONNECTION_KERNEL, output=workspace))
+
+
+def normalize_intensity(intensity_matrix: np.ndarray) -> np.ndarray:
+    """Normalize an image to ``[0, 1]`` without failing on empty images."""
+    image = np.asarray(intensity_matrix, dtype=float)
+    maximum = np.nanmax(image) if image.size else 0.0
+    if not np.isfinite(maximum) or maximum <= 0:
+        return np.zeros_like(image, dtype=float)
+    return np.nan_to_num(image / maximum, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def optimal_threshold_from_counts(thresholds: np.ndarray, counts: np.ndarray) -> float:
+    """Return the threshold at the peak of a raw connected-component curve.
+
+    ``np.argmax`` deliberately chooses the first threshold for a plateau. It
+    is the conservative end of a plateau and keeps the selected segmentation
+    reproducible when several thresholds produce the same count.
+    """
+    thresholds = np.asarray(thresholds, dtype=float)
+    counts = np.asarray(counts, dtype=float)
+    if thresholds.ndim != 1 or counts.ndim != 1 or thresholds.size != counts.size or not thresholds.size:
+        raise ValueError("thresholds and counts must be non-empty one-dimensional arrays of equal length")
+    finite_counts = np.where(np.isfinite(counts), counts, -np.inf)
+    if np.all(np.isneginf(finite_counts)):
+        return float(thresholds[0])
+    return float(thresholds[int(np.argmax(finite_counts))])
+
+
+def _summary(values: np.ndarray, prefix: str, include_min: bool = False) -> dict[str, float]:
+    """Create stable scalar summaries for a variable-length distribution."""
+    values = np.asarray(values, dtype=float)
+    if values.size == 0:
+        result = {
+            f"{prefix}Mean": 0.0,
+            f"{prefix}Median": 0.0,
+            f"{prefix}Std": 0.0,
+            f"{prefix}Largest": 0.0,
+        }
+        if include_min:
+            result[f"{prefix}Min"] = 0.0
+        return result
+    result = {
+        f"{prefix}Mean": float(np.mean(values)),
+        f"{prefix}Median": float(np.median(values)),
+        f"{prefix}Std": float(np.std(values)),
+        f"{prefix}Largest": float(np.max(values)),
+    }
+    if include_min:
+        result[f"{prefix}Min"] = float(np.min(values))
+    return result
+
+
+def object_size_features(labeled_image: np.ndarray) -> dict[str, float]:
+    """Summarize foreground object sizes in pixels, excluding label 0."""
+    _, sizes = np.unique(labeled_image[labeled_image > 0], return_counts=True)
+    result = {"OptimalObjectCount": float(sizes.size)}
+    result.update(_summary(sizes, "ObjectSize"))
+    return result
+
+
+def nearest_neighbor_features(labeled_image: np.ndarray) -> dict[str, float]:
+    """Summarize each object's nearest centroid distance in pixels."""
+    object_labels = np.unique(labeled_image[labeled_image > 0])
+    if object_labels.size < 2:
+        distances = np.array([], dtype=float)
+    else:
+        centroids = np.asarray(center_of_mass(labeled_image > 0, labeled_image, object_labels), dtype=float)
+        distances = cKDTree(centroids).query(centroids, k=2)[0][:, 1]
+    return _summary(distances, "NearestNeighborDistance", include_min=True)
+
+
+def void_size_features(labeled_image: np.ndarray) -> dict[str, float]:
+    """Summarize connected empty-region sizes in pixels.
+
+    The zero label is biomass in this inverse segmentation and is therefore
+    excluded from the void distribution.
+    """
+    void_labels, sizes = np.unique(label(labeled_image == 0, CONNECTION_KERNEL)[0], return_counts=True)
+    sizes = sizes[void_labels > 0]
+    result = {"VoidCount": float(sizes.size)}
+    result.update(_summary(sizes, "VoidSize"))
+    return result
+
+
+def optimal_segmentation_features(labeled_image: np.ndarray) -> dict[str, float]:
+    """Return object, nearest-neighbour, and pore summaries for one layer."""
+    features = {}
+    features.update(object_size_features(labeled_image))
+    features.update(nearest_neighbor_features(labeled_image))
+    features.update(void_size_features(labeled_image))
+    return features
+
+
+def biomass_height_features(labeled_layers: list[np.ndarray]) -> dict[str, float]:
+    """Calculate biomass-weighted centre height and vertical spread.
+
+    Heights are reported in zero-based layer-index units, matching the z
+    coordinate used by the image stack. Empty stacks return zeroes.
+    """
+    layer_biomass = np.asarray([np.count_nonzero(layer) for layer in labeled_layers], dtype=float)
+    total_biomass = float(layer_biomass.sum())
+    if total_biomass == 0 or layer_biomass.size == 0:
+        return {"BiomassCenterOfMassHeight": 0.0, "BiomassVerticalSpread": 0.0}
+    z_positions = np.arange(layer_biomass.size, dtype=float)
+    center = float(np.average(z_positions, weights=layer_biomass))
+    spread = float(np.sqrt(np.average((z_positions - center) ** 2, weights=layer_biomass)))
+    return {"BiomassCenterOfMassHeight": center, "BiomassVerticalSpread": spread}
+
+
+def save_segmentation_diagnostics(
+    normalized_layers: list[np.ndarray],
+    thresholds: np.ndarray,
+    counts: np.ndarray,
+    outfolder: str,
+    image_name: str,
+    optimal_threshold: float,
+) -> None:
+    """Save the count curve and one binary mask for every candidate threshold."""
+    diagnostic_dir = Path(outfolder) / "segmentation_diagnostics" / Path(image_name).stem
+    diagnostic_dir.mkdir(parents=True, exist_ok=True)
+    representative_index = int(np.argmax([np.sum(layer) for layer in normalized_layers])) if normalized_layers else 0
+    representative = normalized_layers[representative_index] if normalized_layers else np.zeros((1, 1))
+
+    curve = pd.DataFrame({"threshold": thresholds, "raw_count": counts, "is_optimal": thresholds == optimal_threshold})
+    curve.to_csv(diagnostic_dir / "threshold_curve.tsv", sep="\t", index=False)
+
+    plt.figure(figsize=(7, 4))
+    plt.plot(thresholds, counts, marker="o")
+    plt.axvline(optimal_threshold, color="tab:red", linestyle="--", label=f"optimal={optimal_threshold:.2f}")
+    plt.xlabel("Normalized intensity threshold")
+    plt.ylabel("Connected-component count")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(diagnostic_dir / "raw_counts_vs_threshold.png", dpi=180)
+    plt.close()
+
+    for threshold in thresholds:
+        mask = normalize_intensity(representative) > threshold
+        threshold_label = f"{threshold:.2f}".replace(".", "p")
+        plt.imsave(diagnostic_dir / f"mask_threshold_{threshold_label}.png", mask, cmap="gray", vmin=0, vmax=1)
 
 
 def get_transition_matrix(raw_image: np.ndarray, n_bins=None) -> np.ndarray:
@@ -233,78 +388,111 @@ def gpt_calculate_texture_features(image_stack: np.ndarray, distances=[1], angle
     return pd.DataFrame(texture_features)
 
 
+def gpt_thresholded_volume(binary_mask: np.ndarray, voxel_size: float) -> float:
+    """Calculate the physical volume represented by foreground voxels."""
+    return float(np.count_nonzero(binary_mask) * voxel_size)
+
+
 def segment(filepath, outfolder):
     image = mtif.read_stack(filepath, units="um")
 
-    actual_final_df = []
     all_values = []
     all_evalues = []
 
     # lower bound for defining "biomass"
     biomass_thr = 0.03
     biomass_counts_per_layers = []
-    all_images = []
+    normalized_layers = []
 
-    for enx, sub_image in enumerate(image):
+    for enx, original_sub_image in enumerate(image):
         print(f"Processing sub-image {enx} for {filepath} ..")
-        all_images.append(sub_image / np.max(sub_image))
+        sub_image = np.asarray(original_sub_image, dtype=float)
         if len(sub_image.shape) == 3:
             sub_image = np.median(sub_image, axis=-1)
-            sub_image = sub_image / np.max(sub_image)
+        sub_image = normalize_intensity(sub_image)
+        normalized_layers.append(sub_image)
+        all_evalues.append(1)
+        all_values.extend(sub_image.reshape(-1))
 
-        max_eig = 1  # np.max(eigenvalues).real
-        all_pixels_layer = sub_image.shape[0] * sub_image.shape[1]
-        all_evalues.append(max_eig)
-        row = {}
+    if not normalized_layers:
+        raise ValueError(f"No image layers found in {filepath}")
 
-        # stevilo
-        for threshold in np.arange(0.01, 0.3, 0.01):
-            cell_count, labeled = get_cell_count(sub_image, threshold)
-            row[f"counts(inten<{threshold}"] = cell_count
+    threshold_counts_by_layer = []
+    normalized_threshold_counts_by_layer = []
+    threshold_voxel_counts_by_layer = []
+    for sub_image in normalized_layers:
+        raw_counts = []
+        normalized_counts = []
+        voxel_counts = []
+        component_workspace = np.empty(sub_image.shape, dtype=np.int32)
+        for threshold in SEGMENTATION_THRESHOLDS:
+            raw_counts.append(get_cell_count_only(sub_image, threshold, component_workspace))
+            voxel_counts.append(int(np.count_nonzero(component_workspace)))
 
             tmp_img = (sub_image - np.mean(sub_image)) / (np.max(sub_image) - np.min(sub_image))
+            normalized_counts.append(get_cell_count_only(tmp_img, threshold, component_workspace))
+        threshold_counts_by_layer.append(raw_counts)
+        normalized_threshold_counts_by_layer.append(normalized_counts)
+        threshold_voxel_counts_by_layer.append(voxel_counts)
 
-            row[f"counts(Norminten<{threshold}"], _ = get_cell_count(tmp_img, threshold)
+    raw_count_curve = np.sum(np.asarray(threshold_counts_by_layer), axis=0)
+    optimal_threshold = optimal_threshold_from_counts(SEGMENTATION_THRESHOLDS, raw_count_curve)
+    optimal_labels = [get_cell_count(layer, optimal_threshold)[1] for layer in normalized_layers]
+    optimal_image_volume = sum(gpt_thresholded_volume(layer > 0, voxel_size) for layer in optimal_labels)
+    height_features = biomass_height_features(optimal_labels)
 
-        tmp_count, _ = get_cell_count(sub_image, biomass_thr)
-        biomass_counts_per_layers.append(tmp_count)
+    save_segmentation_diagnostics(
+        normalized_layers,
+        SEGMENTATION_THRESHOLDS,
+        raw_count_curve,
+        outfolder,
+        os.path.basename(filepath),
+        optimal_threshold,
+    )
 
-        # Intensity range
+    actual_final_df = []
+    for layer_index, sub_image in enumerate(normalized_layers):
+        row = {}
+        raw_counts = threshold_counts_by_layer[layer_index]
+        normalized_counts = normalized_threshold_counts_by_layer[layer_index]
+
+        for threshold_index, (threshold, raw_count, normalized_count) in enumerate(
+            zip(SEGMENTATION_THRESHOLDS, raw_counts, normalized_counts)
+        ):
+            # Preserve the historical raw and normalized count feature names.
+            row[f"counts(inten<{threshold}"] = raw_count
+            row[f"counts(Norminten<{threshold}"] = normalized_count
+            row[f"GPTVolumeThr{threshold}"] = float(threshold_voxel_counts_by_layer[layer_index][threshold_index] * voxel_size)
+
+        optimal_label = optimal_labels[layer_index]
+        row["OptimalThreshold"] = optimal_threshold
+        row.update(optimal_segmentation_features(optimal_label))
+        row["GPTVolumeOptimalThreshold"] = gpt_thresholded_volume(optimal_label > 0, voxel_size)
+        row["GPTVolumeOptimalThresholdImage"] = optimal_image_volume
+        row.update(height_features)
+
+        biomass_count, _ = get_cell_count(sub_image, biomass_thr)
+        biomass_counts_per_layers.append(biomass_count)
+
+        # Intensity statistics
         row["diff"] = np.max(sub_image) - np.min(sub_image)
-
-        # Max intensity
         row["max"] = np.max(sub_image)
-
-        # Median value
         row["med"] = np.median(sub_image)
-
-        # Stddev
         row["std"] = np.std(sub_image)
-
-        # Mean pixel
         row["mean"] = np.mean(sub_image)
-
-        # Min pixel
         row["min"] = np.min(sub_image)
+        row["minProp"] = len(np.where(sub_image < row["mean"])[0]) / sub_image.size
 
-        # Emptyness
-        row["minProp"] = len(np.where(sub_image < row["mean"])[0]) / (sub_image.shape[0] * sub_image.shape[1])
-
-        # GPT-generated
+        # GPT-generated legacy features
         row["GPTFractalDim"] = gpt_fractal_dimension(sub_image)
         row["GPTVolume"] = gpt_calculate_volume(sub_image, voxel_size)
-        # row['GPTCompactness'] = gpt_measure_compactness(sub_image, voxel_size)
-        # row['GPTSurface'] = gpt_calculate_surface_area(sub_image)
-
         actual_final_df.append(row)
-        for j in sub_image.reshape(-1):
-            all_values.append(j)
 
     print(f"Computing global features for {filepath} ..")
     all_values = np.array(all_values)
     out_df = pd.DataFrame(actual_final_df)
 
-    for threshold in np.arange(0.01, 0.3, 0.01):
+    for threshold in SEGMENTATION_THRESHOLDS:
         pixel_count = out_df[f"counts(inten<{threshold}"].sum()
         biovolume = (pixel_count * voxel_size) / 134**2
         out_df[f"BioVolumeThr{threshold}"] = biovolume  # inspired by (10.1099/00221287-146-10-2395)
@@ -312,6 +500,7 @@ def segment(filepath, outfolder):
     for col in out_df.columns:
         out_df[f"{col}Normalized"] = 100 * (out_df[col] / out_df[col].sum())
 
+    all_pixels_layer = normalized_layers[0].size
     out_df["SubstratumRelativeCoverage"] = 100 * (
         biomass_counts_per_layers[0] / all_pixels_layer
     )  # inspired by (doi:10.1088/1367-2630/17/3/033017)
@@ -331,7 +520,7 @@ def segment(filepath, outfolder):
     out_df["SpreadingTotal"] = total_spreading
 
     try:
-        global_texture_features = gpt_calculate_texture_features(all_images).mean(axis=0)
+        global_texture_features = gpt_calculate_texture_features(np.asarray(normalized_layers)).mean(axis=0)
         for k, v in global_texture_features.items():
             out_df[k] = v
     except Exception:
@@ -339,16 +528,15 @@ def segment(filepath, outfolder):
         pass
 
     # Mean thickness - basically highest vertical line per pixel - avg-d
-    image_space = np.array(all_images)
+    image_space = np.asarray(normalized_layers)
 
     # For each threshold, compute derived (vol) features
-    for min_thr in np.arange(0.01, 0.3, 0.01):
+    for min_thr in SEGMENTATION_THRESHOLDS:
         thresholded_matrices = []
         thicknesses = []
 
         for el in image_space:
-            el[el <= min_thr] = 0
-            thresholded_matrices.append(el)
+            thresholded_matrices.append(np.where(el > min_thr, el, 0))
 
         substrate_matrix = thresholded_matrices[0]
         where_biomass = np.where(substrate_matrix > 0)

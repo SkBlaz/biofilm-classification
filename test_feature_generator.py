@@ -4,7 +4,10 @@ Unit tests for feature_generator.py utility functions.
 """
 
 import sys
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -12,12 +15,20 @@ import numpy as np
 sys.path.insert(0, "src")
 
 from feature_generator import (
+    SEGMENTATION_THRESHOLDS,
+    biomass_height_features,
     calculate_spatial_spreading,
     get_cell_count,
     get_homogenity,
     get_transition_matrix,
+    nearest_neighbor_features,
+    object_size_features,
+    optimal_segmentation_features,
+    optimal_threshold_from_counts,
     read_voxel_dimensions,
     rgb2gray,
+    segment,
+    void_size_features,
 )
 
 
@@ -161,6 +172,73 @@ class TestGetCellCount(unittest.TestCase):
         # Background is counted as a component
         self.assertGreaterEqual(ncomponents, 1)
         self.assertEqual(labeled.shape, intensity_matrix.shape)
+
+
+class TestOptimalSegmentationFeatures(unittest.TestCase):
+    def test_optimal_threshold_is_at_count_peak(self):
+        thresholds = np.array([0.1, 0.2, 0.3])
+        counts = np.array([2, 7, 4])
+        self.assertEqual(optimal_threshold_from_counts(thresholds, counts), 0.2)
+
+    def test_object_and_void_distributions_exclude_zero_label(self):
+        labeled = np.array(
+            [
+                [1, 1, 0, 2, 2],
+                [1, 0, 0, 2, 0],
+                [0, 0, 0, 0, 0],
+            ]
+        )
+        objects = object_size_features(labeled)
+        self.assertEqual(objects["OptimalObjectCount"], 2)
+        self.assertEqual(objects["ObjectSizeMean"], 3.0)
+        self.assertEqual(objects["ObjectSizeLargest"], 3.0)
+
+        nearest = nearest_neighbor_features(labeled)
+        self.assertAlmostEqual(nearest["NearestNeighborDistanceMean"], 3.0)
+
+        voids = void_size_features(labeled)
+        self.assertEqual(voids["VoidCount"], 1)
+        self.assertEqual(voids["VoidSizeLargest"], 9.0)
+        self.assertEqual(set(optimal_segmentation_features(labeled)), set(objects) | set(nearest) | set(voids))
+
+    def test_height_features_are_biomass_weighted(self):
+        layers = [np.ones((2, 2), dtype=int), np.zeros((2, 2), dtype=int), np.ones((2, 2), dtype=int)]
+        features = biomass_height_features(layers)
+        self.assertEqual(features["BiomassCenterOfMassHeight"], 1.0)
+        self.assertEqual(features["BiomassVerticalSpread"], 1.0)
+
+    def test_segment_emits_new_features_and_diagnostics(self):
+        class FakeStack:
+            raw_images = np.zeros((3, 12, 12), dtype=np.uint16)
+
+            def __iter__(self):
+                layers = []
+                for z in range(3):
+                    layer = np.zeros((12, 12), dtype=np.uint16)
+                    layer[2:5, 2:5] = 1000 + z * 100
+                    layer[7:9, 8:10] = 3000
+                    layers.append(layer)
+                return iter(layers)
+
+        with tempfile.TemporaryDirectory() as output:
+            with patch("feature_generator.mtif.read_stack", return_value=FakeStack()):
+                segment("synthetic.tif", output)
+
+            generated = next(Path(output).glob("*CustomAlgos.txt"))
+            columns = generated.read_text(encoding="utf-8").splitlines()[0].split("\t")
+            self.assertIn("OptimalThreshold", columns)
+            self.assertIn("ObjectSizeMean", columns)
+            self.assertIn("NearestNeighborDistanceMean", columns)
+            self.assertIn("VoidSizeLargest", columns)
+            self.assertIn("GPTVolumeOptimalThreshold", columns)
+            self.assertIn("GPTVolumeOptimalThresholdImage", columns)
+            self.assertIn("BiomassCenterOfMassHeight", columns)
+            self.assertIn("BiomassVerticalSpread", columns)
+            self.assertEqual(sum(column.startswith("GPTVolumeThr") for column in columns), 2 * len(SEGMENTATION_THRESHOLDS))
+
+            diagnostic_dir = Path(output) / "segmentation_diagnostics" / "synthetic"
+            self.assertTrue((diagnostic_dir / "raw_counts_vs_threshold.png").exists())
+            self.assertEqual(len(list(diagnostic_dir.glob("mask_threshold_*.png"))), len(SEGMENTATION_THRESHOLDS))
 
     def test_multiple_components(self):
         """Test with multiple separated components."""
