@@ -324,9 +324,14 @@ h1 { margin-bottom:10px; font-size:31px; letter-spacing:-.035em; }
 .voxel-picker > small { display:block; margin-top:8px; color:var(--muted); font-size:10px; }
 .reset-button { min-height:34px; white-space:nowrap; }
 .upload-button { min-height:40px; width:100%; border-left:1px solid #cfddd5; border-radius:9px; }
+.model-management { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:10px; margin-top:10px; }
+.model-management .upload-button { width:100%; }
+.model-management .button { white-space:nowrap; }
+.model-management + .file-picker-status { display:block; margin-top:2px; }
 .file-row { width:100%; border-top:0; border-right:0; border-left:0; background:transparent; color:var(--ink); text-align:left; }
 a.button { display:inline-grid; place-items:center; text-decoration:none; }
 @media (max-width:620px) {
+  .model-management { grid-template-columns:1fr; gap:10px; }
   .brand .brand-logo { width:88px; height:37px; }
   .brand .brand-logo img { width:76px; }
   .panel-heading { align-items:flex-start; gap:12px; }

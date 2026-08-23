@@ -39,10 +39,27 @@ Available operations are:
 - **Generate labelled features**: upload labelled TIFFs and produce `results/datafile.tsv`.
 - **Generate unlabelled features**: upload inference TIFFs and produce `results/unknown_features.tsv`.
 - **Train models**: upload a complete labelled feature table and write rankings, reports, and models below `results/`.
-- **Inference**: choose an earlier persisted training job and upload either images or a compatible precomputed feature table. Predictions are written below `inference/`.
+- **Inference**: choose an earlier persisted training job and upload either images or a compatible precomputed feature table (only one of the two is required). Predictions are written below `inference/`.
 - **All together**: upload training and inference images and run generation, training, and inference sequentially.
 
 Completed output is available from the job’s **Download results ZIP** link. A failed computation changes only that job to `failed`; the server remains available for another request.
+
+The **Trained models** dropdown on the Inference step lists each training job by creation date and learner(s) used (for example "Aug 15 2026, 08:03 · All learners (5 models)"), not just its job ID, so you can pick the correct one at a glance. Inference automatically loads and evaluates every model saved in the chosen job — if that job was trained with **All learners**, every learner's predictions are reported side by side, so there is no separate "all learners" toggle at the inference step.
+
+### Participant FAQ
+
+- **Importing a pre-trained model:** open **Inference**, choose **Import .joblib model**, and select a model exported by MicroICS. The import creates a separate model job; select it in **Trained models** and provide either new images or a compatible feature table. If available, keep the matching `*_metadata.joblib` beside the model when transferring a complete job directory. A model is only compatible with the same feature names, preprocessing, and voxel dimensions used during training.
+- **Deleting old models:** select the model job in **Trained models** and click **Delete selected job**. This removes that job's models, inputs, outputs, and logs from the persisted data volume; it cannot be undone from the GUI.
+- **New job and downloads:** click **New job** before starting a genuinely separate analysis. This keeps uploads and outputs isolated by job. Existing jobs are not overwritten, and each job's ZIP contains only that job's output.
+- **Threshold-derived columns:** the classification bar labelled **Threshold-derived features only (subset)** is a deliberately separate comparison. It uses only columns created from thresholded measurements; it is useful for an ablation/comparison question, but it is not the default full-feature model and can be ignored when that hypothesis is not relevant.
+- **RF ablation:** the RF ranks all generated columns once, then evaluates increasing prefixes (1, 21, 41, …) with ordinary stratified folds. The dotted line in `ablation_rf.pdf` marks the first tested count whose later observed accuracies remain within 0.01 accuracy points; it is an interpretation aid, not an automatically selected optimum. A flat curve does not prove that the omitted features are biologically unimportant.
+- **Feature-value plots:** small gray dots are individual measurements. The orange diamonds are class means; boxplots show the median and interquartile range. Outliers are not drawn as large ambiguous circles.
+- **Feature compatibility:** do not assume any feature table can be used with any saved model. The table must contain `sampleName` and the exact numeric feature columns expected by the model; features derived from different image channels, voxel sizes, segmentation, or software versions may be scientifically or technically incompatible.
+- **Inference explanations:** the `explanations/` folder contains the all-class beeswarm, class-specific beeswarms, SHAP CSV files, overall feature importance, and compact per-feature importance plots for each class. SHAP values show contribution to a model output, not biological causation.
+
+### Sharing changes and extra interpretation scripts
+
+To propose a code change, create a branch on GitHub, commit the change, push the branch, open **New pull request**, choose the repository's `main` branch as the base, describe what changed and how it was tested, then request Blaž as reviewer. Keep analysis scripts that are reusable parts of MicroICS in the repository (for example under `scripts/` or `src/` with a short README); keep one-off participant notebooks, large data, and generated results in the project resources or an external archive, not in the source tree.
 
 Choosing a feature table selects the input only. No output folder needs to be selected: generated files appear in **Inspect results** in the browser, and **Download results ZIP** saves a copy to the browser’s configured download location. Internally, the job keeps them under `/data/jobs/<job-id>/output/`.
 

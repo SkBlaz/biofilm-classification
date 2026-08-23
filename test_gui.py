@@ -21,6 +21,7 @@ import gui.execution as execution
 from gui.app import (
     Handler,
     create_results_zip,
+    delete_job,
     preflight_error,
     receive_upload,
     reset_pipeline,
@@ -56,6 +57,21 @@ def training_table() -> bytes:
 
 
 class TestJobUploads(unittest.TestCase):
+    def test_model_upload_is_stored_as_a_model_job(self):
+        with temporary_jobs_root():
+            selected = receive_upload(upload_handler("model.joblib", b"model"), "model", {".joblib"}, "model files")
+            paths = job_paths(selected["job_id"])
+            self.assertEqual((paths.results / "models" / "model.joblib").read_bytes(), b"model")
+            self.assertTrue(app.model_jobs())
+
+    def test_delete_job_removes_only_selected_job(self):
+        with temporary_jobs_root():
+            first = create_job()
+            second = create_job()
+            delete_job(first.job_id)
+            self.assertFalse(first.root.exists())
+            self.assertTrue(second.root.exists())
+
     def test_jobs_have_isolated_input_work_and_output_directories(self):
         with temporary_jobs_root():
             first = create_job()

@@ -12,6 +12,7 @@ import pandas as pd
 from src.benchmark_outputs import (
     _configuration_key,
     _model_report_name,
+    ablation_plateau,
     canonical_model_name,
     write_ablation_plot,
     write_classification_plot,
@@ -22,6 +23,10 @@ from src.benchmark_outputs import (
 
 
 class TestBenchmarkOutputNames(unittest.TestCase):
+    def test_ablation_plateau_returns_first_stable_tested_count(self):
+        frame = pd.DataFrame({"top_n": [1, 21, 41, 61], "accuracy": [0.55, 0.70, 0.705, 0.70]})
+        self.assertEqual(ablation_plateau(frame), 21)
+
     def test_plot_configuration_keeps_all_columns_and_threshold_only_separate(self):
         all_columns = pd.Series({"n_components": "all", "thr_features": True})
         threshold_only = pd.Series({"n_components": "all", "thr_features": False})

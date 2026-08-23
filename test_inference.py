@@ -96,6 +96,17 @@ class TestLoadModels(unittest.TestCase):
         self.assertIn("test_model", models)
         self.assertIn("model2", models)
 
+    def test_imported_model_with_generic_filename(self):
+        """Imported .joblib files need not use the training filename convention."""
+        model = RandomForestClassifier(n_estimators=2, random_state=42)
+        model.fit([[1, 2], [3, 4]], [0, 1])
+        joblib.dump(model, os.path.join(self.temp_dir, "model.joblib"))
+
+        models, metadata = load_models(self.temp_dir)
+
+        self.assertIn("model", models)
+        self.assertNotIn("model", metadata)
+
 
 class TestFormatPredictions(unittest.TestCase):
     """Test prediction formatting functionality."""
@@ -205,7 +216,7 @@ class TestValidateCliInputs(unittest.TestCase):
             self._create_test_file(images_dir, "sample.tif")
             with self.assertRaises(ValueError) as context:
                 validate_cli_inputs(models_dir, images_dir)
-            self.assertIn("No model files matching '*_model.joblib'", str(context.exception))
+            self.assertIn("No model .joblib files were found", str(context.exception))
 
     def test_missing_tif_files(self):
         with tempfile.TemporaryDirectory() as models_dir, tempfile.TemporaryDirectory() as images_dir:

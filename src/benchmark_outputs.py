@@ -27,6 +27,19 @@ MODEL_DISPLAY_NAMES = {
 LEGACY_SVD_COMPONENTS = {16, 32, 64, 128, 256, 512}
 
 
+def ablation_plateau(frame: pd.DataFrame, tolerance: float = 0.01, window: int = 2) -> float | None:
+    """Return the first tested subset whose later observed scores stay nearby."""
+    if frame.empty or window < 1:
+        return None
+    ordered = frame.sort_values("top_n").reset_index(drop=True)
+    for index in range(len(ordered) - window):
+        current = float(ordered.loc[index, "accuracy"])
+        later = ordered.loc[index + 1 :, "accuracy"].astype(float)
+        if later.max() - current <= tolerance and later.min() >= current - tolerance:
+            return float(ordered.loc[index, "top_n"])
+    return None
+
+
 def canonical_model_name(model_name: object) -> str:
     """Return the stable learner key used by current and legacy result files."""
     raw_name = re.sub(r"\s+", " ", str(model_name)).strip()
@@ -125,7 +138,7 @@ def _configuration_display(key: str) -> str:
     if key in {"all", "all_columns"}:
         return "All generated columns"
     if key == "threshold_only":
-        return "Threshold-derived columns only"
+        return "Threshold-derived features only (subset)"
     match = re.fullmatch(r"svd_(.+?)(?:_(all_columns|threshold_only))?", key)
     if match:
         suffix = "" if match.group(2) in {None, "all_columns"} else " (threshold-derived input)"
@@ -282,6 +295,7 @@ def write_ablation_plot(
     if frame.empty:
         return None
     best = frame.loc[frame["accuracy"].idxmax()]
+    plateau = ablation_plateau(frame)
     family_aware = "total_feature_families" in frame and frame["total_feature_families"].notna().any()
     if family_aware:
         total_features = int(frame["total_feature_families"].dropna().iloc[0])
@@ -298,10 +312,21 @@ def write_ablation_plot(
     sns.lineplot(data=frame, x="top_n", y="accuracy")
     plt.vlines(best["top_n"], 0, best["accuracy"], color="red", linestyle="dashed")
     plt.plot(best["top_n"], best["accuracy"], "ro")
+    unit = "feature families" if family_aware else "generated columns"
+    if plateau is not None:
+        plt.axvline(plateau, color="#356b8c", linestyle="dotted")
+        plt.annotate(
+            f"Stationary phase begins\n{int(plateau)} tested {unit}",
+            xy=(plateau, 0.03),
+            xycoords=("data", "axes fraction"),
+            xytext=(6, 8),
+            textcoords="offset points",
+            color="#356b8c",
+            fontsize=9,
+        )
     selected_columns = (
         f"; {int(best['selected_columns'])} generated columns" if family_aware and pd.notna(best.get("selected_columns")) else ""
     )
-    unit = "feature families" if family_aware else "generated columns"
     plt.annotate(
         "Highest observed subset (exploratory)\n"
         f"{int(best['top_n'])} of {total_features} {unit}{selected_columns}\n"
@@ -400,8 +425,10 @@ def write_feature_boxplots(data_file: str | Path, rankings_file: str | Path, out
         if values.empty:
             continue
         plt.figure(figsize=(max(6, len(values["label"].unique()) * 1.2), 5))
-        sns.boxplot(data=values, x="label", y="value", color="#6c8ebf")
+        sns.boxplot(data=values, x="label", y="value", color="#6c8ebf", showfliers=False)
         sns.stripplot(data=values, x="label", y="value", color="#202b3c", alpha=0.35, size=3)
+        means = values.groupby("label", sort=False, as_index=False)["value"].mean()
+        sns.scatterplot(data=means, x="label", y="value", color="#f28e2b", marker="D", s=55, label="Mean", zorder=5)
         plt.title(f"{feature} by class")
         plt.xlabel("Class")
         plt.ylabel(feature)

@@ -626,7 +626,7 @@ def do_classification_simple(
                         if component_setting.startswith("svd_")
                         else "all generated columns"
                         if component_setting == "all_columns"
-                        else "threshold-derived columns only"
+                        else "threshold-derived features only (subset)"
                     )
                     emit_pipeline_progress(
                         phase_label,

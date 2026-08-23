@@ -30,6 +30,9 @@ const modelJob = document.querySelector('#modelJob');
 const helpModal = document.querySelector('#helpModal');
 const helpModalTitle = document.querySelector('#helpModalTitle');
 const helpModalText = document.querySelector('#helpModalText');
+const modelFilePicker = document.querySelector('#modelFilePicker');
+const modelFileStatus = document.querySelector('#modelFileStatus');
+const deleteModelJobButton = document.querySelector('#deleteModelJobButton');
 
 const stepIcons = { features: '1', validate: '✓', models: '2', reports: '▧', inference: '3' };
 let uploadJobId = '';
@@ -117,11 +120,38 @@ function setWorkflow(workflow) {
   document.querySelector('#modelJobField').classList.toggle('hidden', workflow !== 'inference');
   document.querySelector('#modelFields').classList.toggle('hidden', !['train', 'full'].includes(workflow));
   document.querySelector('#voxelFields').classList.toggle('hidden', workflow === 'train');
+
+  // Only 'inference' lets users choose images OR a feature table; other workflows require one specific input.
+  const inferenceStatus = document.querySelector('#inferenceFileStatus');
+  const featureStatus = document.querySelector('#featureFileStatus');
+  if (!inferenceUploadCount && inferenceStatus) {
+    inferenceStatus.textContent = workflow === 'inference' ? 'No inference images uploaded. Optional if you upload a feature table below.' : 'No inference images uploaded.';
+  }
+  if (!featureFileName && featureStatus) {
+    featureStatus.textContent = workflow === 'inference' ? 'No feature table uploaded. Optional if you upload inference images above.' : 'No feature table uploaded.';
+  }
 }
 
 document.querySelectorAll('input[name="workflow"]').forEach((input) => input.addEventListener('change', (event) => {
   setWorkflow(event.target.value);
 }));
+
+const LEARNER_LABELS = { rf: 'Random Forest', dummy: 'Majority baseline', decisiontree: 'Decision tree', logistic: 'Logistic regression', xgb: 'XGBoost', gridsearch: 'KNN grid search' };
+
+function formatJobTimestamp(isoString) {
+  if (!isoString) return 'unknown time';
+  const parsed = new Date(isoString);
+  if (Number.isNaN(parsed.getTime())) return 'unknown time';
+  return parsed.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function describeModelJob(job) {
+  const modelCount = job.model_count || 0;
+  const learnerLabel = job.all_learners
+    ? `All learners (${modelCount} model${modelCount === 1 ? '' : 's'})`
+    : (LEARNER_LABELS[job.learner] || job.learner || `${modelCount} model${modelCount === 1 ? '' : 's'}`);
+  return `${formatJobTimestamp(job.created_at)} · ${learnerLabel}`;
+}
 
 function renderModelJobs(jobs) {
   const selected = modelJob.value;
@@ -129,9 +159,47 @@ function renderModelJobs(jobs) {
     modelJob.innerHTML = '<option value="">No trained model jobs available</option>';
     return;
   }
-  modelJob.innerHTML = `<option value="">Select a training job</option>${jobs.map((job) => `<option value="${escapeHtml(job.job_id)}">${escapeHtml(job.job_id.slice(0, 8))} · ${escapeHtml(job.workflow)} · ${escapeHtml(job.status)}</option>`).join('')}`;
+  modelJob.innerHTML = `<option value="">Select a training job</option>${jobs.map((job) => `<option value="${escapeHtml(job.job_id)}" title="${escapeHtml(job.job_id)}">${escapeHtml(describeModelJob(job))} · ${escapeHtml(job.job_id.slice(0, 8))}</option>`).join('')}`;
   if ([...modelJob.options].some((option) => option.value === selected)) modelJob.value = selected;
+  deleteModelJobButton.disabled = !modelJob.value;
 }
+
+modelJob.addEventListener('change', () => { deleteModelJobButton.disabled = !modelJob.value; });
+
+modelFilePicker.addEventListener('change', async () => {
+  const files = [...modelFilePicker.files];
+  if (!files.length) return;
+  try {
+    let payload = null;
+    for (const [index, file] of files.entries()) {
+      modelFileStatus.textContent = `Importing ${index + 1} of ${files.length}: ${file.name}…`;
+      const headers = {'Content-Type': file.type || 'application/octet-stream', 'X-Upload-Name': file.name, 'X-Upload-Kind': 'model'};
+      if (payload?.job_id) headers['X-Job-ID'] = payload.job_id;
+      const response = await fetch('/api/upload', { method: 'POST', headers, body: file });
+      payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Model import failed');
+    }
+    const defaults = await fetch('/api/defaults', {cache: 'no-store'}).then((result) => result.json());
+    renderModelJobs(defaults.model_jobs);
+    modelJob.value = payload.job_id;
+    deleteModelJobButton.disabled = false;
+    modelFileStatus.textContent = `Imported ${payload.file}. Select this job for inference.`;
+  } catch (error) { modelFileStatus.textContent = error.message; }
+  finally { modelFilePicker.value = ''; }
+});
+
+deleteModelJobButton.addEventListener('click', async () => {
+  const jobId = modelJob.value;
+  if (!jobId || !window.confirm('Delete this saved model job and all its results?')) return;
+  try {
+    const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, {method: 'DELETE'});
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'Could not delete model job');
+    const defaults = await fetch('/api/defaults', {cache: 'no-store'}).then((result) => result.json());
+    renderModelJobs(defaults.model_jobs);
+    setFormMessage('Saved model job deleted.', 'success');
+  } catch (error) { setFormMessage(error.message, 'error'); }
+});
 
 async function loadDefaults() {
   const response = await fetch('/api/defaults', { cache: 'no-store' });

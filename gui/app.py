@@ -9,6 +9,7 @@ import math
 import mimetypes
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -179,6 +180,11 @@ def write_job_metadata(job_id: str, **updates):
     temporary.replace(paths.root / "job.json")
 
 
+def model_file_candidates(models_dir: Path) -> list[Path]:
+    """Find model joblibs while ignoring optional metadata companions."""
+    return sorted(path for path in models_dir.glob("*.joblib") if not path.name.endswith("_metadata.joblib"))
+
+
 def list_jobs() -> list[dict]:
     JOBS_ROOT.mkdir(parents=True, exist_ok=True)
     jobs = []
@@ -190,7 +196,8 @@ def list_jobs() -> list[dict]:
         except (ValueError, FileNotFoundError):
             continue
         metadata = read_job_metadata(root.name)
-        has_models = any((paths.results / "models").glob("*_model.joblib"))
+        model_files = model_file_candidates(paths.results / "models")
+        has_models = bool(model_files)
         has_output = any(path.is_file() for path in paths.output.rglob("*"))
         jobs.append(
             {
@@ -202,6 +209,10 @@ def list_jobs() -> list[dict]:
                 "has_models": has_models,
                 "has_output": has_output,
                 "download_url": f"/api/jobs/{root.name}/download" if has_output else None,
+                "learner": metadata.get("learner"),
+                "all_learners": bool(metadata.get("all_learners")),
+                "model_count": len(model_files),
+                "model_names": [path.name.replace("_model.joblib", "").replace(".joblib", "") for path in model_files],
             }
         )
     return jobs
@@ -211,12 +222,25 @@ def model_jobs() -> list[dict]:
     return [job for job in list_jobs() if job["has_models"]]
 
 
+def delete_job(job_id: str) -> None:
+    """Delete one persisted job, never a path outside the jobs root."""
+    paths = job_paths(validate_job_id(job_id))
+    with state_lock:
+        if runtime["active_job_id"] == job_id and state["status"] in {"starting", "running"}:
+            raise ValueError("Stop the active job before deleting it")
+    root = paths.root.resolve()
+    if root.parent != JOBS_ROOT.resolve() or root == JOBS_ROOT.resolve():
+        raise ValueError("Invalid job path")
+    shutil.rmtree(root)
+
+
 def upload_directory(job_id: str, kind: str) -> Path:
     paths = job_paths(job_id, create=True)
     directories = {
         "training": paths.training_images,
         "inference": paths.inference_images,
         "feature": paths.feature_files,
+        "model": paths.results / "models",
     }
     try:
         return directories[kind]
@@ -331,7 +355,7 @@ def validate_config(raw: dict) -> dict:
         validate_job_id(model_job_id)
         model_paths = job_paths(model_job_id)
         models_dir = model_paths.results / "models"
-        if not any(models_dir.glob("*_model.joblib")):
+        if not model_file_candidates(models_dir):
             raise ValueError("Select a completed training job containing models")
     else:
         models_dir = paths.results / "models"
@@ -727,7 +751,14 @@ def start_pipeline(raw_config: dict) -> tuple[bool, str | None]:
                 "download_url": None,
             }
         )
-    write_job_metadata(job_id, status="starting", workflow=config["workflow"], error=None)
+    write_job_metadata(
+        job_id,
+        status="starting",
+        workflow=config["workflow"],
+        error=None,
+        learner=config.get("learner"),
+        all_learners=bool(config.get("all_learners")),
+    )
     thread = threading.Thread(target=run_pipeline, args=(config, job_id), daemon=True)
     with state_lock:
         runtime["thread"] = thread
@@ -898,7 +929,10 @@ class Handler(BaseHTTPRequestHandler):
                     )
                 else:
                     kind = self.headers.get("X-Upload-Kind", "training")
-                    result = receive_upload(self, kind)
+                    if kind == "model":
+                        result = receive_upload(self, kind, {".joblib"}, "model .joblib files")
+                    else:
+                        result = receive_upload(self, kind)
                 json_response(self, result, HTTPStatus.CREATED)
             except ValueError as exc:
                 json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -926,6 +960,18 @@ class Handler(BaseHTTPRequestHandler):
             json_response(self, snapshot())
             return
         self.send_error(HTTPStatus.NOT_FOUND)
+
+    def do_DELETE(self):  # noqa: N802
+        match = re.fullmatch(r"/api/jobs/([a-f0-9]{32})", urlparse(self.path).path)
+        if not match:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        try:
+            delete_job(match.group(1))
+        except (FileNotFoundError, ValueError, OSError) as exc:
+            json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        json_response(self, {"deleted": match.group(1)})
 
     def serve_file(self, path: Path, download_name: str | None = None):
         try:
