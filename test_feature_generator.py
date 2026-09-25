@@ -3,8 +3,12 @@
 Unit tests for feature_generator.py utility functions.
 """
 
+import json
 import sys
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -18,6 +22,7 @@ from feature_generator import (
     get_transition_matrix,
     read_voxel_dimensions,
     rgb2gray,
+    segment,
 )
 
 
@@ -119,6 +124,15 @@ class TestCalculateSpatialSpreading(unittest.TestCase):
         self.assertGreater(Sz, 0.0)
         self.assertGreater(Sxyz, 0.0)
 
+    def test_spreading_uses_mask_voxel_calibration_per_axis(self):
+        mask = np.zeros((1, 1, 3), dtype=bool)
+        mask[0, 0, 0] = True
+        mask[0, 0, 2] = True
+        horizontal, vertical, total = calculate_spatial_spreading(mask, dimensions=(2.0, 3.0, 0.5))
+        self.assertEqual(horizontal, 2.0)
+        self.assertEqual(vertical, 0.0)
+        self.assertEqual(total, 2.0)
+
     def test_horizontal_spread(self):
         """Test with horizontal spread."""
         image_stack = np.zeros((3, 5, 5))
@@ -145,6 +159,42 @@ class TestCalculateSpatialSpreading(unittest.TestCase):
         self.assertTrue(np.isnan(Sxy))
         self.assertTrue(np.isnan(Sz))
         self.assertTrue(np.isnan(Sxyz))
+
+    def test_anisotropic_spacing_is_applied_per_axis(self):
+        image_stack = np.zeros((1, 1, 2))
+        image_stack[0, 0, :] = 1
+        horizontal, vertical, total = calculate_spatial_spreading(image_stack, (2.0, 3.0, 0.5))
+        self.assertEqual(horizontal, 1.0)
+        self.assertEqual(vertical, 0.0)
+        self.assertEqual(total, 1.0)
+
+
+class TestSegmentationIntegration(unittest.TestCase):
+    def test_raw_manual_threshold_and_qc_metadata(self):
+        stack = np.array(
+            [
+                [[0, 100], [200, 0]],
+                [[0, 100], [200, 0]],
+            ],
+            dtype=np.uint8,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            with patch("feature_generator.mtif.read_stack", return_value=list(stack)):
+                segment(
+                    "sample.tif",
+                    directory,
+                    threshold_mode="comstat2",
+                    threshold_method="manual",
+                    threshold_scale="raw",
+                    manual_threshold=100,
+                )
+            record_path = Path(directory) / "sample_segmentation.json"
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            self.assertEqual(record["selected_threshold_value"], 100)
+            self.assertEqual(record["selected_threshold_units"], "raw")
+            self.assertEqual(record["threshold_boundary_mode"], "comstat2")
+            self.assertFalse(record["no_biomass_detected"])
+            self.assertTrue((Path(directory) / "sample_segmentation_qc.png").is_file())
 
 
 class TestGetCellCount(unittest.TestCase):

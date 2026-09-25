@@ -18,16 +18,16 @@ Before either calculation, enter the physical voxel dimensions X, Y, and Z in mi
 
 Feature families describe complementary aspects of biofilm structure, including:
 
-- intensity and thresholded biomass counts;
-- layer-to-layer intensity differences;
-- mean, median, maximum, standard deviation, and normalized dispersion;
-- biovolume and substratum coverage;
-- homogeneity and spatial spreading;
-- thresholded thickness and roughness;
-- 2D area and 3D surface, volume, and compactness;
-- fractal and gray-level co-occurrence measurements.
+- stack-normalized intensity and threshold-sweep object counts;
+- layer-to-layer intensity differences and normalized dispersion;
+- calibrated biomass, COMSTAT-indexed maximum height, mean thickness, compacted column thickness, roughness, and substratum coverage;
+- substratum coverage/biomass area, object count/density/size, equivalent diameter, enclosed pore summaries, and anisotropy-aware nearest-neighbour summaries;
+- biomass centre-of-mass height, vertical spread, surface area, surface-to-volume ratio, and diffusion distance;
+- intensity quantiles, homogeneity, anisotropy-aware spatial spreading, and 32-level directional gray-level co-occurrence summaries.
 
-MicroICS deliberately generates many threshold-dependent measurements because the most informative threshold may differ between biological questions. Feature ranking and cross-validation then assess which measurements are useful.
+The feature generator normalizes intensities stack-wide for intensity summaries and QC. Its automatic two-class Otsu threshold is computed from the raw source stack using ImageJ AutoThresholder's histogram Otsu criterion; integer image thresholds retain source intensity units. COMSTAT2 boundary semantics (`intensity >= threshold`) are the default; COMSTAT1 selects the strict `>` rule. Manual cutoffs can use either stack-normalized 0–1 units or raw image intensity. In the GUI, a labelled run can list one representative image per class and apply one shared manual threshold across the run. Three-class Otsu labels are `background`, `dim-intensity`, and `bright-intensity`; choosing whether dim intensity counts as biomass does not assign a biological cell state. Manual thresholds allow ImageJ-selected class boundaries to be applied with the selected equality rule. Robust-background thresholding assumes background occupies most of the image. BEM is limited to unsaturated 8-bit stacks with a histogram mode at zero. Each image produces a segmentation overlay/histogram, biomass-versus-threshold QC plot, and segmentation metadata. The GUI `run_summary.json` records submitted parameters and the run outcome. These outputs help inspect segmentation; they do not certify biological validity. Legacy `GPTVolume` and `GPTFractalDim` outputs were retired pending implementation audits, which changes the generated feature schema. Use tables that match the selected model’s expected feature columns.
+
+Threshold-sweep thickness and roughness use immutable masks and include zero-height x-y columns. Spatial spreading is calculated from the selected biomass mask, with independent x/y/z calibration. `MaxBiofilmHeight_COMSTAT_um` is the top occupied layer index times Δz; `BiofilmExtentHeight_um` adds one slice thickness and is the denominator used for `VerticalFillRatio`. Surface area uses a calibrated voxel-face estimator; it is not a smoothed mesh surface. Local density reports mean, standard deviation, and IQR over biomass voxels within a physical-radius spherical neighborhood. Internal pore count, porosity, and mean pore size exclude background connected to the image or stack border. Threshold robustness cutoffs are provisional and are not hard pass/fail rules. Imported masks, local thickness, and full local-density and pore-size distributions remain future work.
 
 ### 2. Train models
 

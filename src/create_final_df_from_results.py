@@ -1,9 +1,16 @@
 import glob
+import json
 import logging
 import os
 import sys
+from pathlib import Path
 
 import pandas as pd
+
+try:
+    from feature_taxonomy import feature_catalog
+except ImportError:
+    from .feature_taxonomy import feature_catalog
 
 logging.basicConfig(format="%(asctime)s - %(message)s", datefmt="%d-%b-%y %H:%M:%S")
 logging.getLogger(__name__).setLevel(logging.INFO)
@@ -62,3 +69,6 @@ if __name__ == "__main__":
     #    df_final.to_csv(f"../prepared_data/{date.today()}-{tag}.tsv", sep="\t")
     logging.info(f"Writing {outfile}")
     df_final.to_csv(outfile, sep="\t")
+    taxonomy_path = Path(outfile).with_name("feature_taxonomy.json")
+    taxonomy_path.write_text(json.dumps(feature_catalog(df_final.columns), indent=2), encoding="utf-8")
+    logging.info("Writing %s", taxonomy_path)

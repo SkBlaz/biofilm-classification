@@ -29,6 +29,7 @@ from gui.app import (
     start_pipeline,
     state,
     validate_config,
+    write_run_summary,
 )
 from gui.execution import ExecutionStep, build_execution_steps, create_job, job_paths
 
@@ -92,6 +93,22 @@ class TestJobUploads(unittest.TestCase):
             self.assertEqual(selected["file"], "escape.tif")
             self.assertEqual(destination.read_bytes(), b"TIFF")
             self.assertEqual(destination.resolve().parent, paths.training_images.resolve())
+
+
+class TestRunSummary(unittest.TestCase):
+    def test_summary_records_parameters_validation_and_outcome(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(state, {"started_at": "2026-09-25T12:00:00Z"}):
+            config = {
+                "job_id": "a" * 32,
+                "workflow": "features_labelled",
+                "results_dir": directory,
+                "voxel_size_x": 0.21,
+            }
+            write_run_summary(config, "completed", finished_at="2026-09-25T12:01:00Z", validation={"ok": True})
+            summary = json.loads((Path(directory) / "run_summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["status"], "completed")
+            self.assertEqual(summary["parameters"]["voxel_size_x"], 0.21)
+            self.assertTrue(summary["validation"]["ok"])
 
     def test_tiff_and_feature_table_uploads_are_supported(self):
         with temporary_jobs_root():

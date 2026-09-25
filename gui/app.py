@@ -37,7 +37,7 @@ try:
         unique_upload_path,
         validate_job_id,
     )
-    from src.input_validation import validate_feature_table, validate_image_directory
+    from src.input_validation import parse_image_name, validate_feature_table, validate_image_directory
 except ModuleNotFoundError:  # Direct ``python gui/app.py`` execution.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from gui.execution import (
@@ -53,7 +53,7 @@ except ModuleNotFoundError:  # Direct ``python gui/app.py`` execution.
         unique_upload_path,
         validate_job_id,
     )
-    from src.input_validation import validate_feature_table, validate_image_directory
+    from src.input_validation import parse_image_name, validate_feature_table, validate_image_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 GUI_DIR = Path(__file__).resolve().parent
@@ -152,6 +152,17 @@ def default_config() -> dict[str, object]:
         "correlation_threshold": 0.8,
         "all_learners": False,
         "learner": "rf",
+        "threshold_method": "otsu",
+        "threshold_boundary_mode": "comstat2",
+        "threshold_scale": "stack_normalized",
+        "threshold_value": "",
+        "threshold_upper_value": "",
+        "dim_class_assignment": "foreground",
+        "representative_images": "",
+        "local_density_radius_um": 2.0,
+        "connectivity_3d": 26,
+        "minimum_object_area_um2": 0.0,
+        "minimum_object_volume_um3": 0.0,
         **DEFAULT_VOXEL_DIMENSIONS,
     }
 
@@ -332,6 +343,99 @@ def validate_config(raw: dict) -> dict:
             raise ValueError(f"Voxel size {axis.upper()} must be a positive number")
         voxel_dimensions[key] = dimension
 
+    threshold_method = str(config.get("threshold_method", "otsu"))
+    if threshold_method not in {"otsu", "manual", "bem", "robust_background", "multi_otsu"}:
+        raise ValueError("Choose a supported threshold method")
+    threshold_boundary_mode = str(config.get("threshold_boundary_mode", "comstat2"))
+    if threshold_boundary_mode not in {"comstat1", "comstat2"}:
+        raise ValueError("Choose COMSTAT1 or COMSTAT2 threshold boundaries")
+    threshold_scale = str(config.get("threshold_scale", "stack_normalized"))
+    if threshold_scale not in {"stack_normalized", "raw"}:
+        raise ValueError("Threshold units must be stack-normalized or raw image intensity")
+    dim_class_assignment = str(config.get("dim_class_assignment", "foreground"))
+    if dim_class_assignment not in {"background", "foreground"}:
+        raise ValueError("Choose whether dim-intensity belongs to background or foreground")
+    threshold_values = {}
+    for key in ("threshold_value", "threshold_upper_value"):
+        raw_value = config.get(key, "")
+        if raw_value in (None, ""):
+            threshold_values[key] = None
+            continue
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Manual thresholds must be numeric values from 0 to 1") from exc
+        minimum_allowed = 0 if threshold_scale == "stack_normalized" else 0
+        maximum_allowed = 1 if threshold_scale == "stack_normalized" else math.inf
+        if not math.isfinite(value) or not minimum_allowed <= value <= maximum_allowed:
+            allowed = "from 0 to 1" if threshold_scale == "stack_normalized" else "non-negative raw intensity values"
+            raise ValueError(f"Manual thresholds must be {allowed}")
+        threshold_values[key] = value
+    try:
+        local_density_radius_um = float(config.get("local_density_radius_um", 2.0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Local-density radius must be a positive number in micrometres") from exc
+    if not math.isfinite(local_density_radius_um) or local_density_radius_um <= 0:
+        raise ValueError("Local-density radius must be a positive number in micrometres")
+    try:
+        connectivity_3d = int(config.get("connectivity_3d", 26))
+        minimum_object_area_um2 = float(config.get("minimum_object_area_um2", 0.0))
+        minimum_object_volume_um3 = float(config.get("minimum_object_volume_um3", 0.0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Connectivity and minimum object sizes must be numeric") from exc
+    if connectivity_3d not in {6, 18, 26}:
+        raise ValueError("3D connectivity must be 6, 18, or 26")
+    if not math.isfinite(minimum_object_area_um2) or minimum_object_area_um2 < 0:
+        raise ValueError("Minimum 2D object area must be a non-negative µm² value")
+    if not math.isfinite(minimum_object_volume_um3) or minimum_object_volume_um3 < 0:
+        raise ValueError("Minimum 3D object volume must be a non-negative µm³ value")
+    if threshold_method == "manual" and threshold_values["threshold_value"] is None:
+        raise ValueError("Enter a manual threshold value")
+    if threshold_method == "multi_otsu" and (threshold_values["threshold_value"] is None) != (
+        threshold_values["threshold_upper_value"] is None
+    ):
+        raise ValueError("Three-class Otsu needs both manual thresholds or neither")
+    raw_representatives = config.get("representative_images", "")
+    if raw_representatives in (None, ""):
+        representative_images = {}
+    else:
+        try:
+            representative_images = json.loads(raw_representatives) if isinstance(raw_representatives, str) else raw_representatives
+        except json.JSONDecodeError as exc:
+            raise ValueError("Representative images must be valid JSON") from exc
+        if not isinstance(representative_images, dict):
+            raise ValueError("Representative images must be a JSON object keyed by class")
+        if threshold_method != "manual" or workflow not in {"features_labelled", "full"}:
+            raise ValueError("Representative images require manual thresholding of labelled training images")
+        if threshold_values["threshold_value"] is None:
+            raise ValueError("Enter one shared manual threshold for the representative images")
+        validated_representatives = {}
+        for class_label, representative in representative_images.items():
+            representative_name = str(representative)
+            representative_path = (paths.training_images / representative_name).resolve()
+            if representative_path.parent != paths.training_images.resolve() or not representative_path.is_file():
+                raise ValueError(f"Representative image is not uploaded: {representative_name}")
+            parsed_name = parse_image_name(representative_name)
+            if not parsed_name or parsed_name["label"] != str(class_label):
+                raise ValueError(f"Representative image {representative_name} does not match class {class_label}")
+            validated_representatives[str(class_label)] = representative_name
+        class_labels = {
+            fields["label"]
+            for path in paths.training_images.iterdir()
+            if path.suffix.lower() in {".tif", ".tiff"}
+            if (fields := parse_image_name(path.name))
+        }
+        if class_labels != set(validated_representatives):
+            missing_classes = sorted(class_labels - set(validated_representatives))
+            extra_classes = sorted(set(validated_representatives) - class_labels)
+            details = []
+            if missing_classes:
+                details.append(f"missing: {', '.join(missing_classes)}")
+            if extra_classes:
+                details.append(f"not present: {', '.join(extra_classes)}")
+            raise ValueError("Provide one uploaded representative image for each class (" + "; ".join(details) + ")")
+        representative_images = validated_representatives
+
     learner = str(config.get("learner", "rf"))
     if learner not in {"rf", "dummy", "decisiontree", "logistic", "xgb", "gridsearch"}:
         raise ValueError("Choose a supported learner")
@@ -377,6 +481,17 @@ def validate_config(raw: dict) -> dict:
         "correlation_threshold": correlation_threshold,
         "all_learners": bool(config.get("all_learners")),
         "learner": learner,
+        "threshold_method": threshold_method,
+        "threshold_boundary_mode": threshold_boundary_mode,
+        "threshold_scale": threshold_scale,
+        "threshold_value": threshold_values["threshold_value"],
+        "threshold_upper_value": threshold_values["threshold_upper_value"],
+        "dim_class_assignment": dim_class_assignment,
+        "representative_images": representative_images,
+        "local_density_radius_um": local_density_radius_um,
+        "connectivity_3d": connectivity_3d,
+        "minimum_object_area_um2": minimum_object_area_um2,
+        "minimum_object_volume_um3": minimum_object_volume_um3,
         **voxel_dimensions,
     }
 
@@ -644,6 +759,25 @@ def refresh_artifacts(job_id: str | None):
         state["download_url"] = f"/api/jobs/{job_id}/download" if job_id and artifacts else None
 
 
+def write_run_summary(config: dict, status: str, *, finished_at: str | None = None, validation=None, error=None):
+    """Persist submitted settings and the outcome as a job lab notebook."""
+    summary = {
+        "job_id": config["job_id"],
+        "status": status,
+        "started_at": state.get("started_at"),
+        "finished_at": finished_at,
+        "parameters": {key: value for key, value in config.items() if key != "job_id"},
+        "validation": validation,
+        "error": error,
+    }
+    results_dir = Path(config["results_dir"])
+    results_dir.mkdir(parents=True, exist_ok=True)
+    target = results_dir / "run_summary.json"
+    temporary = target.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(target)
+
+
 def run_pipeline(config: dict, job_id: str):
     try:
         steps = build_execution_steps(config)
@@ -674,6 +808,7 @@ def run_pipeline(config: dict, job_id: str):
             if runtime["active_job_id"] != job_id:
                 return
             state["validation"] = preflight
+        write_run_summary(config, "running", validation=preflight)
         if not preflight["ok"]:
             raise ValueError(preflight_error(preflight))
 
@@ -698,6 +833,7 @@ def run_pipeline(config: dict, job_id: str):
             state["finished_at"] = now()
             error = state["error"]
         write_job_metadata(job_id, status=final_status, workflow=config["workflow"], error=error)
+        write_run_summary(config, final_status, finished_at=state.get("finished_at"), validation=preflight, error=error)
         add_log("Pipeline complete" if final_status == "completed" else f"Pipeline {final_status}", job_id)
         refresh_artifacts(job_id)
     except Exception as exc:
@@ -708,6 +844,10 @@ def run_pipeline(config: dict, job_id: str):
             state["error"] = str(exc)
             state["finished_at"] = now()
         write_job_metadata(job_id, status="failed", workflow=config.get("workflow"), error=str(exc))
+        try:
+            write_run_summary(config, "failed", finished_at=state.get("finished_at"), validation=state.get("validation"), error=str(exc))
+        except Exception:
+            pass
         add_log(f"Unexpected error: {exc}", job_id)
     finally:
         with state_lock:

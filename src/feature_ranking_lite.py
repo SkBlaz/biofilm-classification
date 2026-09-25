@@ -25,9 +25,11 @@ from xgboost import XGBClassifier
 try:
     from benchmark_outputs import write_confusion_matrices, write_feature_boxplots, write_feature_correlation
     from cv_planning import get_adaptive_cv
+    from feature_taxonomy import is_threshold_derived_feature
 except ImportError:  # Package import from the repository root.
     from .benchmark_outputs import write_confusion_matrices, write_feature_boxplots, write_feature_correlation
     from .cv_planning import get_adaptive_cv
+    from .feature_taxonomy import is_threshold_derived_feature
 
 warnings.simplefilter(action="ignore", category=DataConversionWarning)
 
@@ -417,11 +419,7 @@ def do_classification_simple(
     progress_phase_total=5,
 ):
     all_cols = X.columns
-    thr_indices = []
-    for enx, x in enumerate(all_cols):
-        if "Threshold" in x:
-            thr_indices.append(enx)
-    thr_indices = np.array(thr_indices)
+    thr_indices = np.asarray([enx for enx, column in enumerate(all_cols) if is_threshold_derived_feature(column)])
     X = X.values
     y = pd.Categorical(ys.values).codes
     catmap = dict(zip(y, ys.values))

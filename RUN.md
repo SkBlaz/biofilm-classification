@@ -44,6 +44,8 @@ Available operations are:
 
 Completed output is available from the job’s **Download results ZIP** link. A failed computation changes only that job to `failed`; the server remains available for another request.
 
+Feature jobs include per-image segmentation overlays with intensity histograms, biomass-versus-threshold curves, segmentation metadata, and a `run_summary.json` containing submitted parameters, validation results, and job status. Otsu with COMSTAT2 `>=` boundary semantics is the default. The Segmentation settings let you choose COMSTAT1/2 boundary behavior, a shared manual threshold, three-class Otsu, BEM, or robust-background thresholding. For manual class review, enter a JSON map of class labels to uploaded representative image filenames; one shared manual threshold is applied across the run. BEM requires an unsaturated 8-bit stack with a histogram mode at zero. Three-class output describes intensity classes only.
+
 The **Trained models** dropdown on the Inference step lists each training job by creation date and learner(s) used (for example "Aug 15 2026, 08:03 · All learners (5 models)"), not just its job ID, so you can pick the correct one at a glance. Inference automatically loads and evaluates every model saved in the chosen job — if that job was trained with **All learners**, every learner's predictions are reported side by side, so there is no separate "all learners" toggle at the inference step.
 
 ### Participant FAQ
@@ -90,12 +92,15 @@ The GUI is the default image command, but scientific modules remain reusable. Fr
 
 ```text
 src/run_analysis.sh                   feature generation and legacy orchestration
+src/feature_generator.py              per-image features and segmentation QC
 src/feature_ranking_lite.py           ranking, benchmarking, and saved models
 src/inference.py                      image or precomputed-table inference
 src/visualize_benchmark.py            benchmark reports
 ```
 
 The GUI execution adapter is `gui/execution.py`; it prepares job-local paths and argument lists while leaving algorithms in `src/`.
+
+For direct per-image feature generation, `feature_generator.py` accepts `--threshold-method otsu|manual|multi_otsu|bem|robust_background`, `--threshold-mode comstat1|comstat2`, and `--threshold-scale stack_normalized|raw`. Manual cutoffs use the selected scale; three-class manual thresholding requires both cutoffs. Automatic Otsu uses the raw intensity histogram and records raw units. BEM requires an unsaturated 8-bit source stack.
 
 Benchmark plots can be regenerated without repeating model training:
 

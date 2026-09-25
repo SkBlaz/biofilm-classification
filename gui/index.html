@@ -84,6 +84,28 @@
           </div>
         </fieldset>
 
+        <fieldset class="voxel-picker" id="segmentationFields">
+          <legend>Segmentation and threshold QC <button class="help-button" data-help-title="Segmentation and threshold QC" data-help-text="Otsu uses the raw stack histogram. Manual and three-class thresholds can use stack-normalized or raw image intensity. BEM requires an unsaturated 8-bit stack with a zero-mode histogram. Robust background thresholding assumes background fills most of the image and needs dataset calibration." type="button" aria-label="Help for segmentation and threshold QC">?</button></legend>
+          <div class="field-row compact-row">
+            <div class="field-group"><label for="thresholdMethod">Threshold method</label><select id="thresholdMethod"><option value="otsu">Otsu (two class)</option><option value="manual">Manual threshold</option><option value="multi_otsu">Three-class Otsu</option><option value="bem">BEM (8-bit)</option><option value="robust_background">Robust background</option></select></div>
+            <div class="field-group"><label for="thresholdBoundaryMode">Boundary rule</label><select id="thresholdBoundaryMode"><option value="comstat2">COMSTAT2 (≥ threshold)</option><option value="comstat1">COMSTAT1 (&gt; threshold)</option></select></div>
+          </div>
+          <div class="field-row compact-row">
+            <div class="field-group"><label for="thresholdValue">Manual threshold</label><input id="thresholdValue" type="number" min="0" step="any"></div>
+            <div class="field-group"><label for="thresholdUpperValue">Second threshold (three-class)</label><input id="thresholdUpperValue" type="number" min="0" step="any"></div>
+            <div class="field-group"><label for="dimClassAssignment">Dim-intensity class</label><select id="dimClassAssignment"><option value="foreground">Count as foreground</option><option value="background">Count as background</option></select></div>
+            <div class="field-group"><label for="localDensityRadius">Local-density radius (µm)</label><input id="localDensityRadius" type="number" min="0" step="any" value="2"></div>
+          </div>
+          <div class="field-group"><label for="thresholdScale">Manual threshold units</label><select id="thresholdScale"><option value="stack_normalized">Stack-normalized (0–1)</option><option value="raw">Raw image intensity (ImageJ)</option></select></div>
+          <div class="field-row compact-row">
+            <div class="field-group"><label for="connectivity3d">3D connectivity</label><select id="connectivity3d"><option value="26">26 (faces, edges, corners)</option><option value="18">18 (faces, edges)</option><option value="6">6 (faces)</option></select></div>
+            <div class="field-group"><label for="minimumObjectArea">Minimum 2D object area (µm²)</label><input id="minimumObjectArea" type="number" min="0" step="any" value="0"></div>
+            <div class="field-group"><label for="minimumObjectVolume">Minimum 3D object volume (µm³)</label><input id="minimumObjectVolume" type="number" min="0" step="any" value="0"></div>
+          </div>
+          <div class="field-group"><label for="representativeImages">Representative images by class (JSON)</label><textarea id="representativeImages" rows="3" placeholder='{"L1":"sample_L1.tif","L2":"sample_L2.tif"}'></textarea></div>
+          <small>QC overlays and threshold curves are saved with the run. Three-class labels describe intensity only, not cell state.</small>
+        </fieldset>
+
         <fieldset class="learner-picker" id="modelFields">
           <legend>Learners <button class="help-button" data-help-title="Learner selection" data-help-text="Choose one learner for a focused run, or benchmark every supported learner." type="button" aria-label="Help for Learner selection">?</button></legend>
           <div class="learner-mode-choices"><label class="learner-option active" data-learner-mode="single"><input name="learner_mode" type="radio" value="single" checked><span class="workflow-copy"><b>One learner</b><small>Focused, faster training</small></span></label><label class="learner-option" data-learner-mode="all"><input name="learner_mode" type="radio" value="all"><span class="workflow-copy"><b>All learners</b><small>Benchmark every algorithm</small></span></label></div>

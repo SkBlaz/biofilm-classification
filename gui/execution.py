@@ -6,6 +6,7 @@ generation, learning, and inference remain implemented in ``src/``.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -121,6 +122,17 @@ def execution_environment(config: dict) -> dict[str, str]:
             "IMAGINE_VOXEL_SIZE_X": str(config["voxel_size_x"]),
             "IMAGINE_VOXEL_SIZE_Y": str(config["voxel_size_y"]),
             "IMAGINE_VOXEL_SIZE_Z": str(config["voxel_size_z"]),
+            "IMAGINE_THRESHOLD_METHOD": config.get("threshold_method", "otsu"),
+            "IMAGINE_THRESHOLD_MODE": config.get("threshold_boundary_mode", "comstat2"),
+            "IMAGINE_THRESHOLD_SCALE": config.get("threshold_scale", "stack_normalized"),
+            "IMAGINE_THRESHOLD_VALUE": "" if config.get("threshold_value") is None else str(config["threshold_value"]),
+            "IMAGINE_THRESHOLD_UPPER_VALUE": "" if config.get("threshold_upper_value") is None else str(config["threshold_upper_value"]),
+            "IMAGINE_DIM_CLASS_ASSIGNMENT": config.get("dim_class_assignment", "foreground"),
+            "IMAGINE_REPRESENTATIVE_IMAGES_JSON": json.dumps(config.get("representative_images", {})),
+            "IMAGINE_LOCAL_DENSITY_RADIUS_UM": str(config.get("local_density_radius_um", 2.0)),
+            "IMAGINE_CONNECTIVITY_3D": str(config.get("connectivity_3d", 26)),
+            "IMAGINE_MIN_OBJECT_AREA_UM2": str(config.get("minimum_object_area_um2", 0.0)),
+            "IMAGINE_MIN_OBJECT_VOLUME_UM3": str(config.get("minimum_object_volume_um3", 0.0)),
         }
     )
     return environment

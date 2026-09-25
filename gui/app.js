@@ -214,6 +214,19 @@ async function loadDefaults() {
   document.querySelector('#voxelSizeY').value = config.voxel_size_y;
   document.querySelector('#voxelSizeZ').value = config.voxel_size_z;
   document.querySelector('#learner').value = config.learner;
+  document.querySelector('#thresholdMethod').value = config.threshold_method;
+  document.querySelector('#thresholdBoundaryMode').value = config.threshold_boundary_mode;
+  document.querySelector('#thresholdScale').value = config.threshold_scale;
+  document.querySelector('#thresholdValue').value = config.threshold_value ?? '';
+  document.querySelector('#thresholdUpperValue').value = config.threshold_upper_value ?? '';
+  document.querySelector('#dimClassAssignment').value = config.dim_class_assignment;
+  document.querySelector('#representativeImages').value = typeof config.representative_images === 'string'
+    ? config.representative_images
+    : JSON.stringify(config.representative_images || {});
+  document.querySelector('#localDensityRadius').value = config.local_density_radius_um;
+  document.querySelector('#connectivity3d').value = config.connectivity_3d;
+  document.querySelector('#minimumObjectArea').value = config.minimum_object_area_um2;
+  document.querySelector('#minimumObjectVolume').value = config.minimum_object_volume_um3;
   renderModelJobs(payload.model_jobs);
 }
 
@@ -286,6 +299,17 @@ function configFromForm() {
     voxel_size_x: Number(value('voxelSizeX')),
     voxel_size_y: Number(value('voxelSizeY')),
     voxel_size_z: Number(value('voxelSizeZ')),
+    threshold_method: value('thresholdMethod'),
+    threshold_boundary_mode: value('thresholdBoundaryMode'),
+    threshold_scale: value('thresholdScale'),
+    threshold_value: value('thresholdValue'),
+    threshold_upper_value: value('thresholdUpperValue'),
+    dim_class_assignment: value('dimClassAssignment'),
+    representative_images: value('representativeImages'),
+    local_density_radius_um: Number(value('localDensityRadius')),
+    connectivity_3d: Number(value('connectivity3d')),
+    minimum_object_area_um2: Number(value('minimumObjectArea')),
+    minimum_object_volume_um3: Number(value('minimumObjectVolume')),
     all_learners: document.querySelector('input[name="learner_mode"]:checked').value === 'all',
     learner: value('learner'),
   };
