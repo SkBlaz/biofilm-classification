@@ -5,6 +5,7 @@ from __future__ import annotations
 FEATURE_GROUPS = (
     "2D substratum structure",
     "3D basic biofilm metrics",
+    "3D object features",
     "3D advanced geometry",
     "Threshold-free intensity",
     "Threshold-free geometry and texture",
@@ -23,6 +24,7 @@ _THRESHOLD_PREFIXES = (
     "MaxBiofilmHeight",
     "BiofilmExtentHeight",
     "MeanThickness",
+    "FilledThickness",
     "MaxCompactedColumnThickness",
     "VerticalFillRatio",
     "Roughness_RaStar",
@@ -38,6 +40,9 @@ _THRESHOLD_PREFIXES = (
     "InternalPore",
     "InternalPorosity",
     "LocalBiomassDensity",
+    "LocalThickness",
+    "BiomassCenterOfMass",
+    "BiomassVerticalSpread",
     "SurfaceArea_",
     "SurfaceToVolume",
     "MeanDiffusion",
@@ -58,14 +63,25 @@ def is_threshold_derived_feature(name: str) -> bool:
 def classify_feature(name: str) -> str:
     """Assign one primary taxonomy group without inferring cell biology."""
     feature = str(name)
-    if feature.startswith(("counts(", "Substratum", "Area2D", "ObjectCount2D", "ObjectArea2D")):
+    if feature.startswith(("Substratum", "Area2D", "ObjectCount2D", "ObjectArea2D")):
         return "2D substratum structure"
-    if feature.startswith(("BioVolumeThr", "ThicknessThreshold", "RoughnessThreshold")):
+    if feature.startswith(("counts(", "BioVolumeThr", "ThicknessThreshold", "RoughnessThreshold")):
         return "Serial and multi-threshold"
     if feature.startswith(
-        ("SurfaceArea", "SurfaceToVolume", "MeanDiffusion", "MaxDiffusion", "InternalPore", "InternalPorosity", "LocalBiomassDensity")
+        (
+            "SurfaceArea",
+            "SurfaceToVolume",
+            "MeanDiffusion",
+            "MaxDiffusion",
+            "InternalPore",
+            "InternalPorosity",
+            "LocalBiomassDensity",
+            "LocalThickness",
+        )
     ):
         return "3D advanced geometry"
+    if feature.startswith(("ObjectCount3D", "ObjectDensity3D", "ObjectVolume3D", "ObjectNearestNeighbor3D")):
+        return "3D object features"
     if feature.startswith(
         (
             "Biomass_",
@@ -73,11 +89,14 @@ def classify_feature(name: str) -> str:
             "MaxBiofilmHeight",
             "BiofilmExtentHeight",
             "MeanThickness",
+            "FilledThickness",
             "MaxCompactedColumnThickness",
             "VerticalFillRatio",
             "Roughness_RaStar",
             "LayerArea",
             "LayerOccupancy",
+            "BiomassCenterOfMass",
+            "BiomassVerticalSpread",
             "ObjectCount3D",
             "ObjectDensity3D",
             "ObjectVolume3D",
@@ -86,7 +105,26 @@ def classify_feature(name: str) -> str:
         )
     ):
         return "3D basic biofilm metrics"
-    if feature.startswith(("diff", "max", "med", "mean", "std", "min", "minProp", "q10", "q25", "q75", "q90")):
+    if feature.startswith(
+        (
+            "diff",
+            "max",
+            "med",
+            "mean",
+            "std",
+            "min",
+            "minProp",
+            "q10",
+            "q25",
+            "q75",
+            "q90",
+            "RawIntensity",
+            "globalMean",
+            "mdiffs",
+            "mindiffs",
+            "eigen",
+        )
+    ):
         return "Threshold-free intensity"
     if feature.startswith(("Homogeneity", "Homogenity", "Spreading", "GPT", "Fractal", "GLCM")):
         return "Threshold-free geometry and texture"

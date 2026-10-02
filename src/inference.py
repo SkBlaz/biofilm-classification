@@ -186,12 +186,10 @@ def generate_features_for_images(images_dir, temp_dir):
             cmd = ["python", os.path.join(src_dir, "feature_generator.py"), "--outfolder", feature_generator_dir, "--file", tif_file]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
-                logger.error(f"Feature generation failed for {tif_file}: {result.stderr}")
-                continue
+                raise RuntimeError(f"Feature generation failed for {tif_file}: {result.stderr}")
             logger.info(f"Generated features for {os.path.basename(tif_file)}")
         except Exception as e:
-            logger.error(f"Error processing {tif_file}: {e}")
-            continue
+            raise RuntimeError(f"Error processing {tif_file}: {e}") from e
 
     # Create joint dataframe from individual feature files
     try:
@@ -265,6 +263,12 @@ def run_inference(models, metadata, features_file, output_dir, generate_explanat
     write_json_report(feature_validation, validation_path)
     if not feature_validation["ok"]:
         raise ValueError("Feature validation failed: " + "; ".join(feature_validation["errors"]))
+
+    for model_name, meta in metadata.items():
+        if meta.get("feature_generation_settings"):
+            missing = set(meta.get("feature_names", [])) - set(data.columns)
+            if missing:
+                raise ValueError(f"Feature table is incompatible with {model_name}: missing {sorted(missing)}")
 
     # Prepare results storage
     all_predictions = {}
@@ -755,6 +759,22 @@ def main():
             logger.info(f"Using precomputed features from {args.features_file}")
             features_file = args.features_file
         else:
+            saved_settings = [
+                meta.get("feature_generation_settings") for meta in metadata.values() if meta.get("feature_generation_settings")
+            ]
+            if saved_settings:
+                if len(saved_settings) != len(models) or any(item != saved_settings[0] for item in saved_settings):
+                    raise ValueError("Models require different feature-generation settings; use separate inference jobs")
+                from segmentation import ENV_SETTINGS
+
+                saved = saved_settings[0]
+                for key, name in ENV_SETTINGS.items():
+                    if key in saved:
+                        value = saved[key]
+                        os.environ[name] = ",".join(value) if isinstance(value, list) else "" if value is None else str(value)
+                for axis in ("X", "Y", "Z"):
+                    if f"voxel_size_{axis.lower()}" in saved:
+                        os.environ[f"IMAGINE_VOXEL_SIZE_{axis}"] = str(saved[f"voxel_size_{axis.lower()}"])
             # Generate features for input images
             logger.info("Generating features for input images...")
             os.makedirs(args.temp_dir, exist_ok=True)

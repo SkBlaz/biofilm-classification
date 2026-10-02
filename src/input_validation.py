@@ -63,6 +63,7 @@ MICROICS_PREFIXES = (
     "MaxBiofilmHeight",
     "BiofilmExtentHeight",
     "MeanThickness",
+    "FilledThickness",
     "MaxCompactedColumnThickness",
     "VerticalFillRatio",
     "Roughness_RaStar",
@@ -79,6 +80,11 @@ MICROICS_PREFIXES = (
     "InternalPore",
     "InternalPorosity",
     "LocalBiomassDensity",
+    "LocalThickness",
+    "RawIntensity",
+    "FractalGrayscale",
+    "BiomassCenterOfMass",
+    "BiomassVerticalSpread",
     "NoBiomassDetected",
 )
 REPLICATION_UNITS = ("date", "well", "position")

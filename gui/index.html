@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MicroICS Pipeline</title>
-  <link rel="stylesheet" href="/styles.css?v=20260811-1">
+  <link rel="stylesheet" href="/styles.css?v=20261002-1">
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
       <span class="brand-logo"><img src="/logo.png" alt="MicroICS logo"></span>
-      <div><strong>MicroICS</strong><span>3D biofilm classification · <span id="versionLabel">v—</span></span></div>
+      <div><strong>MicroICS</strong><span>2D / 3D biofilm classification · <span id="versionLabel">v—</span></span></div>
     </div>
     <div class="connection"><span class="connection-dot"></span><span id="connectionText">Ready</span></div>
   </header>
@@ -59,6 +59,8 @@
           <label class="file-button upload-button" for="featureFilePicker">Choose feature table</label>
           <input class="hidden" id="featureFilePicker" type="file" accept=".tsv,.txt,text/tab-separated-values,text/plain">
           <small class="file-picker-status" id="featureFileStatus">No feature table uploaded. Optional if you upload inference images above.</small>
+          <label class="file-button" for="settingsFilePicker">Choose matching image settings (optional)</label><input class="hidden" id="settingsFilePicker" type="file" accept=".json,application/json">
+          <small id="settingsFileStatus">For image-derived training tables, also upload their feature_generation_settings.json to reproduce the image workflow at inference.</small>
         </div>
 
         <div class="field-group hidden" id="modelJobField">
@@ -78,32 +80,59 @@
         <fieldset class="voxel-picker" id="voxelFields">
           <legend>Voxel dimensions (µm) <button class="help-button" data-help-title="Voxel dimensions" data-help-text="Physical width, height, and depth of one image voxel. These values affect features measured in physical units." type="button" aria-label="Help for Voxel dimensions">?</button></legend>
           <div class="voxel-grid">
-            <div class="field-group"><label for="voxelSizeX">X (µm)</label><input id="voxelSizeX" type="number" min="0" step="any" value="0.13" required></div>
-            <div class="field-group"><label for="voxelSizeY">Y (µm)</label><input id="voxelSizeY" type="number" min="0" step="any" value="0.13" required></div>
-            <div class="field-group"><label for="voxelSizeZ">Z (µm)</label><input id="voxelSizeZ" type="number" min="0" step="any" value="0.5" required></div>
+            <div class="field-group"><label for="voxelSizeX">X (<span class="physical-unit">µm</span>)</label><input id="voxelSizeX" type="number" min="0" step="any" value="0.13" required></div>
+            <div class="field-group"><label for="voxelSizeY">Y (<span class="physical-unit">µm</span>)</label><input id="voxelSizeY" type="number" min="0" step="any" value="0.13" required></div>
+            <div class="field-group"><label for="voxelSizeZ">Z (<span class="physical-unit">µm</span>)</label><input id="voxelSizeZ" type="number" min="0" step="any" value="0.5" required></div>
+          </div>
+        </fieldset>
+
+        <fieldset class="voxel-picker" id="featurePackageFields">
+          <legend>Features to calculate</legend>
+          <div class="field-group"><label for="imageDimension">Image dimensions</label><select id="imageDimension"><option value="3d">3D stacks</option><option value="2d">2D images</option></select></div>
+          <p id="features2dHelp" class="hidden">2D images use one complete package: coverage, biomass area, object count/density, size statistics, equivalent diameter, nearest-neighbour distances, porosity and pore sizes, intensity statistics, and GLCM texture.</p>
+          <div id="featureGroups3d" class="feature-group-options">
+            <label><input id="allFeatureGroups" type="checkbox" checked> All</label>
+            <label><input name="feature_group" type="checkbox" value="basic" checked> Basic biofilm metrics <small>Biomass, maximum height, filled thickness, vertical fill ratio, roughness, coverage, layer occupancy, centre-of-mass height, vertical spread.</small></label>
+            <label><input name="feature_group" type="checkbox" value="objects" checked> 3D object features <small>Count, size, and nearest-neighbour distances from a generated or imported 3D mask.</small></label>
+            <label><input name="feature_group" type="checkbox" value="advanced" checked> Advanced 3D geometry <small>Surface area, surface/volume ratio, diffusion distance, local thickness/density, porosity, and pore size. Can be time-consuming.</small></label>
+            <label><input name="feature_group" type="checkbox" value="intensity" checked> Intensity (threshold-free) <small>Original-precision intensity statistics.</small></label>
+            <label><input name="feature_group" type="checkbox" value="geometry" checked> Geometric threshold-free <small>Grayscale fractal dimension and GLCM texture.</small></label>
+            <label><input name="feature_group" type="checkbox" value="serial" checked> Serial / multi-threshold (ML ensemble)</label>
           </div>
         </fieldset>
 
         <fieldset class="voxel-picker" id="segmentationFields">
-          <legend>Segmentation and threshold QC <button class="help-button" data-help-title="Segmentation and threshold QC" data-help-text="Otsu uses the raw stack histogram. Manual and three-class thresholds can use stack-normalized or raw image intensity. BEM requires an unsaturated 8-bit stack with a zero-mode histogram. Robust background thresholding assumes background fills most of the image and needs dataset calibration." type="button" aria-label="Help for segmentation and threshold QC">?</button></legend>
-          <div class="field-row compact-row">
-            <div class="field-group"><label for="thresholdMethod">Threshold method</label><select id="thresholdMethod"><option value="otsu">Otsu (two class)</option><option value="manual">Manual threshold</option><option value="multi_otsu">Three-class Otsu</option><option value="bem">BEM (8-bit)</option><option value="robust_background">Robust background</option></select></div>
-            <div class="field-group"><label for="thresholdBoundaryMode">Boundary rule</label><select id="thresholdBoundaryMode"><option value="comstat2">COMSTAT2 (≥ threshold)</option><option value="comstat1">COMSTAT1 (&gt; threshold)</option></select></div>
+          <legend>Segmentation and threshold QC</legend>
+          <small id="inheritedSettingsHelp" class="hidden">Raw-image inference restores the saved model’s voxel dimensions, segmentation, conversion, and feature groups.</small>
+          <p class="segmentation-tip"><strong>Tip:</strong> Threshold optimisation is best done on a small, representative sample of your images first. Running segmentation settings on a large batch is time-consuming, so upload a few representative images, adjust the segmentation until the QC (overlay, histogram, biomass-vs-threshold curve) looks right, then run the full batch with the chosen settings.</p>
+          <label id="qcOnlyField"><input id="qcOnly" type="checkbox"> Run segmentation and QC only</label>
+          <div class="field-group"><label for="segmentationApproach">Segmentation approach</label><select id="segmentationApproach"><option value="automatic">Automatic</option><option value="manual">Manual / tuned threshold</option><option value="import">Import masks</option></select></div>
+          <div id="automaticThresholdFields">
+            <div class="field-group"><label for="thresholdMethod">Method</label><select id="thresholdMethod"><option value="otsu">Otsu (two class)</option><option value="robust_background">Robust background</option><option value="multi_otsu">Three-class Otsu</option><option value="bem">BEM</option></select></div>
+            <div class="field-group" id="sensitivityField"><label for="thresholdSensitivity">Sensitivity multiplier</label><input id="thresholdSensitivity" type="number" min="0.01" step="any" value="1"><small>Multiplies the automatic cutoff. Below 1 includes dimmer signal; above 1 removes more signal.</small></div>
+            <div class="field-group hidden" id="bemToleranceField"><label for="bemTolerance">BEM slope-change tolerance</label><input id="bemTolerance" type="number" min="0.001" max="0.999" step="any" value="0.1"><small>Default 0.10 (10%). Controls where the biomass curve becomes less sensitive to threshold changes.</small></div>
+            <div class="field-group hidden" id="dimClassField"><label for="dimClassAssignment">Dim-intensity class</label><select id="dimClassAssignment"><option value="foreground">Include in foreground</option><option value="background">Assign to background</option></select></div>
+            <button class="button tertiary" id="tuneOtsuButton" type="button">Use a manual Otsu cutoff</button>
           </div>
-          <div class="field-row compact-row">
-            <div class="field-group"><label for="thresholdValue">Manual threshold</label><input id="thresholdValue" type="number" min="0" step="any"></div>
-            <div class="field-group"><label for="thresholdUpperValue">Second threshold (three-class)</label><input id="thresholdUpperValue" type="number" min="0" step="any"></div>
-            <div class="field-group"><label for="dimClassAssignment">Dim-intensity class</label><select id="dimClassAssignment"><option value="foreground">Count as foreground</option><option value="background">Count as background</option></select></div>
-            <div class="field-group"><label for="localDensityRadius">Local-density radius (µm)</label><input id="localDensityRadius" type="number" min="0" step="any" value="2"></div>
+          <div id="manualThresholdFields" class="hidden">
+            <div class="field-group"><label for="thresholdScale">Manual threshold units</label><select id="thresholdScale"><option value="uint8">8-bit image intensity (ImageJ, 0–255)</option><option value="stack_normalized">Stack-normalized (0–1)</option></select></div>
+            <div class="field-group"><label for="thresholdValue">Threshold value</label><input id="thresholdValue" type="number" min="0" max="255" step="any"></div>
           </div>
-          <div class="field-group"><label for="thresholdScale">Manual threshold units</label><select id="thresholdScale"><option value="stack_normalized">Stack-normalized (0–1)</option><option value="raw">Raw image intensity (ImageJ)</option></select></div>
-          <div class="field-row compact-row">
-            <div class="field-group"><label for="connectivity3d">3D connectivity</label><select id="connectivity3d"><option value="26">26 (faces, edges, corners)</option><option value="18">18 (faces, edges)</option><option value="6">6 (faces)</option></select></div>
-            <div class="field-group"><label for="minimumObjectArea">Minimum 2D object area (µm²)</label><input id="minimumObjectArea" type="number" min="0" step="any" value="0"></div>
-            <div class="field-group"><label for="minimumObjectVolume">Minimum 3D object volume (µm³)</label><input id="minimumObjectVolume" type="number" min="0" step="any" value="0"></div>
+          <p id="thresholdDescription"></p>
+          <div id="maskUploadFields" class="hidden">
+            <label class="file-button upload-button" for="maskFilePicker">Choose TIFF masks</label><input class="hidden" id="maskFilePicker" type="file" accept=".tif,.tiff,image/tiff" multiple>
+            <small id="maskFileStatus">No masks uploaded.</small>
+            <small>Same dimensions as each image; nonzero = biomass, or integer labels for objects. Name each mask like its image, optionally with _mask before the extension. Works with ImageJ, BiofilmQ, and Cellpose. Thresholding is skipped.</small>
           </div>
-          <div class="field-group"><label for="representativeImages">Representative images by class (JSON)</label><textarea id="representativeImages" rows="3" placeholder='{"L1":"sample_L1.tif","L2":"sample_L2.tif"}'></textarea></div>
-          <small>QC overlays and threshold curves are saved with the run. Three-class labels describe intensity only, not cell state.</small>
+          <details id="conversionFields"><summary>8-bit conversion for ImageJ tuning</summary><p>Download the exact thresholding TIFF from QC and tune that image in ImageJ. Conversion uses one fixed range for the entire stack. 8-bit sources remain unchanged. OME SignificantBits defines the acquisition range when available; otherwise integer images use their storage range.</p><div class="field-group"><label for="conversionMax">Acquisition intensity maximum (optional)</label><input id="conversionMax" type="number" min="1" step="any" placeholder="4095 for 12-bit; leave blank for metadata"><small>For 12-bit images stored as 16-bit TIFF without bit-depth metadata, enter 4095. This is an intensity value, not a physical unit.</small></div></details>
+          <div class="field-row compact-row">
+            <div class="field-group" id="connectivity3dField"><label for="connectivity3d">3D connectivity</label><select id="connectivity3d"><option value="26">26 (faces, edges, corners)</option><option value="18">18 (faces, edges)</option><option value="6">6 (faces only)</option></select><small>Groups neighbouring biomass voxels into objects. Higher connectivity merges more readily into fewer, larger objects. Default 26; affects object count and size. Imported object labels retain their identities.</small></div>
+            <div class="field-group" id="minimumObjectAreaField"><label for="minimumObjectArea">Minimum object area (<span class="physical-unit">µm²</span>)</label><input id="minimumObjectArea" type="number" min="0" step="any" value="0"></div>
+            <div class="field-group" id="minimumObjectVolumeField"><label for="minimumObjectVolume">Minimum object volume (<span class="physical-unit">µm³</span>)</label><input id="minimumObjectVolume" type="number" min="0" step="any" value="0"></div>
+          </div>
+          <small>Minimum size removes noise-sized specks before mask measurements. Default 0 keeps all objects. Increase to remove noise; a high value can remove real small cells.</small>
+          <div class="field-group" id="localDensityField"><label for="localDensityRadius">Local-density radius (<span class="physical-unit">µm</span>)</label><input id="localDensityRadius" type="number" min="0.01" step="any" value="2"></div>
+          <small>QC includes masks and overlays for first, middle, and top slices, a histogram, and a biomass-versus-threshold curve. Three-class labels describe intensity only, not cell state.</small>
         </fieldset>
 
         <fieldset class="learner-picker" id="modelFields">

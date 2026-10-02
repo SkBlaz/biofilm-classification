@@ -29,6 +29,7 @@ RUN cp /opt/microics/ci_datafile.tsv /opt/microics/src/ && \
     cp /opt/microics/datafile.tsv /opt/microics/src/
 
 RUN mkdir -p /data/jobs \
+    && find /opt/microics/src -name '*.sh' -exec sed -i 's/\r$//' {} + \
     && chmod +x /opt/microics/src/run_analysis.sh /opt/microics/src/remove_layers.sh
 
 VOLUME ["/data"]

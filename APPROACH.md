@@ -1,6 +1,6 @@
 # How MicroICS works
 
-MicroICS converts 3D biofilm microscopy images into measurements, learns which measurements distinguish known biological classes, and applies the trained models to new images. One Docker image supplies both the browser GUI and reproducible scientific environment; all computation runs in that same container.
+MicroICS converts 2D and 3D biofilm microscopy images into measurements, learns which measurements distinguish known biological classes, and applies the trained models to new images. One Docker image supplies both the browser GUI and reproducible scientific environment; all computation runs in that same container.
 
 ## Using MicroICS through the GUI
 
@@ -8,7 +8,7 @@ The GUI presents the analysis as three biological questions rather than a list o
 
 ### 1. Generate features
 
-Feature generation measures each 3D TIFF image and writes one row per image.
+Feature generation measures each 2D image or 3D TIFF stack and writes one row per image.
 
 **Labelled images** are images whose filenames contain a known class, such as a strain. Choose this option when preparing a table for model training. MicroICS checks the filename convention, reports the number of images in each class and acquisition date, and writes `datafile.tsv`.
 
@@ -25,9 +25,13 @@ Feature families describe complementary aspects of biofilm structure, including:
 - biomass centre-of-mass height, vertical spread, surface area, surface-to-volume ratio, and diffusion distance;
 - intensity quantiles, homogeneity, anisotropy-aware spatial spreading, and 32-level directional gray-level co-occurrence summaries.
 
-The feature generator normalizes intensities stack-wide for intensity summaries and QC. Its automatic two-class Otsu threshold is computed from the raw source stack using ImageJ AutoThresholder's histogram Otsu criterion; integer image thresholds retain source intensity units. COMSTAT2 boundary semantics (`intensity >= threshold`) are the default; COMSTAT1 selects the strict `>` rule. Manual cutoffs can use either stack-normalized 0–1 units or raw image intensity. In the GUI, a labelled run can list one representative image per class and apply one shared manual threshold across the run. Three-class Otsu labels are `background`, `dim-intensity`, and `bright-intensity`; choosing whether dim intensity counts as biomass does not assign a biological cell state. Manual thresholds allow ImageJ-selected class boundaries to be applied with the selected equality rule. Robust-background thresholding assumes background occupies most of the image. BEM is limited to unsaturated 8-bit stacks with a histogram mode at zero. Each image produces a segmentation overlay/histogram, biomass-versus-threshold QC plot, and segmentation metadata. The GUI `run_summary.json` records submitted parameters and the run outcome. These outputs help inspect segmentation; they do not certify biological validity. Legacy `GPTVolume` and `GPTFractalDim` outputs were retired pending implementation audits, which changes the generated feature schema. Use tables that match the selected model’s expected feature columns.
+Feature calculation is selected in the GUI: 2D inputs use one complete structural/intensity/texture package; 3D inputs offer basic biofilm, object, advanced geometry, intensity, grayscale geometry/texture, and serial-threshold groups. Object features require a valid multi-slice mask. Deselected packages are not calculated. Object and pore distributions accompany their numeric ML summaries.
 
-Threshold-sweep thickness and roughness use immutable masks and include zero-height x-y columns. Spatial spreading is calculated from the selected biomass mask, with independent x/y/z calibration. `MaxBiofilmHeight_COMSTAT_um` is the top occupied layer index times Δz; `BiofilmExtentHeight_um` adds one slice thickness and is the denominator used for `VerticalFillRatio`. Surface area uses a calibrated voxel-face estimator; it is not a smoothed mesh surface. Local density reports mean, standard deviation, and IQR over biomass voxels within a physical-radius spherical neighborhood. Internal pore count, porosity, and mean pore size exclude background connected to the image or stack border. Threshold robustness cutoffs are provisional and are not hard pass/fail rules. Imported masks, local thickness, and full local-density and pore-size distributions remain future work.
+Segmentation operates on a reproducible 8-bit conversion of the whole stack. Acquisition metadata or an explicit maximum (4095 for genuine 12-bit data) defines the range; absent metadata, integers use their storage range. The exact converted TIFF is available for ImageJ tuning. Original-precision intensity measurements remain separate. Automatic Otsu, three-class Otsu, BiofilmQ-style trimmed robust background, manual cutoffs, and the published BEM slope criterion share fixed COMSTAT2 inclusive boundaries. Three-class Otsu chooses one of its two cutoffs according to the dim-class assignment; these are intensity classes, not biological cell states. Imported binary or integer-labelled masks bypass thresholding and preserve supplied object identities. Connectivity and physical-size filtering affect the actual biomass mask before QC and measurements.
+
+QC exports first/middle/top slice masks and overlays, the exact 8-bit intensity histogram, a biomass-versus-threshold curve, and applied-setting metadata. Imported masks have no threshold curve. Tune settings on a small upload before a full batch. Saved generation settings reproduce the segmentation/feature contract during raw-image inference; older models need compatible original feature tables or retraining. QC supports visual assessment and does not certify biological validity.
+
+Spatial spreading uses the selected mask with independent x/y/z calibration. Surface area uses a voxel-face estimator; local thickness uses a calibrated digital voxel-centre sphere convention, not a continuous mesh. Local density samples a physical-radius sphere around biomass voxels. Internal porosity and pores exclude border-connected background. Feature-formula validation beyond this segmentation and selection update remains a subsequent review. See `RUN.md` for conversion, units, workflow, and algorithm details.
 
 ### 2. Train models
 

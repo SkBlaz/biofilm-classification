@@ -43,7 +43,7 @@ def otsu_threshold(image: np.ndarray) -> float:
 
 
 def multi_otsu_thresholds(image: np.ndarray) -> tuple[float, float]:
-    """Return two global Multi-Otsu cutoffs for background/dim/bright classes."""
+    """Return inclusive 8-bit cutoffs for background/dim/bright classes."""
     values = np.asarray(image)
     if values.size == 0 or not np.isfinite(values).all():
         raise ValueError("Image must be non-empty and contain finite intensities")
@@ -52,7 +52,7 @@ def multi_otsu_thresholds(image: np.ndarray) -> tuple[float, float]:
     from skimage.filters import threshold_multiotsu
 
     cuts = threshold_multiotsu(values, classes=3)
-    return float(cuts[0]), float(cuts[1])
+    return float(cuts[0] + 1), float(cuts[1] + 1)
 
 
 def multi_otsu_labels(image: np.ndarray, lower: float, upper: float, mode: str = "comstat2") -> np.ndarray:
@@ -61,9 +61,9 @@ def multi_otsu_labels(image: np.ndarray, lower: float, upper: float, mode: str =
         raise ValueError("Multi-Otsu thresholds must be finite and strictly increasing")
     values = np.asarray(image)
     if mode == "comstat2":
-        return np.where(values <= lower, 0, np.where(values <= upper, 1, 2)).astype(np.uint8)
-    if mode == "comstat1":
         return np.where(values < lower, 0, np.where(values < upper, 1, 2)).astype(np.uint8)
+    if mode == "comstat1":
+        return np.where(values <= lower, 0, np.where(values <= upper, 1, 2)).astype(np.uint8)
     raise ValueError("mode must be 'comstat1' or 'comstat2'")
 
 
@@ -77,23 +77,20 @@ def multi_otsu_biomass_mask(labels: np.ndarray, dim_class: str) -> np.ndarray:
     raise ValueError("dim_class must be 'background' or 'foreground'")
 
 
-def robust_background_threshold(image: np.ndarray, mad_multiplier: float = 3.5) -> float:
-    """Estimate a background cutoff using median plus scaled MAD.
+def robust_background_threshold(image: np.ndarray) -> float:
+    """BiofilmQ 1.0.1: trim 5% per tail, mean + 2 sigma.
 
-    This assumes background occupies most of the image. It is a provisional
-    option and must be calibrated against representative acquisition data.
+    Sigma is the normal-distribution maximum-likelihood estimate (ddof=0).
+    All-zero trimmed backgrounds use the first positive 8-bit bin to avoid
+    classifying zero-intensity background as biomass under COMSTAT2.
     """
-    values = np.asarray(image, dtype=float)
-    if values.size == 0 or not np.isfinite(values).all():
+    values = np.sort(np.asarray(image, dtype=float).ravel())
+    if not values.size or not np.isfinite(values).all():
         raise ValueError("Image must be non-empty and contain finite intensities")
-    if not math.isfinite(mad_multiplier) or mad_multiplier <= 0:
-        raise ValueError("mad_multiplier must be a positive finite number")
-    median = float(np.median(values))
-    mad = float(np.median(np.abs(values - median)))
-    cutoff = median + mad_multiplier * 1.4826 * mad
-    if mad == 0:
-        cutoff = float(np.nextafter(median, np.inf))
-    return cutoff
+    trim = int(np.floor(values.size / 20 + 0.5))
+    capped = values[trim : values.size - trim] if trim else values
+    cutoff = float(capped.mean() + 2 * capped.std())
+    return cutoff if cutoff > 0 else float(np.nextafter(0.0, np.inf))
 
 
 def bem_threshold(image: np.ndarray, change_tolerance: float = 0.10) -> int:
@@ -120,8 +117,8 @@ def bem_threshold(image: np.ndarray, change_tolerance: float = 0.10) -> int:
     if not math.isfinite(change_tolerance) or not 0 < change_tolerance < 1:
         raise ValueError("change_tolerance must be between zero and one")
 
-    thresholds = np.arange(1, 255, dtype=float)
-    biovolume = np.cumsum(histogram[::-1])[::-1][1:255].astype(float)
+    thresholds = np.arange(1, 256, dtype=float)
+    biovolume = np.cumsum(histogram[::-1])[::-1][1:256].astype(float)
 
     def power_curve(threshold, a, b, c):
         return a * np.power(threshold, b) + c
@@ -130,12 +127,14 @@ def bem_threshold(image: np.ndarray, change_tolerance: float = 0.10) -> int:
         power_curve,
         thresholds,
         biovolume,
-        p0=(-max(float(biovolume[0]), 1.0), 0.5, 0.0),
-        bounds=([-np.inf, 0.01, 0.0], [0.0, 5.0, np.inf]),
+        p0=(max(float(biovolume[0]), 1.0), -0.5, 0.0),
+        bounds=([0.0, -10.0, -np.inf], [np.inf, -0.001, np.inf]),
         maxfev=20000,
     )
     a, b, _ = parameters
     slopes = a * b * np.power(thresholds, b - 1)
+    if not np.isfinite(slopes).all() or np.all(np.abs(slopes) < np.finfo(float).eps):
+        raise ValueError("BEM fit has no finite nonzero slope; choose another method")
     relative_changes = np.abs(np.diff(slopes)) / np.maximum(np.abs(slopes[:-1]), np.finfo(float).eps)
     acceptable = np.flatnonzero(relative_changes < change_tolerance)
     if not acceptable.size:
@@ -154,7 +153,7 @@ def threshold_mask(image: np.ndarray, cutoff: float, mode: str = "comstat2") -> 
     raise ValueError("mode must be 'comstat1' or 'comstat2'")
 
 
-def comstat_metrics(mask: np.ndarray, voxel_size: tuple[float, float, float]) -> dict[str, object]:
+def comstat_metrics(mask: np.ndarray, voxel_size: tuple[float, float, float], include_geometry: bool = True) -> dict[str, object]:
     """Calculate core COMSTAT-style metrics for a ``(z, y, x)`` binary mask.
 
     ``voxel_size`` is ``(dx, dy, dz)`` in micrometres. Empty biomass-dependent
@@ -177,20 +176,23 @@ def comstat_metrics(mask: np.ndarray, voxel_size: tuple[float, float, float]) ->
     has_biomass = total_voxels > 0
     volume_um3 = total_voxels * dx * dy * dz
 
-    padded = np.pad(binary, 1, constant_values=False)
-    face_changes_z = np.count_nonzero(padded[1:, 1:-1, 1:-1] != padded[:-1, 1:-1, 1:-1])
-    face_changes_y = np.count_nonzero(padded[1:-1, 1:, 1:-1] != padded[1:-1, :-1, 1:-1])
-    face_changes_x = np.count_nonzero(padded[1:-1, 1:-1, 1:] != padded[1:-1, 1:-1, :-1])
-    surface_area_um2 = face_changes_z * dx * dy + face_changes_y * dx * dz + face_changes_x * dy * dz
-    surface_to_volume_um_inv = surface_area_um2 / volume_um3 if has_biomass else float("nan")
-    if has_biomass:
-        padded_distance = ndimage.distance_transform_edt(np.pad(binary, 1, constant_values=False), sampling=(dz, dy, dx))
-        diffusion_distances = padded_distance[1:-1, 1:-1, 1:-1][binary]
-        mean_diffusion_distance_um = float(diffusion_distances.mean())
-        max_diffusion_distance_um = float(diffusion_distances.max())
-    else:
-        mean_diffusion_distance_um = float("nan")
-        max_diffusion_distance_um = float("nan")
+    surface_area_um2 = surface_to_volume_um_inv = float("nan")
+    mean_diffusion_distance_um = max_diffusion_distance_um = float("nan")
+    if include_geometry:
+        padded = np.pad(binary, 1, constant_values=False)
+        face_changes_z = np.count_nonzero(padded[1:, 1:-1, 1:-1] != padded[:-1, 1:-1, 1:-1])
+        face_changes_y = np.count_nonzero(padded[1:-1, 1:, 1:-1] != padded[1:-1, :-1, 1:-1])
+        face_changes_x = np.count_nonzero(padded[1:-1, 1:-1, 1:] != padded[1:-1, 1:-1, :-1])
+        surface_area_um2 = face_changes_z * dx * dy + face_changes_y * dx * dz + face_changes_x * dy * dz
+        surface_to_volume_um_inv = surface_area_um2 / volume_um3 if has_biomass else float("nan")
+        if has_biomass:
+            padded_distance = ndimage.distance_transform_edt(np.pad(binary, 1, constant_values=False), sampling=(dz, dy, dx))
+            diffusion_distances = padded_distance[1:-1, 1:-1, 1:-1][binary]
+            mean_diffusion_distance_um = float(diffusion_distances.mean())
+            max_diffusion_distance_um = float(diffusion_distances.max())
+        else:
+            mean_diffusion_distance_um = float("nan")
+            max_diffusion_distance_um = float("nan")
 
     heights = np.zeros((ny, nx), dtype=float)
     if has_biomass:
@@ -248,6 +250,7 @@ def connected_object_metrics_2d(
     mask: np.ndarray,
     voxel_size: tuple[float, float, float],
     min_area_um2: float = 0.0,
+    object_labels: np.ndarray | None = None,
 ) -> dict[str, object]:
     """Measure 8-connected 2D objects and anisotropic centroid nearest distances."""
     binary = np.asarray(mask, dtype=bool)
@@ -259,7 +262,9 @@ def connected_object_metrics_2d(
     if not math.isfinite(min_area_um2) or min_area_um2 < 0:
         raise ValueError("min_area_um2 must be a non-negative finite value")
 
-    labels, _ = ndimage.label(binary, structure=np.ones((3, 3), dtype=np.uint8))
+    labels = object_labels
+    if labels is None:
+        labels, _ = ndimage.label(binary, structure=np.ones((3, 3), dtype=np.uint8))
     objects = ndimage.find_objects(labels)
     areas: list[float] = []
     centroids: list[tuple[float, float]] = []
@@ -299,6 +304,7 @@ def connected_object_metrics_3d(
     voxel_size: tuple[float, float, float],
     connectivity: int = 26,
     min_volume_um3: float = 0.0,
+    object_labels: np.ndarray | None = None,
 ) -> dict[str, object]:
     """Measure 3D biomass objects with explicit 6/18/26 connectivity."""
     binary = np.asarray(mask, dtype=bool)
@@ -312,10 +318,12 @@ def connected_object_metrics_3d(
     if not math.isfinite(min_volume_um3) or min_volume_um3 < 0:
         raise ValueError("min_volume_um3 must be non-negative and finite")
     rank_connectivity = {6: 1, 18: 2, 26: 3}[connectivity]
-    labels, _ = ndimage.label(binary, structure=ndimage.generate_binary_structure(3, rank_connectivity))
+    labels = object_labels
+    if labels is None:
+        labels, _ = ndimage.label(binary, structure=ndimage.generate_binary_structure(3, rank_connectivity))
     counts = np.bincount(labels.ravel())[1:]
     volumes = counts.astype(float) * dx * dy * dz
-    keep = volumes >= min_volume_um3
+    keep = (counts > 0) & (volumes >= min_volume_um3)
     object_ids = np.flatnonzero(keep) + 1
     volumes = volumes[keep]
     centers = ndimage.center_of_mass(binary, labels, object_ids.tolist()) if object_ids.size else []
@@ -412,7 +420,7 @@ def local_biomass_density(
     voxel_size: tuple[float, float, float],
     radius_um: float,
 ) -> dict[str, object]:
-    """Return calibrated box-neighborhood biomass density at biomass voxels."""
+    """Return calibrated spherical-neighborhood density at biomass voxels."""
     biomass = np.asarray(mask, dtype=bool)
     if biomass.ndim != 3:
         raise ValueError("mask must have shape (z, y, x)")
@@ -424,8 +432,16 @@ def local_biomass_density(
     rz, ry, rx = (int(math.floor(radius_um / step)) for step in (dz, dy, dx))
     oz, oy, ox = np.ogrid[-rz : rz + 1, -ry : ry + 1, -rx : rx + 1]
     footprint = (oz * dz) ** 2 + (oy * dy) ** 2 + (ox * dx) ** 2 <= radius_um**2 + np.finfo(float).eps
-    biomass_count = ndimage.convolve(biomass.astype(float), footprint.astype(float), mode="constant", cval=0.0)
-    total_count = ndimage.convolve(np.ones(biomass.shape, dtype=float), footprint.astype(float), mode="constant", cval=0.0)
+    if biomass.size * footprint.size > 1_000_000:
+        from scipy.signal import fftconvolve
+
+        kernel = footprint.astype(np.float32)
+        # Counts are integers; remove FFT roundoff before density division.
+        biomass_count = np.rint(fftconvolve(biomass.astype(np.float32), kernel, mode="same")).astype(float)
+        total_count = np.rint(fftconvolve(np.ones(biomass.shape, dtype=np.float32), kernel, mode="same")).astype(float)
+    else:
+        biomass_count = ndimage.convolve(biomass.astype(float), footprint.astype(float), mode="constant", cval=0.0)
+        total_count = ndimage.convolve(np.ones(biomass.shape, dtype=float), footprint.astype(float), mode="constant", cval=0.0)
     density_map = np.divide(biomass_count, total_count, out=np.zeros_like(biomass_count), where=total_count > 0)
     values = density_map[biomass]
     return {
@@ -434,4 +450,26 @@ def local_biomass_density(
         "LocalBiomassDensityMean": float(values.mean()) if values.size else float("nan"),
         "LocalBiomassDensityStd": float(values.std()) if values.size else float("nan"),
         "LocalBiomassDensityIQR": float(np.percentile(values, 75) - np.percentile(values, 25)) if values.size else float("nan"),
+    }
+
+
+def local_thickness_metrics(mask, dimensions):
+    """Digital sphere diameters, with voxel-resolution radius sampling."""
+    binary = np.asarray(mask, dtype=bool)
+    spacing = tuple(reversed(dimensions))
+    padded = np.pad(binary, 1)
+    radii = ndimage.distance_transform_edt(padded, sampling=spacing)
+    thickness = np.zeros(padded.shape, dtype=float)
+    step = min(spacing)
+    # Round radii down; diameter error is less than two finest voxels.
+    maximum = int(np.floor(radii.max() / step + 1e-12))
+    for radius in np.arange(maximum, 0, -1) * step:
+        covered = ndimage.distance_transform_edt(radii < radius, sampling=spacing) <= radius
+        thickness[(thickness == 0) & padded & covered] = 2 * radius
+    values = thickness[1:-1, 1:-1, 1:-1][binary]
+    return {
+        "LocalThicknessMean_um": float(values.mean()) if values.size else float("nan"),
+        "LocalThicknessMedian_um": float(np.median(values)) if values.size else float("nan"),
+        "LocalThicknessMax_um": float(values.max()) if values.size else float("nan"),
+        "LocalThicknessRadiusStep_um": step,
     }

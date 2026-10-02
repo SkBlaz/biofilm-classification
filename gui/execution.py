@@ -29,6 +29,7 @@ class JobPaths:
     input: Path
     training_images: Path
     inference_images: Path
+    masks: Path
     feature_files: Path
     work: Path
     output: Path
@@ -60,6 +61,7 @@ def job_paths(job_id: str, create: bool = False) -> JobPaths:
         input=root / "input",
         training_images=root / "input" / "training-images",
         inference_images=root / "input" / "inference-images",
+        masks=root / "input" / "masks",
         feature_files=root / "input" / "feature-files",
         work=root / "work",
         output=root / "output",
@@ -70,6 +72,7 @@ def job_paths(job_id: str, create: bool = False) -> JobPaths:
         for directory in (
             paths.training_images,
             paths.inference_images,
+            paths.masks,
             paths.feature_files,
             paths.work,
             paths.results,
@@ -123,12 +126,19 @@ def execution_environment(config: dict) -> dict[str, str]:
             "IMAGINE_VOXEL_SIZE_Y": str(config["voxel_size_y"]),
             "IMAGINE_VOXEL_SIZE_Z": str(config["voxel_size_z"]),
             "IMAGINE_THRESHOLD_METHOD": config.get("threshold_method", "otsu"),
-            "IMAGINE_THRESHOLD_MODE": config.get("threshold_boundary_mode", "comstat2"),
-            "IMAGINE_THRESHOLD_SCALE": config.get("threshold_scale", "stack_normalized"),
+            "IMAGINE_THRESHOLD_MODE": "comstat2",
+            "IMAGINE_THRESHOLD_SCALE": config.get("threshold_scale", "uint8"),
             "IMAGINE_THRESHOLD_VALUE": "" if config.get("threshold_value") is None else str(config["threshold_value"]),
-            "IMAGINE_THRESHOLD_UPPER_VALUE": "" if config.get("threshold_upper_value") is None else str(config["threshold_upper_value"]),
             "IMAGINE_DIM_CLASS_ASSIGNMENT": config.get("dim_class_assignment", "foreground"),
-            "IMAGINE_REPRESENTATIVE_IMAGES_JSON": json.dumps(config.get("representative_images", {})),
+            "IMAGINE_SEGMENTATION_APPROACH": config.get("segmentation_approach", "automatic"),
+            "IMAGINE_THRESHOLD_SENSITIVITY": str(config.get("threshold_sensitivity", 1.0)),
+            "IMAGINE_BEM_TOLERANCE": str(config.get("bem_tolerance", 0.1)),
+            "IMAGINE_CONVERSION_MAX": "" if config.get("conversion_max") is None else str(config["conversion_max"]),
+            "IMAGINE_IMAGE_DIMENSION": config.get("image_dimension", "auto"),
+            "IMAGINE_FEATURE_GROUPS": ",".join(config.get("feature_groups", ["all"])),
+            "IMAGINE_MASKS_DIR": config.get("masks_dir", ""),
+            "IMAGINE_QC_ONLY": "1" if config.get("qc_only") else "0",
+            "IMAGINE_FEATURE_SETTINGS_JSON": json.dumps(config.get("feature_generation_settings") or {}),
             "IMAGINE_LOCAL_DENSITY_RADIUS_UM": str(config.get("local_density_radius_um", 2.0)),
             "IMAGINE_CONNECTIVITY_3D": str(config.get("connectivity_3d", 26)),
             "IMAGINE_MIN_OBJECT_AREA_UM2": str(config.get("minimum_object_area_um2", 0.0)),
@@ -157,6 +167,23 @@ def build_execution_steps(config: dict) -> list[ExecutionStep]:
     results = Path(config["results_dir"])
     datafile = results / "datafile.tsv"
     steps: list[ExecutionStep] = []
+
+    if config.get("qc_only"):
+        images_dir = config["inference_images"] if workflow == "features_unlabelled" else config["training_images"]
+        commands = tuple(
+            (
+                sys.executable,
+                str(SRC_DIR / "feature_generator.py"),
+                "--file",
+                str(path),
+                "--outfolder",
+                str(results / "feature_generator"),
+                "--qc-only",
+            )
+            for path in sorted(Path(images_dir).iterdir())
+            if path.suffix.lower() in {".tif", ".tiff"}
+        )
+        return [ExecutionStep("segmentation", "Segment images and generate QC", commands)]
 
     should_generate = workflow in {"features_labelled", "features_unlabelled"} or (workflow == "full" and not config.get("feature_file"))
     if should_generate:

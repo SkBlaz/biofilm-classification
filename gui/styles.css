@@ -340,3 +340,9 @@ a.button { display:inline-grid; place-items:center; text-decoration:none; }
   .inspector { grid-template-columns:1fr; }
   .file-list { max-height:210px; border-right:0; border-bottom:1px solid var(--line); }
 }
+.feature-group-options { display: grid; gap: 0.65rem; }
+.feature-group-options label { display: block; }
+.feature-group-options small { display: block; margin-left: 1.4rem; }
+.segmentation-tip { padding: 0.7rem; border-left: 3px solid #d1a845; }
+
+.physical-unit { text-transform: none; letter-spacing: normal; }

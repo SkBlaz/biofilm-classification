@@ -942,6 +942,14 @@ def do_classification_simple(
                         "svd_transformer": svd_transformer,
                     }
 
+                    feature_settings = json.loads(os.environ.get("IMAGINE_FEATURE_SETTINGS_JSON", "{}"))
+                    settings_path = os.path.join(base_dir, "feature_generation_settings.json")
+                    if not feature_settings and os.path.isfile(settings_path):
+                        with open(settings_path, encoding="utf-8") as settings_file:
+                            feature_settings = json.load(settings_file)
+                    if feature_settings:
+                        metadata["feature_generation_settings"] = feature_settings
+
                     # Add hyperparameter tuning info for RandomizedSearchCV models
                     if hasattr(final_model, "best_params_"):
                         metadata["best_params"] = final_model.best_params_
