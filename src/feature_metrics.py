@@ -80,7 +80,7 @@ def multi_otsu_biomass_mask(labels: np.ndarray, dim_class: str) -> np.ndarray:
 def robust_background_threshold(image: np.ndarray) -> float:
     """BiofilmQ 1.0.1: trim 5% per tail, mean + 2 sigma.
 
-    Sigma is the normal-distribution maximum-likelihood estimate (ddof=0).
+    Sigma matches MATLAB's uncensored normal fit (sample std, ddof=1).
     All-zero trimmed backgrounds use the first positive 8-bit bin to avoid
     classifying zero-intensity background as biomass under COMSTAT2.
     """
@@ -89,7 +89,8 @@ def robust_background_threshold(image: np.ndarray) -> float:
         raise ValueError("Image must be non-empty and contain finite intensities")
     trim = int(np.floor(values.size / 20 + 0.5))
     capped = values[trim : values.size - trim] if trim else values
-    cutoff = float(capped.mean() + 2 * capped.std())
+    sigma = float(capped.std(ddof=1)) if capped.size > 1 else 0.0
+    cutoff = float(capped.mean() + 2 * sigma)
     return cutoff if cutoff > 0 else float(np.nextafter(0.0, np.inf))
 
 

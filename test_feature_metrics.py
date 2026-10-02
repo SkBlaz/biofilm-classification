@@ -31,7 +31,7 @@ class TestThresholdBoundaryModes(unittest.TestCase):
     def test_robust_background_matches_biofilmq_trimmed_gaussian(self):
         image = np.arange(100, dtype=float)
         capped = image[5:-5]
-        self.assertAlmostEqual(robust_background_threshold(image), capped.mean() + 2 * capped.std())
+        self.assertAlmostEqual(robust_background_threshold(image), capped.mean() + 2 * capped.std(ddof=1))
         self.assertGreater(robust_background_threshold(np.zeros(10)), 0)
 
     def test_three_class_labels_remain_intensity_only(self):
