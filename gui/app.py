@@ -451,23 +451,36 @@ def model_generation_settings(job_id):
     """Restore settings from a GUI job or imported metadata."""
     paths = job_paths(job_id)
     saved = read_job_metadata(job_id).get("feature_generation_settings")
-    if saved:
-        return saved
     model_files = model_file_candidates(paths.results / "models")
     configurations = []
     for model_file in model_files:
         stem = model_file.stem.removesuffix("_model")
         companion = model_file.with_name(stem + "_metadata.joblib")
         if not companion.is_file():
-            return None
+            return saved
         metadata = joblib.load(companion)
         settings = metadata.get("feature_generation_settings") if isinstance(metadata, dict) else None
         if not settings or settings.get("segmentation_version") != 2:
-            return None
+            return saved
         configurations.append(settings)
     if configurations and any(item != configurations[0] for item in configurations):
         raise ValueError("Models require different feature-generation settings; run separate jobs")
     return configurations[0] if configurations else None
+
+
+def settings_metadata(config):
+    key = "segmentation_settings" if config.get("qc_only") else "feature_generation_settings"
+    return {key: config.get("feature_generation_settings")}
+
+
+def prepare_generation_outputs(config):
+    """Keep QC tuning separate from trained-table provenance."""
+    results = Path(config["results_dir"])
+    results.mkdir(parents=True, exist_ok=True)
+    if config.get("qc_only"):
+        shutil.rmtree(results / "feature_generator", ignore_errors=True)
+    filename = "segmentation_settings.json" if config.get("qc_only") else "feature_generation_settings.json"
+    (results / filename).write_text(json.dumps(config.get("feature_generation_settings"), indent=2), encoding="utf-8")
 
 
 def generation_settings(config):
@@ -817,9 +830,7 @@ def run_pipeline(config: dict, job_id: str):
                 "indeterminate": True,
             }
             runtime["progress_context"] = progress_context(config, steps)
-        write_job_metadata(
-            job_id, status="running", workflow=config["workflow"], feature_generation_settings=config.get("feature_generation_settings")
-        )
+        write_job_metadata(job_id, status="running", workflow=config["workflow"], **settings_metadata(config))
         add_log("Pipeline started inside the MicroICS container", job_id)
         add_log(validation_detail, job_id)
 
@@ -835,10 +846,8 @@ def run_pipeline(config: dict, job_id: str):
         with state_lock:
             state["progress"].update(label="Preparing inputs", detail="Preparing the validated inputs for processing", indeterminate=True)
         environment = execution_environment(config)
-        write_job_metadata(job_id, feature_generation_settings=config.get("feature_generation_settings"))
-        (Path(config["results_dir"]) / "feature_generation_settings.json").write_text(
-            json.dumps(config.get("feature_generation_settings"), indent=2), encoding="utf-8"
-        )
+        write_job_metadata(job_id, **settings_metadata(config))
+        prepare_generation_outputs(config)
         stage_training_features(config)
         for step in steps:
             if not execute_step(step, environment, job_id):
@@ -923,7 +932,7 @@ def start_pipeline(raw_config: dict) -> tuple[bool, str | None]:
         error=None,
         learner=config.get("learner"),
         all_learners=bool(config.get("all_learners")),
-        feature_generation_settings=config.get("feature_generation_settings"),
+        **settings_metadata(config),
     )
     thread = threading.Thread(target=run_pipeline, args=(config, job_id), daemon=True)
     with state_lock:

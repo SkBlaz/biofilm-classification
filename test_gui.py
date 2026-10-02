@@ -149,6 +149,33 @@ class TestSegmentationWorkflow(unittest.TestCase):
             self.assertEqual(config["feature_generation_settings"]["feature_groups"], ["intensity"])
             self.assertEqual(config["voxel_size_y"], 0.3)
 
+    def test_qc_rerun_removes_stale_plots_and_preserves_training_provenance(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            outputs = paths.results / "feature_generator"
+            outputs.mkdir()
+            stale = outputs / "sample_threshold_curve.png"
+            stale.write_bytes(b"old plot")
+            provenance = paths.results / "feature_generation_settings.json"
+            provenance.write_text('{"threshold_value": 100}')
+            config = {"results_dir": str(paths.results), "qc_only": True, "feature_generation_settings": {"threshold_value": 200}}
+            app.prepare_generation_outputs(config)
+            self.assertFalse(stale.exists())
+            self.assertEqual(json.loads(provenance.read_text())["threshold_value"], 100)
+            self.assertNotIn("feature_generation_settings", app.settings_metadata(config))
+
+    def test_model_metadata_takes_priority_over_later_job_settings(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            models = paths.results / "models"
+            models.mkdir()
+            (models / "rf_model.joblib").touch()
+            app.joblib.dump(
+                {"feature_generation_settings": {"segmentation_version": 2, "threshold_value": 100}}, models / "rf_metadata.joblib"
+            )
+            app.write_job_metadata(paths.job_id, feature_generation_settings={"threshold_value": 200})
+            self.assertEqual(app.model_generation_settings(paths.job_id)["threshold_value"], 100)
+
 
 class TestJobUploads(unittest.TestCase):
     def test_model_upload_is_stored_as_a_model_job(self):

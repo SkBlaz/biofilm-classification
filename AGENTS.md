@@ -37,6 +37,7 @@ Notes:
 - Shell scripts use LF via `.gitattributes`; Docker normalizes existing Windows `src/*.sh` copies.
 - Segmentation uses a fixed whole-stack 8-bit conversion and COMSTAT2 boundaries. Metadata-free 12-bit TIFFs need acquisition maximum 4095; tune the exported 8-bit TIFF in ImageJ.
 - The GUI supports segmentation/QC-only runs, matching imported TIFF masks, and dimension-aware feature-package execution. Preserve original-precision intensity features and model generation settings. Physical-unit spans must bypass CSS uppercase transforms (µ can otherwise display like M).
+- Repeated QC-only tuning replaces QC artifacts and records `segmentation_settings.json` without overwriting trained-table/model provenance.
 - Tests import modules from `src`, so keep `PYTHONPATH=src`.
 - CI runs Ruff checks and format checks on `main`/`master` pushes and PRs. The Feature Generation workflow also runs the complete unit suite in the built Docker runtime.
 
