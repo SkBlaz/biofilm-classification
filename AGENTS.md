@@ -12,6 +12,8 @@ Use this repository to process 3D biofilm images and run feature generation, ran
 - `src/visualizations/`: visualization modules
 - `test_*.py`: unit tests
 - `run_tests.py`: test runner
+- `src/segmentation.py`: shared settings, 8-bit conversion, imported TIFF masks, and size filtering
+- `src/segmentation_qc.py`: first/middle/top slice QC and exact thresholding TIFF exports
 - `gui/execution.py`: per-job adapter from GUI requests to existing scientific entry points
 - `run_gui.sh`: optional Docker build/run convenience launcher for Unix-like systems
 - `src/requirements.docker.txt`: runtime Python dependencies used in Docker
@@ -32,8 +34,12 @@ python -m ruff format --check .
 ```
 
 Notes:
+- Shell scripts use LF via `.gitattributes`; Docker normalizes existing Windows `src/*.sh` copies.
+- Segmentation uses a fixed whole-stack 8-bit conversion and COMSTAT2 boundaries. Metadata-free 12-bit TIFFs need acquisition maximum 4095; tune the exported 8-bit TIFF in ImageJ.
+- The GUI supports segmentation/QC-only runs, matching imported TIFF masks, and dimension-aware feature-package execution. Preserve original-precision intensity features and model generation settings. Physical-unit spans must bypass CSS uppercase transforms (µ can otherwise display like M).
+- Repeated QC-only tuning replaces QC artifacts and records `segmentation_settings.json` without overwriting trained-table/model provenance.
 - Tests import modules from `src`, so keep `PYTHONPATH=src`.
-- CI runs Ruff checks and format checks on `main`/`master` pushes and PRs.
+- CI runs Ruff checks and format checks on `main`/`master` pushes and PRs. The Feature Generation workflow also runs the complete unit suite in the built Docker runtime.
 
 ## 4) Change workflow for bots
 
@@ -61,6 +67,7 @@ Keep newest entry at the top.
 
 | Date (UTC) | Bot/Agent | PR/Commit | AGENTS.md update summary |
 |---|---|---|---|
+| 2026-10-02 | Codex | current change | LF shell checkout/build protection, shared 8-bit segmentation settings, mask import, slice QC, dimension-aware feature selection, model provenance, and Docker unit-suite CI documented. |
 | 2026-08-17 | Codex | current change | Imported/deleted model jobs, ablation plateau marker, explicit feature-value means, per-feature SHAP plots, and participant FAQ documented. |
 | 2026-08-15 | Copilot CLI | current change | GUI inference step now clarifies images/feature table are alternatives, trained-model dropdown shows creation date and learner(s)/model count instead of only a job ID, and inference help text explains it auto-evaluates every saved model (no separate "all learners" toggle needed at inference). |
 | 2026-08-14 | Codex | current change | Random Forest and KNN hyperparameter search grids trimmed to eliminate HPO scaling bottlenecks on high-dimensional feature tables. |

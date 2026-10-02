@@ -3,10 +3,16 @@
 Unit tests for feature_generator.py utility functions.
 """
 
+import json
 import sys
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
+import tifffile
 
 # Add src directory to path
 sys.path.insert(0, "src")
@@ -18,6 +24,7 @@ from feature_generator import (
     get_transition_matrix,
     read_voxel_dimensions,
     rgb2gray,
+    segment,
 )
 
 
@@ -119,6 +126,15 @@ class TestCalculateSpatialSpreading(unittest.TestCase):
         self.assertGreater(Sz, 0.0)
         self.assertGreater(Sxyz, 0.0)
 
+    def test_spreading_uses_mask_voxel_calibration_per_axis(self):
+        mask = np.zeros((1, 1, 3), dtype=bool)
+        mask[0, 0, 0] = True
+        mask[0, 0, 2] = True
+        horizontal, vertical, total = calculate_spatial_spreading(mask, dimensions=(2.0, 3.0, 0.5))
+        self.assertEqual(horizontal, 2.0)
+        self.assertEqual(vertical, 0.0)
+        self.assertEqual(total, 2.0)
+
     def test_horizontal_spread(self):
         """Test with horizontal spread."""
         image_stack = np.zeros((3, 5, 5))
@@ -145,6 +161,138 @@ class TestCalculateSpatialSpreading(unittest.TestCase):
         self.assertTrue(np.isnan(Sxy))
         self.assertTrue(np.isnan(Sz))
         self.assertTrue(np.isnan(Sxyz))
+
+    def test_anisotropic_spacing_is_applied_per_axis(self):
+        image_stack = np.zeros((1, 1, 2))
+        image_stack[0, 0, :] = 1
+        horizontal, vertical, total = calculate_spatial_spreading(image_stack, (2.0, 3.0, 0.5))
+        self.assertEqual(horizontal, 1.0)
+        self.assertEqual(vertical, 0.0)
+        self.assertEqual(total, 1.0)
+
+
+class TestSegmentationIntegration(unittest.TestCase):
+    def test_raw_manual_threshold_and_qc_metadata(self):
+        stack = np.array(
+            [
+                [[0, 100], [200, 0]],
+                [[0, 100], [200, 0]],
+            ],
+            dtype=np.uint8,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = Path(directory) / "sample.tif"
+            tifffile.imwrite(image_path, stack, photometric="minisblack", metadata={"axes": "ZYX"})
+            segment(
+                str(image_path),
+                directory,
+                threshold_mode="comstat2",
+                threshold_method="manual",
+                threshold_scale="uint8",
+                manual_threshold=100,
+            )
+            record_path = Path(directory) / "sample_segmentation.json"
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            self.assertEqual(record["selected_threshold_value"], 100)
+            self.assertEqual(record["selected_threshold_units"], "uint8")
+            self.assertEqual(record["threshold_boundary_mode"], "comstat2")
+            self.assertFalse(record["no_biomass_detected"])
+            self.assertTrue((Path(directory) / "sample_segmentation_qc.png").is_file())
+
+    def test_manual_otsu_override_controls_mask_and_all_slice_qc(self):
+        stack = np.array([[[0, 10], [100, 200]]] * 3, dtype=np.uint8)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "override.tif"
+            tifffile.imwrite(path, stack, photometric="minisblack")
+            record = segment(
+                str(path), directory, threshold_method="otsu", manual_threshold=0.78, threshold_scale="stack_normalized", qc_only=True
+            )
+            expected = stack >= 0.78 * 255
+            np.testing.assert_array_equal(tifffile.imread(Path(directory) / record["mask"]) > 0, expected)
+            self.assertEqual(record["method"], "manual")
+            self.assertEqual(record["submitted_threshold_value"], 0.78)
+            self.assertAlmostEqual(record["threshold_uint8"], 198.9)
+            self.assertEqual({role: item["slice_index"] for role, item in record["slice_qc"].items()}, {"first": 0, "middle": 1, "top": 2})
+            for item in record["slice_qc"].values():
+                self.assertTrue((Path(directory) / item["overlay"]).is_file())
+                self.assertTrue((Path(directory) / item["mask"]).is_file())
+            self.assertFalse(list(Path(directory).glob("*CustomAlgos.txt")))
+
+    def test_intensity_only_skips_geometry_and_serial_calculation(self):
+        stack = np.array([[[0, 10], [100, 200]]] * 2, dtype=np.uint16)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "intensity.tif"
+            tifffile.imwrite(path, stack, photometric="minisblack")
+            with (
+                patch("feature_generator.comstat_metrics", side_effect=AssertionError("unselected geometry")),
+                patch("feature_generator.get_cell_count", side_effect=AssertionError("unselected serial features")),
+            ):
+                segment(str(path), directory, feature_groups=["intensity"])
+            table = pd.read_csv(Path(directory) / "intensityCustomAlgos.txt", sep="\t", index_col=0)
+            self.assertEqual(table["RawIntensityMax"].iloc[0], 200)
+            self.assertNotIn("ObjectCount3D", table)
+            self.assertNotIn("Homogeneity", table)
+
+    def test_imported_labels_survive_and_size_filter_updates_qc(self):
+        stack = np.zeros((3, 3, 4), dtype=np.uint8)
+        labels = np.zeros_like(stack, dtype=np.uint16)
+        labels[1, 1, 1:3] = [9, 25]
+        labels[2, 1, 2] = 25
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            masks = root / "masks"
+            masks.mkdir()
+            path = root / "labelled.tif"
+            tifffile.imwrite(path, stack, photometric="minisblack")
+            tifffile.imwrite(masks / "labelled_mask.tif", labels, photometric="minisblack")
+            with (
+                patch("feature_generator.voxel_size_x", 1),
+                patch("feature_generator.voxel_size_y", 1),
+                patch("feature_generator.voxel_size_z", 1),
+            ):
+                record = segment(
+                    str(path),
+                    directory,
+                    segmentation_approach="import",
+                    masks_dir=str(masks),
+                    feature_groups=["objects"],
+                    minimum_object_volume_um3=2,
+                )
+            self.assertIsNone(record["threshold_uint8"])
+            self.assertIsNone(record["threshold_curve"])
+            self.assertEqual(record["foreground_fraction"], 2 / stack.size)
+            table = pd.read_csv(root / "labelledCustomAlgos.txt", sep="\t", index_col=0)
+            self.assertEqual(table["ObjectCount3D"].iloc[0], 1)
+            self.assertEqual(table["ObjectVolume3DMean_um3"].iloc[0], 2)
+
+    def test_2d_package_has_objects_pores_and_texture_without_3d(self):
+        image = np.zeros((5, 5), dtype=np.uint8)
+        image[1:4, 1:4] = 200
+        image[2, 2] = 0
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "plane.tif"
+            tifffile.imwrite(path, image)
+            record = segment(str(path), directory, manual_threshold=100, image_dimension="2d")
+            table = pd.read_csv(Path(directory) / "planeCustomAlgos.txt", sep="\t", index_col=0)
+            self.assertIn("SubstratumObjectCount", table)
+            self.assertIn("SubstratumInternalPoreAreaMean_um2", table)
+            self.assertIn("GLCMContrast_d1_mean", table)
+            self.assertNotIn("ObjectCount3D", table)
+            self.assertNotIn("BiomassVolume_um3", table)
+            self.assertEqual(record["image_dimension"], "2d")
+
+    def test_advanced_package_keeps_maps_out_of_numeric_ml_table(self):
+        stack = np.zeros((3, 5, 5), dtype=np.uint8)
+        stack[:, 1:4, 1:4] = 200
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "geometry.tif"
+            tifffile.imwrite(path, stack, photometric="minisblack")
+            segment(str(path), directory, feature_groups=["advanced"])
+            table = pd.read_csv(Path(directory) / "geometryCustomAlgos.txt", sep="\t", index_col=0)
+            self.assertNotIn("LocalBiomassDensityMap", table)
+            self.assertIn("LocalBiomassDensityMean", table)
+            self.assertIn("LocalThicknessMean_um", table)
+            self.assertTrue(all(pd.api.types.is_numeric_dtype(table[column]) for column in table))
 
 
 class TestGetCellCount(unittest.TestCase):

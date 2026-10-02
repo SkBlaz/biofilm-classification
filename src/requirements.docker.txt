@@ -1,6 +1,7 @@
 pandas
 tqdm
 multipagetiff
+tifffile>=2024.8.30
 numpy
 scikit-learn
 scipy

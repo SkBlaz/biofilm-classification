@@ -34,11 +34,13 @@ const modelFilePicker = document.querySelector('#modelFilePicker');
 const modelFileStatus = document.querySelector('#modelFileStatus');
 const deleteModelJobButton = document.querySelector('#deleteModelJobButton');
 
-const stepIcons = { features: '1', validate: '✓', models: '2', reports: '▧', inference: '3' };
+const stepIcons = { segmentation: '◩', features: '1', validate: '✓', models: '2', reports: '▧', inference: '3' };
 let uploadJobId = '';
 let featureFileName = '';
+let featureSettingsName = '';
 let trainingUploadCount = 0;
 let inferenceUploadCount = 0;
+let maskUploadCount = 0;
 let pendingUploads = 0;
 let latestState = null;
 let pollTimer = null;
@@ -47,6 +49,55 @@ let previousRunStatus = null;
 let copyLogResetTimer = null;
 
 function value(id) { return document.querySelector(`#${id}`).value.trim(); }
+
+const THRESHOLD_HELP = {
+  otsu: 'Otsu finds one threshold that best separates background from biomass by maximizing between-class variance. Useful for a clear bright-signal / dark-background separation. Dim or sparse biofilms with long-tailed histograms can lose real signal; try robust background or tune a manual cutoff.',
+  multi_otsu: 'Three-class Otsu finds two thresholds for background, dim, and bright intensity classes. Including the dim class uses the lower cutoff; assigning it to background uses the upper cutoff. The resulting biomass mask uses one cutoff. Intensity classes do not identify cell states.',
+  robust_background: 'Following BiofilmQ, robust background trims the lowest and highest 5% of intensities, estimates a normal distribution, and uses mean + 2 standard deviations. Best when background occupies most of the image; check QC for dim-cell-rich biofilms.',
+  bem: 'BEM fits the biomass-versus-threshold curve and selects the first threshold where a one-unit increase changes its slope by less than the chosen tolerance (default 10%). Requires an 8-bit histogram with its mode at zero and no saturated 255 voxels. Invalid inputs or failed fits produce an actionable error.',
+  manual: 'You choose the cutoff instead of an algorithm. Useful when automatic methods fail, particularly for dim-cell-rich biofilms. Tune the exported 8-bit thresholding TIFF in ImageJ, then enter its 0–255 intensity value here. Stack-normalized units are that same 8-bit intensity divided by 255; finding a sensible cutoff requires visual QC.',
+};
+
+function updateSegmentation() {
+  const approach = value('segmentationApproach');
+  const method = value('thresholdMethod');
+  const is2d = value('imageDimension') === '2d';
+  const show = (id, visible) => document.querySelector(`#${id}`).classList.toggle('hidden', !visible);
+  show('automaticThresholdFields', approach === 'automatic');
+  show('manualThresholdFields', approach === 'manual');
+  show('maskUploadFields', approach === 'import');
+  show('conversionFields', approach !== 'import');
+  show('dimClassField', method === 'multi_otsu');
+  show('sensitivityField', method !== 'bem');
+  show('bemToleranceField', method === 'bem');
+  show('tuneOtsuButton', method === 'otsu');
+  show('featureGroups3d', !is2d);
+  show('features2dHelp', is2d);
+  show('connectivity3dField', !is2d);
+  show('minimumObjectAreaField', is2d);
+  show('minimumObjectVolumeField', !is2d);
+  show('localDensityField', !is2d && document.querySelector('input[value="advanced"]').checked);
+  const threshold = document.querySelector('#thresholdValue');
+  threshold.required = approach === 'manual';
+  threshold.disabled = approach !== 'manual';
+  threshold.max = value('thresholdScale') === 'uint8' ? 255 : 1;
+  document.querySelector('#thresholdDescription').textContent = approach === 'import' ? '' : THRESHOLD_HELP[approach === 'manual' ? 'manual' : method];
+}
+
+['segmentationApproach', 'thresholdMethod', 'thresholdScale', 'imageDimension'].forEach((id) => document.querySelector(`#${id}`).addEventListener('change', updateSegmentation));
+document.querySelector('#tuneOtsuButton').addEventListener('click', () => {
+  document.querySelector('#segmentationApproach').value = 'manual';
+  updateSegmentation();
+  document.querySelector('#thresholdValue').focus();
+});
+document.querySelector('#allFeatureGroups').addEventListener('change', (event) => {
+  document.querySelectorAll('input[name="feature_group"]').forEach((input) => { input.checked = event.target.checked; });
+  updateSegmentation();
+});
+document.querySelectorAll('input[name="feature_group"]').forEach((input) => input.addEventListener('change', () => {
+  document.querySelector('#allFeatureGroups').checked = [...document.querySelectorAll('input[name="feature_group"]')].every((field) => field.checked);
+  updateSegmentation();
+}));
 function escapeHtml(text) { return String(text).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
 function setFormMessage(message = '', tone = '') {
   formMessage.textContent = message;
@@ -118,8 +169,12 @@ function setWorkflow(workflow) {
   document.querySelector('#inferenceImagesField').classList.toggle('hidden', !['features_unlabelled', 'inference', 'full'].includes(workflow));
   document.querySelector('#featureFileField').classList.toggle('hidden', !['train', 'inference', 'full'].includes(workflow));
   document.querySelector('#modelJobField').classList.toggle('hidden', workflow !== 'inference');
+  document.querySelector('#inheritedSettingsHelp').classList.toggle('hidden', workflow !== 'inference');
   document.querySelector('#modelFields').classList.toggle('hidden', !['train', 'full'].includes(workflow));
   document.querySelector('#voxelFields').classList.toggle('hidden', workflow === 'train');
+  document.querySelector('#featurePackageFields').classList.toggle('hidden', workflow === 'train');
+  document.querySelector('#segmentationFields').classList.toggle('hidden', workflow === 'train');
+  document.querySelector('#qcOnlyField').classList.toggle('hidden', !['features_labelled', 'features_unlabelled', 'full'].includes(workflow));
 
   // Only 'inference' lets users choose images OR a feature table; other workflows require one specific input.
   const inferenceStatus = document.querySelector('#inferenceFileStatus');
@@ -214,7 +269,22 @@ async function loadDefaults() {
   document.querySelector('#voxelSizeY').value = config.voxel_size_y;
   document.querySelector('#voxelSizeZ').value = config.voxel_size_z;
   document.querySelector('#learner').value = config.learner;
+  document.querySelector('#thresholdMethod').value = config.threshold_method;
+  document.querySelector('#segmentationApproach').value = config.segmentation_approach || 'automatic';
+  document.querySelector('#thresholdSensitivity').value = config.threshold_sensitivity;
+  document.querySelector('#bemTolerance').value = config.bem_tolerance;
+  document.querySelector('#conversionMax').value = config.conversion_max ?? '';
+  document.querySelector('#imageDimension').value = config.image_dimension === '2d' ? '2d' : '3d';
+  document.querySelector('#qcOnly').checked = config.qc_only;
+  document.querySelector('#thresholdScale').value = config.threshold_scale;
+  document.querySelector('#thresholdValue').value = config.threshold_value ?? '';
+  document.querySelector('#dimClassAssignment').value = config.dim_class_assignment;
+  document.querySelector('#localDensityRadius').value = config.local_density_radius_um;
+  document.querySelector('#connectivity3d').value = config.connectivity_3d;
+  document.querySelector('#minimumObjectArea').value = config.minimum_object_area_um2;
+  document.querySelector('#minimumObjectVolume').value = config.minimum_object_volume_um3;
   renderModelJobs(payload.model_jobs);
+  updateSegmentation();
 }
 
 async function uploadFiles(input, kind, statusElement) {
@@ -236,8 +306,9 @@ async function uploadFiles(input, kind, statusElement) {
       uploadJobId = payload.job_id;
     }
     if (kind === 'training') trainingUploadCount += files.length;
+    else if (kind === 'mask') maskUploadCount += files.length;
     else inferenceUploadCount += files.length;
-    const total = kind === 'training' ? trainingUploadCount : inferenceUploadCount;
+    const total = kind === 'training' ? trainingUploadCount : (kind === 'mask' ? maskUploadCount : inferenceUploadCount);
     statusElement.textContent = `${total} image${total === 1 ? '' : 's'} uploaded to job ${uploadJobId.slice(0, 8)}.`;
   } catch (error) {
     statusElement.textContent = error.message;
@@ -247,20 +318,21 @@ async function uploadFiles(input, kind, statusElement) {
   }
 }
 
-async function uploadFeatureFile(input) {
+async function uploadFeatureFile(input, settings = false) {
   const file = input.files[0];
   if (!file) return;
   pendingUploads += 1;
-  const statusElement = document.querySelector('#featureFileStatus');
+  const statusElement = document.querySelector(settings ? '#settingsFileStatus' : '#featureFileStatus');
   statusElement.textContent = `Uploading ${file.name}…`;
   try {
     const headers = { 'Content-Type': file.type || 'application/octet-stream', 'X-Upload-Name': file.name };
     if (uploadJobId) headers['X-Job-ID'] = uploadJobId;
-    const response = await fetch('/api/upload-feature', { method: 'POST', headers, body: file });
+    const response = await fetch(settings ? '/api/upload-settings' : '/api/upload-feature', { method: 'POST', headers, body: file });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || 'Upload failed');
     uploadJobId = payload.job_id;
-    featureFileName = payload.file;
+    if (settings) featureSettingsName = payload.file;
+    else featureFileName = payload.file;
     statusElement.textContent = `${payload.file} uploaded to job ${uploadJobId.slice(0, 8)}.`;
   } catch (error) {
     statusElement.textContent = error.message;
@@ -272,6 +344,8 @@ async function uploadFeatureFile(input) {
 
 document.querySelector('#trainingFilePicker').addEventListener('change', (event) => uploadFiles(event.target, 'training', document.querySelector('#trainingFileStatus')));
 document.querySelector('#inferenceFilePicker').addEventListener('change', (event) => uploadFiles(event.target, 'inference', document.querySelector('#inferenceFileStatus')));
+document.querySelector('#maskFilePicker').addEventListener('change', (event) => uploadFiles(event.target, 'mask', document.querySelector('#maskFileStatus')));
+document.querySelector('#settingsFilePicker').addEventListener('change', (event) => uploadFeatureFile(event.target, true));
 document.querySelector('#featureFilePicker').addEventListener('change', (event) => uploadFeatureFile(event.target));
 
 function configFromForm() {
@@ -279,6 +353,7 @@ function configFromForm() {
     workflow: document.querySelector('input[name="workflow"]:checked').value,
     job_id: uploadJobId,
     feature_file: featureFileName,
+    feature_settings_file: featureSettingsName,
     model_job_id: modelJob.value,
     workers: Number(value('workers')),
     top_features: Number(value('topFeatures')),
@@ -286,6 +361,21 @@ function configFromForm() {
     voxel_size_x: Number(value('voxelSizeX')),
     voxel_size_y: Number(value('voxelSizeY')),
     voxel_size_z: Number(value('voxelSizeZ')),
+    threshold_method: value('thresholdMethod'),
+    segmentation_approach: value('segmentationApproach'),
+    threshold_sensitivity: Number(value('thresholdSensitivity')),
+    bem_tolerance: Number(value('bemTolerance')),
+    conversion_max: value('conversionMax'),
+    image_dimension: value('imageDimension'),
+    feature_groups: value('imageDimension') === '2d' || document.querySelector('#allFeatureGroups').checked ? ['all'] : [...document.querySelectorAll('input[name="feature_group"]:checked')].map((input) => input.value),
+    qc_only: document.querySelector('#qcOnly').checked && ['features_labelled', 'features_unlabelled', 'full'].includes(document.querySelector('input[name="workflow"]:checked').value),
+    threshold_scale: value('thresholdScale'),
+    threshold_value: value('segmentationApproach') === 'manual' ? value('thresholdValue') : '',
+    dim_class_assignment: value('dimClassAssignment'),
+    local_density_radius_um: Number(value('localDensityRadius')),
+    connectivity_3d: Number(value('connectivity3d')),
+    minimum_object_area_um2: Number(value('minimumObjectArea')),
+    minimum_object_volume_um3: Number(value('minimumObjectVolume')),
     all_learners: document.querySelector('input[name="learner_mode"]:checked').value === 'all',
     learner: value('learner'),
   };
@@ -306,6 +396,9 @@ function renderValidation(report) {
       const errors = (section.errors || []).map((error) => `<li>${escapeHtml(error)}</li>`).join('');
       const warnings = (section.warnings || []).map((warning) => `<li>${escapeHtml(warning)}</li>`).join('');
       return `<section class="validation-section"><strong>${escapeHtml(name.replace('_', ' '))}</strong><p>${section.rows} rows · ${section.features_read} features</p>${errors ? `<ul class="validation-errors">${errors}</ul>` : ''}${warnings ? `<ul>${warnings}</ul>` : ''}</section>`;
+    }
+    if (section.errors?.length) {
+      return `<section class="validation-section"><strong>${escapeHtml(name.replace('_', ' '))}</strong><ul class="validation-errors">${section.errors.map((error) => `<li>${escapeHtml(error)}</li>`).join('')}</ul></section>`;
     }
     const labels = Object.entries(section.images_per_label || {}).map(([label, count]) => `<li>${escapeHtml(label)}: ${count}</li>`).join('');
     return `<section class="validation-section"><strong>${escapeHtml(name.replace('_', ' '))}</strong><p>${section.total_images || 0} image(s)</p>${labels ? `<ul>${labels}</ul>` : ''}</section>`;
@@ -495,8 +588,10 @@ resetButton.addEventListener('click', async () => {
     renderState(await post('/api/reset'));
     uploadJobId = '';
     featureFileName = '';
+  featureSettingsName = '';
     trainingUploadCount = 0;
     inferenceUploadCount = 0;
+  maskUploadCount = 0;
     document.querySelector('#trainingFileStatus').textContent = 'No training images uploaded.';
     document.querySelector('#inferenceFileStatus').textContent = 'No inference images uploaded.';
     document.querySelector('#featureFileStatus').textContent = 'No feature table uploaded.';

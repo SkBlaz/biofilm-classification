@@ -23,6 +23,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+import joblib
+
 try:
     from gui.execution import (
         JOBS_ROOT,
@@ -38,6 +40,7 @@ try:
         validate_job_id,
     )
     from src.input_validation import validate_feature_table, validate_image_directory
+    from src.segmentation import mask_for_image, normalize_settings, read_mask, tiff_info
 except ModuleNotFoundError:  # Direct ``python gui/app.py`` execution.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from gui.execution import (
@@ -54,6 +57,7 @@ except ModuleNotFoundError:  # Direct ``python gui/app.py`` execution.
         validate_job_id,
     )
     from src.input_validation import validate_feature_table, validate_image_directory
+    from src.segmentation import mask_for_image, normalize_settings, read_mask, tiff_info
 
 ROOT = Path(__file__).resolve().parents[1]
 GUI_DIR = Path(__file__).resolve().parent
@@ -146,12 +150,28 @@ def default_config() -> dict[str, object]:
         "workflow": "features_labelled",
         "job_id": "",
         "feature_file": "",
+        "feature_settings_file": "",
         "model_job_id": "",
         "workers": min(4, os.cpu_count() or 1),
         "top_features": 10,
         "correlation_threshold": 0.8,
         "all_learners": False,
         "learner": "rf",
+        "threshold_method": "otsu",
+        "segmentation_approach": "automatic",
+        "threshold_scale": "uint8",
+        "threshold_sensitivity": 1.0,
+        "bem_tolerance": 0.10,
+        "conversion_max": "",
+        "image_dimension": "auto",
+        "feature_groups": ["all"],
+        "qc_only": False,
+        "threshold_value": "",
+        "dim_class_assignment": "foreground",
+        "local_density_radius_um": 2.0,
+        "connectivity_3d": 26,
+        "minimum_object_area_um2": 0.0,
+        "minimum_object_volume_um3": 0.0,
         **DEFAULT_VOXEL_DIMENSIONS,
     }
 
@@ -241,6 +261,7 @@ def upload_directory(job_id: str, kind: str) -> Path:
         "inference": paths.inference_images,
         "feature": paths.feature_files,
         "model": paths.results / "models",
+        "mask": paths.masks,
     }
     try:
         return directories[kind]
@@ -308,6 +329,24 @@ def validate_config(raw: dict) -> dict:
     job_id = validate_job_id(str(config.get("job_id", "")))
     paths = job_paths(job_id)
 
+    supplied_settings = None
+    if config.get("feature_settings_file"):
+        name = safe_uploaded_name(str(config["feature_settings_file"]), {".json"})
+        settings_path = (paths.feature_files / name).resolve()
+        if settings_path.parent != paths.feature_files.resolve() or not settings_path.is_file():
+            raise ValueError("The feature-generation settings file is not uploaded")
+        try:
+            supplied_settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("Feature-generation settings must be valid JSON") from exc
+        if not isinstance(supplied_settings, dict) or supplied_settings.get("segmentation_version") != 2:
+            raise ValueError("Feature-generation settings require segmentation_version 2")
+        config.update(normalize_settings(supplied_settings))
+        for key in DEFAULT_VOXEL_DIMENSIONS:
+            if key not in supplied_settings:
+                raise ValueError(f"Feature-generation settings must contain {key}")
+            config[key] = supplied_settings[key]
+
     try:
         workers = int(config.get("workers", 4))
         top_features = int(config.get("top_features", 10))
@@ -332,6 +371,20 @@ def validate_config(raw: dict) -> dict:
             raise ValueError(f"Voxel size {axis.upper()} must be a positive number")
         voxel_dimensions[key] = dimension
 
+    if "segmentation_approach" not in raw and supplied_settings is None:
+        config["segmentation_approach"] = None
+    config["masks_dir"] = str(paths.masks)
+    segmentation = normalize_settings(config)
+    if segmentation["qc_only"] and workflow not in {"features_labelled", "features_unlabelled", "full"}:
+        raise ValueError("Segmentation/QC only requires an image feature workflow")
+    if raw.get("threshold_upper_value") not in (None, "") or raw.get("representative_images") not in (None, "", {}):
+        raise ValueError("Use uploaded images and one manual cutoff; representative maps and second cutoffs were removed")
+
+    if segmentation["qc_only"]:
+        image_dir = paths.inference_images if workflow == "features_unlabelled" else paths.training_images
+        if not has_images(image_dir):
+            raise ValueError("Upload images before running segmentation and QC")
+
     learner = str(config.get("learner", "rf"))
     if learner not in {"rf", "dummy", "decisiontree", "logistic", "xgb", "gridsearch"}:
         raise ValueError("Choose a supported learner")
@@ -343,7 +396,7 @@ def validate_config(raw: dict) -> dict:
         raise ValueError("Upload at least one inference image")
     if workflow == "train" and not feature_file:
         raise ValueError("Train models requires an uploaded complete feature table")
-    if workflow == "full" and not has_images(paths.inference_images):
+    if workflow == "full" and not segmentation["qc_only"] and not has_images(paths.inference_images):
         raise ValueError("All together requires inference images to classify")
     if workflow == "inference" and not feature_file and not has_images(paths.inference_images):
         raise ValueError("Inference requires uploaded images or a compatible feature table")
@@ -360,13 +413,14 @@ def validate_config(raw: dict) -> dict:
     else:
         models_dir = paths.results / "models"
 
-    return {
+    validated = {
         "workflow": workflow,
         "job_id": job_id,
         "training_images": str(paths.training_images),
         "inference_images": str(paths.inference_images),
         "feature_file": str(feature_file) if feature_file else "",
         "feature_file_name": feature_file.name if feature_file else "",
+        "feature_settings_file": str(config.get("feature_settings_file", "")),
         "model_job_id": model_job_id,
         "models_dir": str(models_dir),
         "results_dir": str(paths.results),
@@ -377,21 +431,113 @@ def validate_config(raw: dict) -> dict:
         "correlation_threshold": correlation_threshold,
         "all_learners": bool(config.get("all_learners")),
         "learner": learner,
+        **segmentation,
         **voxel_dimensions,
     }
+    saved = model_generation_settings(model_job_id) if workflow == "inference" and not feature_file else None
+    if saved:
+        validated.update(saved)
+        validated["masks_dir"] = str(paths.masks)
+        validated["qc_only"] = False
+    validated["feature_generation_settings"] = (
+        generation_settings(validated) if supplied_settings or (not feature_file and workflow != "train") else None
+    )
+    if workflow == "inference" and not feature_file and not saved:
+        validated["feature_generation_settings"] = None
+    return validated
+
+
+def model_generation_settings(job_id):
+    """Restore settings from a GUI job or imported metadata."""
+    paths = job_paths(job_id)
+    saved = read_job_metadata(job_id).get("feature_generation_settings")
+    model_files = model_file_candidates(paths.results / "models")
+    configurations = []
+    for model_file in model_files:
+        stem = model_file.stem.removesuffix("_model")
+        companion = model_file.with_name(stem + "_metadata.joblib")
+        if not companion.is_file():
+            return saved
+        metadata = joblib.load(companion)
+        settings = metadata.get("feature_generation_settings") if isinstance(metadata, dict) else None
+        if not settings or settings.get("segmentation_version") != 2:
+            return saved
+        configurations.append(settings)
+    if configurations and any(item != configurations[0] for item in configurations):
+        raise ValueError("Models require different feature-generation settings; run separate jobs")
+    return configurations[0] if configurations else None
+
+
+def settings_metadata(config):
+    key = "segmentation_settings" if config.get("qc_only") else "feature_generation_settings"
+    return {key: config.get("feature_generation_settings")}
+
+
+def prepare_generation_outputs(config):
+    """Keep QC tuning separate from trained-table provenance."""
+    results = Path(config["results_dir"])
+    results.mkdir(parents=True, exist_ok=True)
+    if config.get("qc_only"):
+        shutil.rmtree(results / "feature_generator", ignore_errors=True)
+    filename = "segmentation_settings.json" if config.get("qc_only") else "feature_generation_settings.json"
+    (results / filename).write_text(json.dumps(config.get("feature_generation_settings"), indent=2), encoding="utf-8")
+
+
+def generation_settings(config):
+    keys = set(normalize_settings(config)) - {"masks_dir", "qc_only"}
+    keys.update(DEFAULT_VOXEL_DIMENSIONS)
+    return {key: config[key] for key in keys if key in config} | {"segmentation_version": 2}
 
 
 def preflight_config(config: dict) -> dict:
     workflow = config["workflow"]
     report: dict[str, object] = {}
-    if workflow in {"features_labelled", "full"} and not config.get("feature_file"):
-        report["images"] = validate_image_directory(config["training_images"], labelled=True)
+    if workflow in {"features_labelled", "full"} and (not config.get("feature_file") or config.get("qc_only")):
+        report["images"] = validate_image_directory(config["training_images"], labelled=not config.get("qc_only"))
     if workflow == "features_unlabelled":
         report["images"] = validate_image_directory(config["inference_images"], labelled=False)
-    if workflow in {"train", "inference", "full"} and config.get("feature_file"):
+    if workflow in {"train", "inference", "full"} and config.get("feature_file") and not config.get("qc_only"):
         report["features"] = validate_feature_table(config["feature_file"], require_label=workflow != "inference")
-    if workflow in {"inference", "full"} and not (workflow == "inference" and config.get("feature_file")):
+    if workflow in {"inference", "full"} and not config.get("qc_only") and not (workflow == "inference" and config.get("feature_file")):
         report["inference_images"] = validate_image_directory(config["inference_images"], labelled=False)
+    image_directories = []
+    if "images" in report:
+        image_directories.append(config["inference_images"] if workflow == "features_unlabelled" else config["training_images"])
+    if "inference_images" in report:
+        image_directories.append(config["inference_images"])
+    if image_directories:
+        errors, dimensions = [], set()
+        if config.get("feature_file") and not config.get("qc_only") and not config.get("feature_generation_settings"):
+            errors.append(
+                "Raw-image inference requires saved feature-generation settings; provide a compatible inference feature table or train from images in this workflow"
+            )
+        if workflow == "inference" and not config.get("feature_generation_settings"):
+            errors.append(
+                "This model job has no saved 8-bit feature-generation settings. Use a compatible feature table or retrain with the current image workflow"
+            )
+        for directory in image_directories:
+            for path in sorted(Path(directory).iterdir()):
+                if path.suffix.lower() not in {".tif", ".tiff"}:
+                    continue
+                try:
+                    shape, _ = tiff_info(path)
+                    dimension = "2d" if shape[0] == 1 else "3d"
+                    dimensions.add(dimension)
+                    if config["image_dimension"] not in {"auto", dimension}:
+                        raise ValueError(f"{path.name}: image is {dimension.upper()}, but {config['image_dimension'].upper()} is selected")
+                    if config["segmentation_approach"] == "import":
+                        read_mask(mask_for_image(path, config["masks_dir"]), shape)
+                except (ValueError, OSError) as exc:
+                    errors.append(str(exc))
+        if len(dimensions) > 1:
+            errors.append("Run 2D images and 3D stacks in separate jobs")
+        if len(dimensions) == 1 and config["image_dimension"] == "auto":
+            config["image_dimension"] = dimensions.pop()
+            if config["image_dimension"] == "2d":
+                config["feature_groups"] = ["2d", "intensity", "geometry"]
+        if not config.get("feature_file") or config.get("qc_only"):
+            config["feature_generation_settings"] = generation_settings(config)
+        report["segmentation"] = {"ok": not errors, "errors": errors}
     report["ok"] = bool(report) and all(section.get("ok", False) for section in report.values() if isinstance(section, dict))
     return report
 
@@ -644,6 +790,25 @@ def refresh_artifacts(job_id: str | None):
         state["download_url"] = f"/api/jobs/{job_id}/download" if job_id and artifacts else None
 
 
+def write_run_summary(config: dict, status: str, *, finished_at: str | None = None, validation=None, error=None):
+    """Persist submitted settings and the outcome as a job lab notebook."""
+    summary = {
+        "job_id": config["job_id"],
+        "status": status,
+        "started_at": state.get("started_at"),
+        "finished_at": finished_at,
+        "parameters": {key: value for key, value in config.items() if key != "job_id"},
+        "validation": validation,
+        "error": error,
+    }
+    results_dir = Path(config["results_dir"])
+    results_dir.mkdir(parents=True, exist_ok=True)
+    target = results_dir / "run_summary.json"
+    temporary = target.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(target)
+
+
 def run_pipeline(config: dict, job_id: str):
     try:
         steps = build_execution_steps(config)
@@ -665,7 +830,7 @@ def run_pipeline(config: dict, job_id: str):
                 "indeterminate": True,
             }
             runtime["progress_context"] = progress_context(config, steps)
-        write_job_metadata(job_id, status="running", workflow=config["workflow"])
+        write_job_metadata(job_id, status="running", workflow=config["workflow"], **settings_metadata(config))
         add_log("Pipeline started inside the MicroICS container", job_id)
         add_log(validation_detail, job_id)
 
@@ -674,11 +839,15 @@ def run_pipeline(config: dict, job_id: str):
             if runtime["active_job_id"] != job_id:
                 return
             state["validation"] = preflight
+        write_run_summary(config, "running", validation=preflight)
         if not preflight["ok"]:
             raise ValueError(preflight_error(preflight))
 
         with state_lock:
             state["progress"].update(label="Preparing inputs", detail="Preparing the validated inputs for processing", indeterminate=True)
+        environment = execution_environment(config)
+        write_job_metadata(job_id, **settings_metadata(config))
+        prepare_generation_outputs(config)
         stage_training_features(config)
         for step in steps:
             if not execute_step(step, environment, job_id):
@@ -698,6 +867,7 @@ def run_pipeline(config: dict, job_id: str):
             state["finished_at"] = now()
             error = state["error"]
         write_job_metadata(job_id, status=final_status, workflow=config["workflow"], error=error)
+        write_run_summary(config, final_status, finished_at=state.get("finished_at"), validation=preflight, error=error)
         add_log("Pipeline complete" if final_status == "completed" else f"Pipeline {final_status}", job_id)
         refresh_artifacts(job_id)
     except Exception as exc:
@@ -708,6 +878,10 @@ def run_pipeline(config: dict, job_id: str):
             state["error"] = str(exc)
             state["finished_at"] = now()
         write_job_metadata(job_id, status="failed", workflow=config.get("workflow"), error=str(exc))
+        try:
+            write_run_summary(config, "failed", finished_at=state.get("finished_at"), validation=state.get("validation"), error=str(exc))
+        except Exception:
+            pass
         add_log(f"Unexpected error: {exc}", job_id)
     finally:
         with state_lock:
@@ -758,6 +932,7 @@ def start_pipeline(raw_config: dict) -> tuple[bool, str | None]:
         error=None,
         learner=config.get("learner"),
         all_learners=bool(config.get("all_learners")),
+        **settings_metadata(config),
     )
     thread = threading.Thread(target=run_pipeline, args=(config, job_id), daemon=True)
     with state_lock:
@@ -918,9 +1093,11 @@ class Handler(BaseHTTPRequestHandler):
             except (FileNotFoundError, ValueError) as exc:
                 json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return
-        if parsed.path in {"/api/upload", "/api/upload-feature"}:
+        if parsed.path in {"/api/upload", "/api/upload-feature", "/api/upload-settings"}:
             try:
-                if parsed.path == "/api/upload-feature":
+                if parsed.path == "/api/upload-settings":
+                    result = receive_upload(self, "feature", {".json"}, "feature-generation settings JSON files")
+                elif parsed.path == "/api/upload-feature":
                     result = receive_upload(
                         self,
                         "feature",

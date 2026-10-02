@@ -16,6 +16,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import numpy as np
+import tifffile
+
 import gui.app as app
 import gui.execution as execution
 from gui.app import (
@@ -29,6 +32,7 @@ from gui.app import (
     start_pipeline,
     state,
     validate_config,
+    write_run_summary,
 )
 from gui.execution import ExecutionStep, build_execution_steps, create_job, job_paths
 
@@ -54,6 +58,123 @@ def labelled_image_name() -> str:
 
 def training_table() -> bytes:
     return b"sampleName\tlabel\tfeature\n01012026--s--Lm--st--L1--p--C01--pos001--tm--24--ch--Syto9--z--21\tL1\t1\n"
+
+
+class TestSegmentationWorkflow(unittest.TestCase):
+    def test_manual_cutoff_is_propagated_to_execution(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            (paths.training_images / labelled_image_name()).touch()
+            config = validate_config(
+                {"job_id": paths.job_id, "threshold_method": "otsu", "threshold_value": 0.78, "threshold_scale": "uint8"}
+            )
+            environment = execution.execution_environment(config)
+            self.assertEqual(environment["IMAGINE_SEGMENTATION_APPROACH"], "manual")
+            self.assertEqual(environment["IMAGINE_THRESHOLD_VALUE"], "0.78")
+            self.assertEqual(environment["IMAGINE_THRESHOLD_MODE"], "comstat2")
+
+    def test_qc_only_is_additional_work_on_uploaded_images(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            image = paths.training_images / "sample.tif"
+            tifffile.imwrite(image, np.zeros((3, 4, 5), dtype=np.uint8), photometric="minisblack")
+            config = validate_config({"job_id": paths.job_id, "qc_only": True})
+            report = app.preflight_config(config)
+            self.assertTrue(report["ok"], report)
+            steps = build_execution_steps(config)
+            self.assertEqual([step.step_id for step in steps], ["segmentation"])
+            self.assertIn("--qc-only", steps[0].commands[0])
+
+    def test_mask_dimensions_fail_before_execution(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            tifffile.imwrite(paths.inference_images / "sample.tif", np.zeros((3, 4, 5), dtype=np.uint8), photometric="minisblack")
+            tifffile.imwrite(paths.masks / "sample_mask.tif", np.zeros((3, 4, 4), dtype=np.uint8), photometric="minisblack")
+            config = validate_config({"job_id": paths.job_id, "workflow": "features_unlabelled", "segmentation_approach": "import"})
+            report = app.preflight_config(config)
+            self.assertFalse(report["ok"])
+            self.assertIn("mask dimensions", app.preflight_error(report))
+
+    def test_explicit_2d_does_not_accept_a_stack(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            tifffile.imwrite(paths.inference_images / "sample.tif", np.zeros((3, 4, 5), dtype=np.uint8), photometric="minisblack")
+            config = validate_config({"job_id": paths.job_id, "workflow": "features_unlabelled", "image_dimension": "2d"})
+            self.assertEqual(config["feature_groups"], ["2d", "intensity", "geometry"])
+            self.assertFalse(app.preflight_config(config)["ok"])
+
+    def test_inference_restores_training_settings_and_current_masks_directory(self):
+        with temporary_jobs_root():
+            model_paths = create_job()
+            (model_paths.results / "models").mkdir()
+            (model_paths.results / "models" / "rf_model.joblib").touch()
+            saved = {
+                "image_dimension": "3d",
+                "feature_groups": ["objects"],
+                "threshold_method": "otsu",
+                "segmentation_approach": "manual",
+                "threshold_scale": "uint8",
+                "threshold_value": 100,
+                "voxel_size_x": 2.0,
+            }
+            app.write_job_metadata(model_paths.job_id, feature_generation_settings=saved)
+            paths = create_job()
+            (paths.inference_images / "sample.tif").touch()
+            config = validate_config({"job_id": paths.job_id, "workflow": "inference", "model_job_id": model_paths.job_id})
+            self.assertEqual(config["threshold_value"], 100)
+            self.assertEqual(config["feature_groups"], ["objects"])
+            self.assertEqual(config["voxel_size_x"], 2.0)
+            self.assertEqual(config["masks_dir"], str(paths.masks))
+
+    def test_training_table_can_carry_matching_image_settings(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            (paths.feature_files / "training.tsv").write_bytes(training_table())
+            settings = {
+                "segmentation_version": 2,
+                "segmentation_approach": "manual",
+                "threshold_method": "otsu",
+                "threshold_scale": "uint8",
+                "threshold_value": 123,
+                "feature_groups": ["intensity"],
+                "voxel_size_x": 0.2,
+                "voxel_size_y": 0.3,
+                "voxel_size_z": 0.5,
+            }
+            (paths.feature_files / "settings.json").write_text(json.dumps(settings))
+            config = validate_config(
+                {"job_id": paths.job_id, "workflow": "train", "feature_file": "training.tsv", "feature_settings_file": "settings.json"}
+            )
+            self.assertEqual(config["feature_generation_settings"]["threshold_value"], 123)
+            self.assertEqual(config["feature_generation_settings"]["feature_groups"], ["intensity"])
+            self.assertEqual(config["voxel_size_y"], 0.3)
+
+    def test_qc_rerun_removes_stale_plots_and_preserves_training_provenance(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            outputs = paths.results / "feature_generator"
+            outputs.mkdir()
+            stale = outputs / "sample_threshold_curve.png"
+            stale.write_bytes(b"old plot")
+            provenance = paths.results / "feature_generation_settings.json"
+            provenance.write_text('{"threshold_value": 100}')
+            config = {"results_dir": str(paths.results), "qc_only": True, "feature_generation_settings": {"threshold_value": 200}}
+            app.prepare_generation_outputs(config)
+            self.assertFalse(stale.exists())
+            self.assertEqual(json.loads(provenance.read_text())["threshold_value"], 100)
+            self.assertNotIn("feature_generation_settings", app.settings_metadata(config))
+
+    def test_model_metadata_takes_priority_over_later_job_settings(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            models = paths.results / "models"
+            models.mkdir()
+            (models / "rf_model.joblib").touch()
+            app.joblib.dump(
+                {"feature_generation_settings": {"segmentation_version": 2, "threshold_value": 100}}, models / "rf_metadata.joblib"
+            )
+            app.write_job_metadata(paths.job_id, feature_generation_settings={"threshold_value": 200})
+            self.assertEqual(app.model_generation_settings(paths.job_id)["threshold_value"], 100)
 
 
 class TestJobUploads(unittest.TestCase):
@@ -92,6 +213,22 @@ class TestJobUploads(unittest.TestCase):
             self.assertEqual(selected["file"], "escape.tif")
             self.assertEqual(destination.read_bytes(), b"TIFF")
             self.assertEqual(destination.resolve().parent, paths.training_images.resolve())
+
+
+class TestRunSummary(unittest.TestCase):
+    def test_summary_records_parameters_validation_and_outcome(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(state, {"started_at": "2026-09-25T12:00:00Z"}):
+            config = {
+                "job_id": "a" * 32,
+                "workflow": "features_labelled",
+                "results_dir": directory,
+                "voxel_size_x": 0.21,
+            }
+            write_run_summary(config, "completed", finished_at="2026-09-25T12:01:00Z", validation={"ok": True})
+            summary = json.loads((Path(directory) / "run_summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["status"], "completed")
+            self.assertEqual(summary["parameters"]["voxel_size_x"], 0.21)
+            self.assertTrue(summary["validation"]["ok"])
 
     def test_tiff_and_feature_table_uploads_are_supported(self):
         with temporary_jobs_root():
