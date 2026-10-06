@@ -69,7 +69,7 @@ Keep newest entry at the top.
 
 | Date (UTC) | Bot/Agent | PR/Commit | AGENTS.md update summary |
 |---|---|---|---|
-| 2026-10-06 | Codex | current change | Compact segmentation controls, observed-range conversion, full-stack RGB QC, corrected column heights/2D border fraction, scalar table exports, and Excel/CSV input documented. |
+| 2026-10-06 | Codex | current change | Compact segmentation controls, observed-range conversion, full-stack RGB QC, corrected column heights/2D border fraction, scalar table exports, Excel/CSV input, and aligned methodology documentation recorded. |
 | 2026-10-02 | Codex | current change | LF shell checkout/build protection, shared 8-bit segmentation settings, mask import, slice QC, dimension-aware feature selection, model provenance, and Docker unit-suite CI documented. |
 | 2026-08-17 | Codex | current change | Imported/deleted model jobs, ablation plateau marker, explicit feature-value means, per-feature SHAP plots, and participant FAQ documented. |
 | 2026-08-15 | Copilot CLI | current change | GUI inference step now clarifies images/feature table are alternatives, trained-model dropdown shows creation date and learner(s)/model count instead of only a job ID, and inference help text explains it auto-evaluates every saved model (no separate "all learners" toggle needed at inference). |
