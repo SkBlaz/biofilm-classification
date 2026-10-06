@@ -34,6 +34,7 @@ ENV_SETTINGS = {
     "image_dimension": "IMAGINE_IMAGE_DIMENSION",
     "feature_groups": "IMAGINE_FEATURE_GROUPS",
     "conversion_max": "IMAGINE_CONVERSION_MAX",
+    "conversion_range_mode": "IMAGINE_CONVERSION_RANGE_MODE",
     "masks_dir": "IMAGINE_MASKS_DIR",
     "connectivity_3d": "IMAGINE_CONNECTIVITY_3D",
     "minimum_object_area_um2": "IMAGINE_MIN_OBJECT_AREA_UM2",
@@ -86,8 +87,12 @@ def normalize_settings(raw):
     groups = list(GROUPS) if "all" in groups else [group for group in GROUPS if group in groups]
     if dimension == "2d":
         groups = ["2d", "intensity", "geometry"]
+    range_mode = raw.get("conversion_range_mode", "observed")
+    if range_mode not in {"observed", "storage"}:
+        raise ValueError("Conversion range mode must be observed or storage")
     settings = {
         "segmentation_approach": approach,
+        "conversion_range_mode": range_mode,
         "threshold_method": method,
         "threshold_boundary_mode": "comstat2",
         "threshold_scale": scale,
@@ -164,7 +169,7 @@ def read_tiff_stack(path):
     return stack, significant_bits
 
 
-def to_uint8(stack, conversion_max=None, significant_bits=None):
+def to_uint8(stack, conversion_max=None, significant_bits=None, range_mode="observed"):
     """Scale once per stack, with round-half-up quantization."""
     values = np.asarray(stack)
     if not values.size or not np.isfinite(values).all():
@@ -178,9 +183,10 @@ def to_uint8(stack, conversion_max=None, significant_bits=None):
         if not 1 <= significant_bits <= 32:
             raise ValueError("TIFF SignificantBits must be between 1 and 32")
         upper, source = float(2**significant_bits - 1), "OME SignificantBits"
-    elif np.issubdtype(values.dtype, np.integer):
+    elif range_mode == "storage" and np.issubdtype(values.dtype, np.integer):
         upper, source = float(np.iinfo(values.dtype).max), "storage dtype range"
     else:
+        lower = float(values.min())
         upper, source = float(values.max()), "whole-stack observed range"
     if not math.isfinite(upper) or upper < lower:
         raise ValueError("Conversion maximum must be finite and exceed the lower bound")
@@ -285,7 +291,12 @@ def generate_mask(image8, settings, imported=None):
             cutoff = classes[0 if settings["dim_class_assignment"] == "foreground" else 1]
         else:
             raise ValueError("Automatic segmentation requires an automatic method")
-    result.update(threshold_uint8=float(cutoff), class_thresholds_uint8=classes)
+    base = cutoff / sensitivity if approach == "automatic" and method != "bem" else cutoff
+    result.update(
+        threshold_uint8=float(cutoff),
+        class_thresholds_uint8=classes,
+        base_threshold_uint8=float(base) if approach == "automatic" else None,
+    )
     if classes:
         result["class_labels"] = multi_otsu_labels(image8, *classes)
     return image8 >= cutoff, result

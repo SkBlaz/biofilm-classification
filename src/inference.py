@@ -19,9 +19,9 @@ import numpy as np
 import pandas as pd
 
 try:
-    from input_validation import validate_feature_table, write_json_report
+    from input_validation import read_feature_table, validate_feature_table, write_json_report
 except ImportError:  # Package import from the repository root.
-    from .input_validation import validate_feature_table, write_json_report
+    from .input_validation import read_feature_table, validate_feature_table, write_json_report
 
 try:
     import shap
@@ -244,7 +244,7 @@ def run_inference(models, metadata, features_file, output_dir, generate_explanat
 
     # Load the features dataframe
     try:
-        data = pd.read_csv(features_file, sep="\t", index_col=0)
+        data = read_feature_table(features_file).set_index("sampleName")
         logger.info(f"Loaded features with shape: {data.shape}")
         #        logger.info(f"Columns: {list(data.columns)}")
 

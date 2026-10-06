@@ -49,6 +49,10 @@ class TestThresholdBoundaryModes(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "saturated"):
             bem_threshold(np.array([0, 255], dtype=np.uint8))
 
+    def test_bem_offset_error_identifies_baseline_and_remedy(self):
+        with self.assertRaisesRegex(ValueError, r"mode at 45, minimum 14.*robust-background"):
+            bem_threshold(np.array([14, 45, 45, 45, 100], dtype=np.uint8))
+
     def test_bem_matches_the_power_curve_slope_criterion(self):
         thresholds = np.arange(1, 256, dtype=float)
         volume = 10000 * (thresholds**-0.5 - 255**-0.5)
@@ -67,6 +71,25 @@ class TestComstatMetrics(unittest.TestCase):
         self.assertEqual(result["MaxBiofilmHeight_COMSTAT_um"], 1.5)
         self.assertEqual(result["MaxCompactedColumnThickness_um"], 1.0)
         self.assertEqual(result["VerticalFillRatio"], 0.5)
+
+    def test_columns_stop_at_their_own_highest_biomass(self):
+        mask = np.zeros((8, 1, 3), dtype=bool)
+        mask[0, 0, 0] = True
+        mask[2, 0, 1] = True
+        result = comstat_metrics(mask, (1, 1, 0.5))
+        self.assertAlmostEqual(result["MeanThickness_COMSTAT_um"], 1 / 3)
+        self.assertAlmostEqual(result["MeanThickness_BiomassColumns_um"], 0.5)
+        self.assertAlmostEqual(result["Roughness_RaStar"], 4 / 3)
+        self.assertEqual(result["MaxBiofilmHeight_COMSTAT_um"], 1)
+        self.assertEqual(result["MaxCompactedColumnThickness_um"], 0.5)
+
+    def test_height_percentile_ignores_sparse_top_signal(self):
+        mask = np.zeros((10, 10, 10), dtype=bool)
+        mask[:2] = True
+        mask[-1, 0, 0] = True
+        result = comstat_metrics(mask, (1, 1, 0.5))
+        self.assertEqual(result["BiofilmExtentHeight_um"], 5)
+        self.assertEqual(result["BiomassHeightP95_um"], 1)
 
     def test_roughness_includes_empty_columns(self):
         mask = np.zeros((3, 1, 2), dtype=bool)

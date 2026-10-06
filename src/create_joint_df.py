@@ -1,7 +1,9 @@
 import glob
+import json
 import logging
 import sys
 from collections import defaultdict
+from pathlib import Path
 
 import pandas as pd
 import tqdm
@@ -40,12 +42,21 @@ if __name__ == "__main__":
             sample_name = "--".join(sample_name.split("_"))
 
             df["sampleName"] = sample_name
-            all_dfs[namespace].append(df.iloc[:100000])
+            df = df.loc[:, ~df.columns.str.startswith("Unnamed:")]
+            record_path = Path(feature_generator_folder) / "segmentation" / f"{Path(fname).stem.removesuffix(namespace)}_segmentation.json"
+            scalar_names = (
+                json.loads(record_path.read_text())["scalar_feature_names"] if namespace == "CustomAlgos" and record_path.is_file() else []
+            )
+            if scalar_names:
+                all_dfs[f"ImageFeatures{namespace}"].append(df[["sampleName", *scalar_names]].iloc[:1])
+                df = df.drop(columns=scalar_names)
+            if len(df.columns) > 1:
+                all_dfs[namespace].append(df.iloc[:100000])
 
     for k, v in all_dfs.items():
         try:
             dfx_f = pd.concat(v, axis=0)
             logging.warn(f"writing {results_raw_folder}/{k}.tsv")
-            dfx_f.to_csv(f"{results_raw_folder}/{k}.tsv", sep="\t")
+            dfx_f.to_csv(f"{results_raw_folder}/{k}.tsv", sep="\t", index=False)
         except Exception as es:
             logging.error(es)

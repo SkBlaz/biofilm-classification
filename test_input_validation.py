@@ -8,10 +8,29 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.input_validation import assess_replication_units, replication_group, validate_feature_table, validate_image_directory
+from src.input_validation import (
+    assess_replication_units,
+    read_feature_table,
+    replication_group,
+    validate_feature_table,
+    validate_image_directory,
+)
 
 
 class TestInputValidation(unittest.TestCase):
+    def test_excel_csv_and_tsv_have_the_same_feature_contract(self):
+        frame = pd.DataFrame({"sampleName": ["image1", "image2"], "label": ["a", "b"], "measured_area": [2.5, 7.0]})
+        with tempfile.TemporaryDirectory() as directory:
+            for suffix in (".xlsx", ".csv", ".tsv"):
+                with self.subTest(suffix=suffix):
+                    path = Path(directory) / f"features{suffix}"
+                    if suffix == ".xlsx":
+                        frame.to_excel(path, index=False)
+                    else:
+                        frame.to_csv(path, sep="," if suffix == ".csv" else "\t", index=False)
+                    pd.testing.assert_frame_equal(read_feature_table(path), frame)
+                    self.assertTrue(validate_feature_table(path)["ok"])
+
     def test_image_report_counts_labels_by_date(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

@@ -31,6 +31,14 @@ class TestSegmentationSettings(unittest.TestCase):
         np.testing.assert_array_equal(mask, [False, False, False, True])
         self.assertEqual(result["threshold_uint8"], 1)
 
+    def test_sensitivity_records_base_and_adjusted_threshold(self):
+        image = np.array([0, 40, 100, 200], dtype=np.uint8)
+        for method in ("otsu", "robust_background", "multi_otsu"):
+            with self.subTest(method=method):
+                settings = normalize_settings({"threshold_method": method, "threshold_sensitivity": 0.5})
+                _, result = generate_mask(image, settings)
+                self.assertAlmostEqual(result["base_threshold_uint8"] * 0.5, result["threshold_uint8"])
+
     def test_invalid_scales_groups_and_sizes_are_rejected(self):
         for raw in (
             {"threshold_method": "manual", "threshold_value": 256},
@@ -62,10 +70,14 @@ class TestThresholdConversion(unittest.TestCase):
         self.assertEqual(metadata["upper"], 4095)
         np.testing.assert_array_equal(to_uint8(converted)[0], converted)
 
-    def test_conversion_is_stack_wide_and_does_not_guess_camera_bits(self):
+    def test_conversion_uses_metadata_or_whole_stack_observed_range(self):
         image = np.array([[[1024]], [[2048]]], dtype=np.uint16)
         np.testing.assert_array_equal(to_uint8(image, significant_bits=12)[0].ravel(), [64, 128])
-        self.assertEqual(to_uint8(image)[1]["upper"], 65535)
+        converted, metadata = to_uint8(image)
+        np.testing.assert_array_equal(converted.ravel(), [0, 255])
+        self.assertEqual(metadata["lower"], 1024)
+        self.assertEqual(metadata["upper"], 2048)
+        self.assertEqual(to_uint8(image, range_mode="storage")[1]["upper"], 65535)
 
     def test_ome_significant_bits_are_read(self):
         with tempfile.TemporaryDirectory() as directory:

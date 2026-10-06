@@ -43,6 +43,8 @@ if __name__ == "__main__":
         #     continue
         contents = pd.read_csv(results_file, sep="\t")
         if "sampleName" in contents.columns:
+            contents, _ = drop_export_artifact_columns(contents)
+            contents = contents[["sampleName", *[column for column in contents if column != "sampleName"]]]
             non_sname = contents.columns[1:]
             # fid = str(hash(results_file))
             fid = results_file.split("/")[-1].replace(".txt.", "")
@@ -75,7 +77,7 @@ if __name__ == "__main__":
 
     records = [
         json.loads(path.read_text(encoding="utf-8"))
-        for path in (Path(results_folder_analysis).parent / "feature_generator").glob("*_segmentation.json")
+        for path in (Path(results_folder_analysis).parent / "feature_generator").rglob("*_segmentation.json")
     ]
     if records:
         settings = []
@@ -92,6 +94,7 @@ if __name__ == "__main__":
                     "threshold_sensitivity": record["configured_threshold_sensitivity"],
                     "bem_tolerance": record["configured_bem_tolerance"],
                     "conversion_max": record["configured_conversion_max"],
+                    "conversion_range_mode": record.get("configured_conversion_range_mode", "storage"),
                     "dim_class_assignment": record["dim_class_assignment"] or "foreground",
                     "image_dimension": record["image_dimension"],
                     "feature_groups": record["feature_groups"],

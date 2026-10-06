@@ -12,3 +12,4 @@ scikit-image
 shap
 matplotlib
 seaborn
+openpyxl

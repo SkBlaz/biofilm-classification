@@ -112,7 +112,11 @@ def bem_threshold(image: np.ndarray, change_tolerance: float = 0.10) -> int:
     quantized = values
     histogram = np.bincount(quantized.ravel(), minlength=256)
     if histogram[0] != histogram.max():
-        raise ValueError("BEM requires the histogram mode at intensity zero")
+        raise ValueError(
+            "BEM requires the background (histogram mode) at intensity 0, "
+            f"but this image has a baseline offset (mode at {histogram.argmax()}, minimum {values.min()}). "
+            "Subtract the background offset first, or use robust-background, which handles offset backgrounds."
+        )
     if histogram[255] > 0:
         raise ValueError("BEM is not valid for stacks containing saturated 255 voxels")
     if not math.isfinite(change_tolerance) or not 0 < change_tolerance < 1:
@@ -202,18 +206,20 @@ def comstat_metrics(mask: np.ndarray, voxel_size: tuple[float, float, float], in
         max_height_um = float(max_layer_index * dz)
         biofilm_extent_height_um = float((max_layer_index + 1) * dz)
         for z in range(nz):
-            heights[np.any(binary[: z + 1], axis=0)] = z * dz
+            heights[binary[z]] = z * dz
         mean_thickness_um = float(heights.mean())
         biomass_columns = heights[np.any(binary, axis=0)]
         mean_biomass_column_thickness_um = float(biomass_columns.mean()) if biomass_columns.size else 0.0
         compacted_um = float(binary.sum(axis=0).max() * dz)
         vertical_fill_ratio = compacted_um / biofilm_extent_height_um
         roughness = float(np.mean(np.abs(heights - mean_thickness_um)) / mean_thickness_um) if mean_thickness_um > 0 else float("nan")
+        height_p95_um = float((np.searchsorted(np.cumsum(occupied_per_layer), 0.95 * total_voxels) + 1) * dz)
         layer_indices = np.arange(nz, dtype=float)
         z_weights = occupied_per_layer.astype(float)
         z_com_um = float(np.dot(layer_indices * dz, z_weights) / total_voxels)
         z_spread_um = float(np.sqrt(np.dot((layer_indices * dz - z_com_um) ** 2, z_weights) / total_voxels))
     else:
+        height_p95_um = float("nan")
         max_height_um = float("nan")
         biofilm_extent_height_um = float("nan")
         mean_thickness_um = float("nan")
@@ -234,6 +240,7 @@ def comstat_metrics(mask: np.ndarray, voxel_size: tuple[float, float, float], in
         "MaxDiffusionDistance_um": max_diffusion_distance_um,
         "MaxBiofilmHeight_COMSTAT_um": max_height_um,
         "BiofilmExtentHeight_um": biofilm_extent_height_um,
+        "BiomassHeightP95_um": height_p95_um,
         "MeanThickness_COMSTAT_um": mean_thickness_um,
         "MeanThickness_BiomassColumns_um": mean_biomass_column_thickness_um,
         "MaxCompactedColumnThickness_um": compacted_um,

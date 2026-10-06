@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
 import tifffile
 
 import gui.app as app
@@ -229,6 +230,16 @@ class TestRunSummary(unittest.TestCase):
             self.assertEqual(summary["status"], "completed")
             self.assertEqual(summary["parameters"]["voxel_size_x"], 0.21)
             self.assertTrue(summary["validation"]["ok"])
+
+    def test_excel_upload_stages_a_training_tsv(self):
+        with temporary_jobs_root():
+            stream = io.BytesIO()
+            frame = pd.DataFrame({"sampleName": ["image1", "image2"], "label": ["a", "b"], "measured_area": [1.5, 3.0]})
+            frame.to_excel(stream, index=False)
+            uploaded = receive_upload(upload_handler("features.xlsx", stream.getvalue()), "feature", {".xlsx"}, "Excel files")
+            config = validate_config({"job_id": uploaded["job_id"], "workflow": "train", "feature_file": uploaded["file"]})
+            staged = execution.stage_training_features(config)
+            pd.testing.assert_frame_equal(pd.read_csv(staged, sep="\t"), frame)
 
     def test_tiff_and_feature_table_uploads_are_supported(self):
         with temporary_jobs_root():

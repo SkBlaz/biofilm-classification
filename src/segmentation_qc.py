@@ -17,40 +17,27 @@ def write_qc(filepath, outfolder, image8, mask, labels, settings, result, conver
     label_output = directory / f"{stem}_object_labels.tif"
     for path, data in ((converted_path, image8), (mask_output, mask.astype(np.uint8) * 255), (label_output, labels.astype(np.uint32))):
         tifffile.imwrite(path, data, photometric="minisblack", metadata={"axes": "ZYX"})
-    roles = {"first": 0, "middle": mask.shape[0] // 2, "top": mask.shape[0] - 1}
-    artifacts = {}
-    fig, axes = plt.subplots(2, 3, figsize=(12, 7))
-    for column, (role, index) in enumerate(roles.items()):
-        overlay = np.ma.masked_where(~mask[index], mask[index])
-        axes[0, column].imshow(image8[index], cmap="gray", vmin=0, vmax=255)
-        axes[0, column].imshow(overlay, cmap="autumn", alpha=0.45, vmin=0, vmax=1)
-        axes[1, column].imshow(mask[index], cmap="gray", vmin=0, vmax=1)
-        axes[0, column].set_title(f"{role.title()} slice: z={index}")
-        axes[1, column].set_title("Applied biomass mask")
-        for row in (0, 1):
-            axes[row, column].axis("off")
-        overlay_name = f"{stem}_overlay_{role}.png"
-        mask_name = f"{stem}_mask_{role}.png"
-        plt.imsave(directory / mask_name, mask[index].astype(np.uint8) * 255, cmap="gray", vmin=0, vmax=255)
-        view, axis = plt.subplots(figsize=(5, 5))
-        axis.imshow(image8[index], cmap="gray", vmin=0, vmax=255)
-        axis.imshow(overlay, cmap="autumn", alpha=0.45, vmin=0, vmax=1)
-        axis.set_title(f"{role.title()} slice: z={index}")
-        axis.axis("off")
-        view.tight_layout()
-        view.savefig(directory / overlay_name, dpi=140)
-        plt.close(view)
-        artifacts[role] = {"slice_index": index, "overlay": overlay_name, "mask": mask_name}
+    overlay_output = directory / f"{stem}_overlay.tif"
+    color_output = directory / f"{stem}_object_labels_rgb.tif"
+    overlay = np.repeat(image8[..., np.newaxis], 3, axis=-1)
+    overlay[mask] = np.round(0.55 * overlay[mask] + 0.45 * np.array([255, 0, 0])).astype(np.uint8)
+    identities, inverse = np.unique(labels, return_inverse=True)
+    colors = np.random.default_rng(0).integers(64, 256, (len(identities), 3), dtype=np.uint8)
+    colors[identities == 0] = 0
+    colored_labels = colors[inverse].reshape((*labels.shape, 3))
+    for path, data in ((overlay_output, overlay), (color_output, colored_labels)):
+        tifffile.imwrite(path, data, photometric="rgb", metadata={"axes": "ZYXS"})
     overlay_name = f"{stem}_segmentation_qc.png"
-    fig.tight_layout()
-    fig.savefig(directory / overlay_name, dpi=160)
-    plt.close(fig)
+    plt.imsave(directory / overlay_name, overlay.max(axis=0))
 
     cutoff = result["threshold_uint8"]
+    base = result.get("base_threshold_uint8")
     histogram = np.bincount(image8.ravel(), minlength=256)
     fig, axis = plt.subplots(figsize=(7, 4))
     axis.bar(np.arange(256), histogram, width=1, color="0.35")
     if cutoff is not None:
+        if base is not None:
+            axis.axvline(base, color="blue", linestyle=":", label=f"Base automatic threshold: {base:.5g}")
         axis.axvline(cutoff, color="red", linestyle="--", label=f"Applied threshold: {cutoff:.5g}")
         for value in result["class_thresholds_uint8"] or ():
             axis.axvline(value, color="blue", linestyle=":")
@@ -66,6 +53,8 @@ def write_qc(filepath, outfolder, image8, mask, labels, settings, result, conver
         fractions = np.cumsum(histogram[::-1])[::-1] / image8.size
         fig, axis = plt.subplots(figsize=(7, 4))
         axis.plot(np.arange(256), fractions)
+        if base is not None:
+            axis.axvline(base, color="blue", linestyle=":", label=f"Base automatic threshold: {base:.5g}")
         axis.axvline(cutoff, color="red", linestyle="--", label=f"Applied threshold: {cutoff:.5g}")
         axis.scatter([cutoff], [mask.mean()], color="red", label="Applied mask after size filtering")
         axis.set_xlabel("8-bit threshold (COMSTAT2: intensity ≥ cutoff)")
@@ -76,7 +65,8 @@ def write_qc(filepath, outfolder, image8, mask, labels, settings, result, conver
         fig.savefig(directory / curve_name, dpi=160)
         plt.close(fig)
     coordinates = np.argwhere(mask)
-    border = np.any((coordinates == 0) | (coordinates == np.asarray(mask.shape) - 1), axis=1)
+    active_axes = np.array([1, 2]) if mask.shape[0] == 1 else np.array([0, 1, 2])
+    border = np.any((coordinates[:, active_axes] == 0) | (coordinates[:, active_axes] == np.asarray(mask.shape)[active_axes] - 1), axis=1)
     classes = result.get("class_labels")
     record = {
         "image": Path(filepath).name,
@@ -91,6 +81,7 @@ def write_qc(filepath, outfolder, image8, mask, labels, settings, result, conver
         if cutoff is not None
         else None,
         "threshold_uint8": cutoff,
+        "base_threshold_uint8": base,
         "threshold_stack_normalized": cutoff / 255 if cutoff is not None else None,
         "class_thresholds_uint8": result["class_thresholds_uint8"],
         "class_thresholds_stack_normalized": [value / 255 for value in result["class_thresholds_uint8"]]
@@ -101,6 +92,7 @@ def write_qc(filepath, outfolder, image8, mask, labels, settings, result, conver
         "configured_threshold_sensitivity": settings["threshold_sensitivity"],
         "configured_bem_tolerance": settings["bem_tolerance"],
         "configured_conversion_max": settings["conversion_max"],
+        "configured_conversion_range_mode": settings["conversion_range_mode"],
         "bem_tolerance": settings["bem_tolerance"] if result["method"] == "bem" else None,
         "dim_class_assignment": settings["dim_class_assignment"] if result["method"] == "multi_otsu" else None,
         "conversion": conversion,
@@ -108,6 +100,8 @@ def write_qc(filepath, outfolder, image8, mask, labels, settings, result, conver
         "imported_mask": Path(mask_path).name if mask_path else None,
         "mask": mask_output.name,
         "object_labels": label_output.name,
+        "object_labels_rgb": color_output.name,
+        "overlay": overlay_output.name,
         "voxel_size_um": dict(zip(("x", "y", "z"), dimensions)),
         "connectivity_2d": 8,
         "connectivity_3d": settings["connectivity_3d"],
@@ -131,7 +125,7 @@ def write_qc(filepath, outfolder, image8, mask, labels, settings, result, conver
         if classes is not None
         else None,
         "qc_overlay": overlay_name,
-        "slice_qc": artifacts,
+        "foreground_touching_image_border_definition": "foreground voxels on image edges divided by all foreground voxels; Z excluded for 2D",
         "histogram": histogram_name,
         "threshold_curve": curve_name,
     }

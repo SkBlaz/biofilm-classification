@@ -1,8 +1,10 @@
 import argparse
+import json
 import logging
 import math
 import os
 import warnings
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numba
@@ -297,6 +299,7 @@ def segment(
     threshold_sensitivity=1.0,
     bem_tolerance=0.10,
     conversion_max=None,
+    conversion_range_mode="observed",
     masks_dir="",
     image_dimension="auto",
     feature_groups=None,
@@ -316,6 +319,7 @@ def segment(
             "bem_tolerance": bem_tolerance,
             "dim_class_assignment": dim_class,
             "conversion_max": conversion_max,
+            "conversion_range_mode": conversion_range_mode,
             "masks_dir": masks_dir,
             "image_dimension": image_dimension,
             "feature_groups": feature_groups or ["all"],
@@ -332,7 +336,7 @@ def segment(
         raise ValueError(f"{os.path.basename(filepath)} is {actual_dimension.upper()}; choose matching image dimensions")
     if actual_dimension == "2d":
         settings["feature_groups"] = ["2d", "intensity", "geometry"]
-    image8, conversion = to_uint8(raw_stack, conversion_max, bits)
+    image8, conversion = to_uint8(raw_stack, conversion_max, bits, conversion_range_mode)
     imported_labels = None
     mask_path = None
     if settings["segmentation_approach"] == "import":
@@ -344,7 +348,9 @@ def segment(
     binary_mask, result = generate_mask(image8, settings, imported_mask)
     dimensions = (voxel_size_x, voxel_size_y, voxel_size_z)
     binary_mask, object_labels = filter_mask(binary_mask, dimensions, settings, imported_labels)
-    record = write_qc(filepath, outfolder, image8, binary_mask, object_labels, settings, result, conversion, dimensions, mask_path)
+    record = write_qc(
+        filepath, Path(outfolder) / "segmentation", image8, binary_mask, object_labels, settings, result, conversion, dimensions, mask_path
+    )
     if settings["qc_only"]:
         return record
     groups = set(settings["feature_groups"])
@@ -384,10 +390,12 @@ def segment(
             out_df[f"BioVolumeThr{cutoff}"] = metrics["Biomass_um3_per_um2"]
             out_df[f"ThicknessThreshold={cutoff}"] = metrics["MeanThickness_COMSTAT_um"]
             out_df[f"RoughnessThreshold={cutoff}"] = metrics["Roughness_RaStar"]
-    totals = out_df.sum(axis=0).replace(0, np.nan)
-    normalized = (100 * out_df.div(totals)).fillna(0)
+    slice_values = out_df[[name for name in out_df if not name.startswith(("BioVolumeThr", "ThicknessThreshold=", "RoughnessThreshold="))]]
+    totals = slice_values.sum(axis=0).replace(0, np.nan)
+    normalized = (100 * slice_values.div(totals)).fillna(0)
     normalized.columns = [f"{column}Normalized" for column in normalized.columns]
     out_df = pd.concat([out_df, normalized], axis=1).copy()
+    per_slice_columns = set(out_df.columns)
     if "geometry" in groups:
         out_df["Homogeneity"] = get_homogenity(image_space)
         for name, value in gpt_calculate_texture_features(image_space).mean(axis=0).items():
@@ -459,6 +467,14 @@ def segment(
         for name, value in row.items():
             out_df[name] = value
         pd.DataFrame({"volume_um3": pores["InternalPoreVolumes_um3"]}).to_csv(os.path.join(outfolder, f"{stem}_pores_3d.csv"), index=False)
+    scalar_columns = [
+        name
+        for name in out_df.columns
+        if (name not in per_slice_columns and name not in {"LayerArea_um2", "LayerOccupancy_pct"})
+        or name.startswith(("BioVolumeThr", "ThicknessThreshold=", "RoughnessThreshold="))
+    ]
+    record["scalar_feature_names"] = scalar_columns
+    (Path(outfolder) / "segmentation" / f"{stem}_segmentation.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
     out_df.to_csv(os.path.join(outfolder, f"{stem}CustomAlgos.txt"), sep="\t")
     if "intensity" in groups:
         means = np.mean(image_space, axis=(1, 2))
@@ -484,6 +500,7 @@ if __name__ == "__main__":
     parser.add_argument("--threshold", dest="threshold_value", type=float)
     parser.add_argument("--threshold-sensitivity", type=float)
     parser.add_argument("--bem-tolerance", type=float)
+    parser.add_argument("--conversion-range-mode", choices=("observed", "storage"))
     parser.add_argument("--conversion-max", type=float, help="Acquisition intensity maximum, e.g. 4095 for 12-bit")
     parser.add_argument("--dim-class", dest="dim_class_assignment", choices=("background", "foreground"))
     parser.add_argument("--masks-dir")
@@ -514,6 +531,7 @@ if __name__ == "__main__":
             threshold_sensitivity=settings["threshold_sensitivity"],
             bem_tolerance=settings["bem_tolerance"],
             conversion_max=settings["conversion_max"],
+            conversion_range_mode=settings["conversion_range_mode"],
             masks_dir=settings["masks_dir"],
             image_dimension=settings["image_dimension"],
             feature_groups=settings["feature_groups"],

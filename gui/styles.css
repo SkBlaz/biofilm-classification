@@ -346,3 +346,5 @@ a.button { display:inline-grid; place-items:center; text-decoration:none; }
 .segmentation-tip { padding: 0.7rem; border-left: 3px solid #d1a845; }
 
 .physical-unit { text-transform: none; letter-spacing: normal; }
+
+.sensitivity-field { max-width: 15rem; }

@@ -62,6 +62,7 @@ MICROICS_PREFIXES = (
     "BiomassVolume",
     "MaxBiofilmHeight",
     "BiofilmExtentHeight",
+    "BiomassHeightP95",
     "MeanThickness",
     "FilledThickness",
     "MaxCompactedColumnThickness",
@@ -193,11 +194,19 @@ def _is_microics_feature(name: str) -> bool:
     return name.startswith(MICROICS_PREFIXES)
 
 
+def read_feature_table(path: str | Path) -> pd.DataFrame:
+    """Read an image feature spreadsheet or delimited table."""
+    source = Path(path)
+    if source.suffix.lower() == ".xlsx":
+        return pd.read_excel(source, engine="openpyxl")
+    return pd.read_csv(source, sep="," if source.suffix.lower() == ".csv" else "\t")
+
+
 def validate_feature_table(path: str | Path, require_label: bool = True) -> dict[str, Any]:
     """Validate feature columns without silently coercing bad values."""
     source = Path(path)
     try:
-        frame = pd.read_csv(source, sep="\t")
+        frame = read_feature_table(source)
     except Exception as exc:  # pandas has several parser exception types
         return {"path": str(source), "ok": False, "errors": [f"Could not read feature table: {exc}"]}
 
@@ -362,7 +371,7 @@ def assess_replication_from_feature_table(
 ) -> dict[str, Any]:
     """Assess replication using the exact rows that model training will consume."""
     try:
-        frame = pd.read_csv(path, sep="\t")
+        frame = read_feature_table(path)
     except Exception as exc:
         return {
             "selected_unit": selected_unit or "",

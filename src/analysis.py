@@ -18,6 +18,9 @@ if __name__ == "__main__":
         NAME = "SUMMARY" + fname.split("/")[-1].replace(".txt", "")
         logging.info("Processing {fname} -- computing aggregates")
         try:
+            if "ImageFeatures" in fname:
+                pd.read_csv(s3d, sep="\t").to_csv(f"{results_analysis_folder}/{NAME}.txt", sep="\t", index=False)
+                continue
             for statistic in [
                 "median",
                 "min",
@@ -57,6 +60,6 @@ if __name__ == "__main__":
                 dfx2.to_csv(outfile, sep="\t", index=False)
 
         except Exception as es:
-            logging.error(es)
+            raise RuntimeError(f"Could not aggregate {fname}") from es
 
     logging.info("Done!")

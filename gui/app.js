@@ -50,14 +50,6 @@ let copyLogResetTimer = null;
 
 function value(id) { return document.querySelector(`#${id}`).value.trim(); }
 
-const THRESHOLD_HELP = {
-  otsu: 'Otsu finds one threshold that best separates background from biomass by maximizing between-class variance. Useful for a clear bright-signal / dark-background separation. Dim or sparse biofilms with long-tailed histograms can lose real signal; try robust background or tune a manual cutoff.',
-  multi_otsu: 'Three-class Otsu finds two thresholds for background, dim, and bright intensity classes. Including the dim class uses the lower cutoff; assigning it to background uses the upper cutoff. The resulting biomass mask uses one cutoff. Intensity classes do not identify cell states.',
-  robust_background: 'Following BiofilmQ, robust background trims the lowest and highest 5% of intensities, estimates a normal distribution, and uses mean + 2 standard deviations. Best when background occupies most of the image; check QC for dim-cell-rich biofilms.',
-  bem: 'BEM fits the biomass-versus-threshold curve and selects the first threshold where a one-unit increase changes its slope by less than the chosen tolerance (default 10%). Requires an 8-bit histogram with its mode at zero and no saturated 255 voxels. Invalid inputs or failed fits produce an actionable error.',
-  manual: 'You choose the cutoff instead of an algorithm. Useful when automatic methods fail, particularly for dim-cell-rich biofilms. Tune the exported 8-bit thresholding TIFF in ImageJ, then enter its 0–255 intensity value here. Stack-normalized units are that same 8-bit intensity divided by 255; finding a sensible cutoff requires visual QC.',
-};
-
 function updateSegmentation() {
   const approach = value('segmentationApproach');
   const method = value('thresholdMethod');
@@ -81,7 +73,6 @@ function updateSegmentation() {
   threshold.required = approach === 'manual';
   threshold.disabled = approach !== 'manual';
   threshold.max = value('thresholdScale') === 'uint8' ? 255 : 1;
-  document.querySelector('#thresholdDescription').textContent = approach === 'import' ? '' : THRESHOLD_HELP[approach === 'manual' ? 'manual' : method];
 }
 
 ['segmentationApproach', 'thresholdMethod', 'thresholdScale', 'imageDimension'].forEach((id) => document.querySelector(`#${id}`).addEventListener('change', updateSegmentation));
@@ -164,6 +155,7 @@ copyLogButton.addEventListener('click', (event) => {
 });
 
 function setWorkflow(workflow) {
+  document.querySelector('#correlationField').classList.toggle('hidden', !['train', 'full'].includes(workflow));
   document.querySelectorAll('.workflow-option').forEach((option) => option.classList.toggle('active', option.dataset.workflow === workflow));
   document.querySelector('#trainingImagesField').classList.toggle('hidden', !['features_labelled', 'full'].includes(workflow));
   document.querySelector('#inferenceImagesField').classList.toggle('hidden', !['features_unlabelled', 'inference', 'full'].includes(workflow));

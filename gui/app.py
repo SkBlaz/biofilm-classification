@@ -309,7 +309,7 @@ def receive_upload(
 def uploaded_feature_path(paths, filename: object) -> Path | None:
     if not filename:
         return None
-    safe_name = safe_uploaded_name(str(filename), {".tsv", ".txt"})
+    safe_name = safe_uploaded_name(str(filename), {".tsv", ".txt", ".csv", ".xlsx"})
     candidate = (paths.feature_files / safe_name).resolve()
     if candidate.parent != paths.feature_files.resolve() or not candidate.is_file():
         raise ValueError("The selected feature table is not available in this job")
@@ -341,6 +341,7 @@ def validate_config(raw: dict) -> dict:
             raise ValueError("Feature-generation settings must be valid JSON") from exc
         if not isinstance(supplied_settings, dict) or supplied_settings.get("segmentation_version") != 2:
             raise ValueError("Feature-generation settings require segmentation_version 2")
+        supplied_settings.setdefault("conversion_range_mode", "storage")
         config.update(normalize_settings(supplied_settings))
         for key in DEFAULT_VOXEL_DIMENSIONS:
             if key not in supplied_settings:
@@ -437,6 +438,7 @@ def validate_config(raw: dict) -> dict:
     saved = model_generation_settings(model_job_id) if workflow == "inference" and not feature_file else None
     if saved:
         validated.update(saved)
+        validated["conversion_range_mode"] = saved.get("conversion_range_mode", "storage")
         validated["masks_dir"] = str(paths.masks)
         validated["qc_only"] = False
     validated["feature_generation_settings"] = (
@@ -1101,8 +1103,8 @@ class Handler(BaseHTTPRequestHandler):
                     result = receive_upload(
                         self,
                         "feature",
-                        {".tsv", ".txt"},
-                        "tab-separated .tsv or .txt files",
+                        {".tsv", ".txt", ".csv", ".xlsx"},
+                        "Excel .xlsx, CSV, or tab-separated files",
                     )
                 else:
                     kind = self.headers.get("X-Upload-Kind", "training")

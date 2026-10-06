@@ -9,11 +9,12 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+
+from src.input_validation import read_feature_table
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT / "src"
@@ -130,6 +131,7 @@ def execution_environment(config: dict) -> dict[str, str]:
             "IMAGINE_THRESHOLD_SCALE": config.get("threshold_scale", "uint8"),
             "IMAGINE_THRESHOLD_VALUE": "" if config.get("threshold_value") is None else str(config["threshold_value"]),
             "IMAGINE_DIM_CLASS_ASSIGNMENT": config.get("dim_class_assignment", "foreground"),
+            "IMAGINE_CONVERSION_RANGE_MODE": config.get("conversion_range_mode", "observed"),
             "IMAGINE_SEGMENTATION_APPROACH": config.get("segmentation_approach", "automatic"),
             "IMAGINE_THRESHOLD_SENSITIVITY": str(config.get("threshold_sensitivity", 1.0)),
             "IMAGINE_BEM_TOLERANCE": str(config.get("bem_tolerance", 0.1)),
@@ -156,7 +158,7 @@ def stage_training_features(config: dict) -> Path | None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     source = Path(feature_file)
     if source.resolve() != destination.resolve():
-        shutil.copy2(source, destination)
+        read_feature_table(source).to_csv(destination, sep="\t", index=False)
     return destination
 
 
