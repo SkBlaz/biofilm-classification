@@ -9,8 +9,10 @@ import pandas as pd
 
 try:
     from feature_taxonomy import feature_catalog
+    from segmentation import FEATURE_SCHEMA_VERSION
 except ImportError:
     from .feature_taxonomy import feature_catalog
+    from .segmentation import FEATURE_SCHEMA_VERSION
 
 logging.basicConfig(format="%(asctime)s - %(message)s", datefmt="%d-%b-%y %H:%M:%S")
 logging.getLogger(__name__).setLevel(logging.INFO)
@@ -82,17 +84,20 @@ if __name__ == "__main__":
     if records:
         settings = []
         for record in records:
-            if record.get("segmentation_version") != 2:
-                raise ValueError("Cannot mix legacy and 8-bit segmentation outputs")
+            if record.get("segmentation_version") != 2 or record.get("feature_schema_version") != FEATURE_SCHEMA_VERSION:
+                raise ValueError("Regenerate all images before assembling corrected feature tables")
             settings.append(
                 {
                     "segmentation_version": 2,
+                    "feature_schema_version": FEATURE_SCHEMA_VERSION,
                     "segmentation_approach": record["segmentation_approach"],
                     "threshold_method": record["requested_method"],
                     "threshold_scale": record["submitted_threshold_units"] or "uint8",
                     "threshold_value": record["submitted_threshold_value"],
                     "threshold_sensitivity": record["configured_threshold_sensitivity"],
-                    "bem_tolerance": record["configured_bem_tolerance"],
+                    "rolling_ball_radius_px": record["rolling_ball_radius_px"],
+                    "threshold_from": record["threshold_from"],
+                    "substratum_slices": record["substratum_slices"],
                     "conversion_max": record["configured_conversion_max"],
                     "conversion_range_mode": record.get("configured_conversion_range_mode", "storage"),
                     "dim_class_assignment": record["dim_class_assignment"] or "foreground",

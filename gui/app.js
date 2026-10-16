@@ -50,6 +50,17 @@ let copyLogResetTimer = null;
 
 function value(id) { return document.querySelector(`#${id}`).value.trim(); }
 
+function decimalValue(id) { return Number(value(id).replace(',', '.')); }
+
+document.querySelectorAll('[data-size-delta]').forEach((button) => {
+  button.addEventListener('click', () => {
+    const input = document.querySelector(`#${button.dataset.sizeInput}`);
+    const current = decimalValue(input.id);
+    if (!Number.isFinite(current)) { input.focus(); return; }
+    input.value = String(Math.max(0, Math.round((current + Number(button.dataset.sizeDelta)) * 1e10) / 1e10));
+  });
+});
+
 function updateSegmentation() {
   const approach = value('segmentationApproach');
   const method = value('thresholdMethod');
@@ -60,8 +71,9 @@ function updateSegmentation() {
   show('maskUploadFields', approach === 'import');
   show('conversionFields', approach !== 'import');
   show('dimClassField', method === 'multi_otsu');
-  show('sensitivityField', method !== 'bem');
-  show('bemToleranceField', method === 'bem');
+  show('thresholdSourceField', method === 'otsu');
+  show('substratumSlicesField', method === 'otsu' && value('thresholdFrom') === 'substratum');
+  show('rollingBallField', approach !== 'import');
   show('tuneOtsuButton', method === 'otsu');
   show('featureGroups3d', !is2d);
   show('features2dHelp', is2d);
@@ -75,7 +87,7 @@ function updateSegmentation() {
   threshold.max = value('thresholdScale') === 'uint8' ? 255 : 1;
 }
 
-['segmentationApproach', 'thresholdMethod', 'thresholdScale', 'imageDimension'].forEach((id) => document.querySelector(`#${id}`).addEventListener('change', updateSegmentation));
+['segmentationApproach', 'thresholdMethod', 'thresholdScale', 'imageDimension', 'thresholdFrom'].forEach((id) => document.querySelector(`#${id}`).addEventListener('change', updateSegmentation));
 document.querySelector('#tuneOtsuButton').addEventListener('click', () => {
   document.querySelector('#segmentationApproach').value = 'manual';
   updateSegmentation();
@@ -264,7 +276,9 @@ async function loadDefaults() {
   document.querySelector('#thresholdMethod').value = config.threshold_method;
   document.querySelector('#segmentationApproach').value = config.segmentation_approach || 'automatic';
   document.querySelector('#thresholdSensitivity').value = config.threshold_sensitivity;
-  document.querySelector('#bemTolerance').value = config.bem_tolerance;
+  document.querySelector('#rollingBallRadius').value = config.rolling_ball_radius_px;
+  document.querySelector('#thresholdFrom').value = config.threshold_from;
+  document.querySelector('#substratumSlices').value = config.substratum_slices;
   document.querySelector('#conversionMax').value = config.conversion_max ?? '';
   document.querySelector('#imageDimension').value = config.image_dimension === '2d' ? '2d' : '3d';
   document.querySelector('#qcOnly').checked = config.qc_only;
@@ -356,7 +370,9 @@ function configFromForm() {
     threshold_method: value('thresholdMethod'),
     segmentation_approach: value('segmentationApproach'),
     threshold_sensitivity: Number(value('thresholdSensitivity')),
-    bem_tolerance: Number(value('bemTolerance')),
+    rolling_ball_radius_px: Number(value('rollingBallRadius')),
+    threshold_from: value('thresholdMethod') === 'otsu' ? value('thresholdFrom') : 'whole_stack',
+    substratum_slices: Number(value('substratumSlices')),
     conversion_max: value('conversionMax'),
     image_dimension: value('imageDimension'),
     feature_groups: value('imageDimension') === '2d' || document.querySelector('#allFeatureGroups').checked ? ['all'] : [...document.querySelectorAll('input[name="feature_group"]:checked')].map((input) => input.value),
@@ -366,8 +382,8 @@ function configFromForm() {
     dim_class_assignment: value('dimClassAssignment'),
     local_density_radius_um: Number(value('localDensityRadius')),
     connectivity_3d: Number(value('connectivity3d')),
-    minimum_object_area_um2: Number(value('minimumObjectArea')),
-    minimum_object_volume_um3: Number(value('minimumObjectVolume')),
+    minimum_object_area_um2: decimalValue('minimumObjectArea'),
+    minimum_object_volume_um3: decimalValue('minimumObjectVolume'),
     all_learners: document.querySelector('input[name="learner_mode"]:checked').value === 'all',
     learner: value('learner'),
   };

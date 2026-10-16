@@ -19,11 +19,27 @@ from sklearn.ensemble import RandomForestClassifier
 # Add src directory to path
 sys.path.insert(0, "src")
 
-from inference import format_predictions, generate_features_for_images, load_models, run_inference, validate_cli_inputs
+from inference import format_predictions, generate_features_for_images, load_models, main, run_inference, validate_cli_inputs
 
 
 class TestLoadModels(unittest.TestCase):
     """Test model loading functionality."""
+
+    def test_cli_rejects_missing_or_old_settings_before_regenerating(self):
+        for saved in (None, {"segmentation_version": 2}):
+            metadata = {"rf": {"feature_generation_settings": saved}}
+            with (
+                self.subTest(saved=saved),
+                patch("inference.validate_cli_inputs"),
+                patch("inference.load_models", return_value=({"rf": object()}, metadata)),
+                patch("inference.generate_features_for_images") as generate,
+                patch.object(sys, "argv", ["inference.py", "models", "images", "output"]),
+                self.assertLogs("inference", level="ERROR"),
+                self.assertRaises(SystemExit) as error,
+            ):
+                main()
+            self.assertEqual(error.exception.code, 1)
+            generate.assert_not_called()
 
     def test_versioned_models_reject_missing_feature_columns(self):
         with tempfile.TemporaryDirectory() as directory:

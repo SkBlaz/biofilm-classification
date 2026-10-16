@@ -31,6 +31,7 @@ from segmentation import (
     normalize_settings,
     read_mask,
     read_tiff_stack,
+    subtract_rolling_ball,
     to_uint8,
 )
 from segmentation_qc import write_qc
@@ -86,11 +87,16 @@ def rgb2gray(rgb):
     return gray
 
 
-def gpt_fractal_dimension(Z):
+def fractal_dimension(Z):
+    """Legacy median-binarized boundary box dimension per slice."""
+
     def boxcount(Z, k):
         S = np.add.reduceat(np.add.reduceat(Z, np.arange(0, Z.shape[0], k), axis=0), np.arange(0, Z.shape[1], k), axis=1)
         return len(np.where((S > 0) & (S < k * k))[0])
 
+    Z = np.asarray(Z)
+    if Z.ndim != 2 or min(Z.shape) < 8 or np.ptp(Z) == 0:
+        return float("nan")
     Z = Z < np.median(Z)
     p = min(Z.shape)
     n = 2 ** np.floor(np.log(p) / np.log(2))
@@ -99,7 +105,10 @@ def gpt_fractal_dimension(Z):
     counts = []
     for size in sizes:
         counts.append(boxcount(Z, size))
-    coeffs = np.polyfit(np.log(sizes), np.log(counts), 1)
+    valid = np.asarray(counts) > 0
+    if valid.sum() < 2:
+        return float("nan")
+    coeffs = np.polyfit(np.log(sizes[valid]), np.log(np.asarray(counts)[valid]), 1)
     return -coeffs[0]
 
 
@@ -297,7 +306,9 @@ def segment(
     *,
     segmentation_approach=None,
     threshold_sensitivity=1.0,
-    bem_tolerance=0.10,
+    rolling_ball_radius_px=0.0,
+    threshold_from="whole_stack",
+    substratum_slices=1,
     conversion_max=None,
     conversion_range_mode="observed",
     masks_dir="",
@@ -316,7 +327,9 @@ def segment(
             "threshold_scale": threshold_scale,
             "threshold_value": manual_threshold,
             "threshold_sensitivity": threshold_sensitivity,
-            "bem_tolerance": bem_tolerance,
+            "rolling_ball_radius_px": rolling_ball_radius_px,
+            "threshold_from": threshold_from,
+            "substratum_slices": substratum_slices,
             "dim_class_assignment": dim_class,
             "conversion_max": conversion_max,
             "conversion_range_mode": conversion_range_mode,
@@ -337,6 +350,8 @@ def segment(
     if actual_dimension == "2d":
         settings["feature_groups"] = ["2d", "intensity", "geometry"]
     image8, conversion = to_uint8(raw_stack, conversion_max, bits, conversion_range_mode)
+    if settings["segmentation_approach"] != "import":
+        image8 = subtract_rolling_ball(image8, settings["rolling_ball_radius_px"])
     imported_labels = None
     mask_path = None
     if settings["segmentation_approach"] == "import":
@@ -397,6 +412,8 @@ def segment(
     out_df = pd.concat([out_df, normalized], axis=1).copy()
     per_slice_columns = set(out_df.columns)
     if "geometry" in groups:
+        out_df["FractalDimension"] = [fractal_dimension(layer) for layer in raw_stack]
+        per_slice_columns.add("FractalDimension")
         out_df["Homogeneity"] = get_homogenity(image_space)
         for name, value in gpt_calculate_texture_features(image_space).mean(axis=0).items():
             out_df[name] = value
@@ -495,11 +512,13 @@ if __name__ == "__main__":
     parser.add_argument("-f", "--file", required=True)
     parser.add_argument("-of", "--outfolder", required=True)
     parser.add_argument("--segmentation-approach", choices=("automatic", "manual", "import"))
-    parser.add_argument("--threshold-method", choices=("otsu", "manual", "bem", "robust_background", "multi_otsu"))
+    parser.add_argument("--threshold-method", choices=("otsu", "manual", "robust_background", "multi_otsu"))
     parser.add_argument("--threshold-scale", choices=("stack_normalized", "uint8", "raw"))
     parser.add_argument("--threshold", dest="threshold_value", type=float)
     parser.add_argument("--threshold-sensitivity", type=float)
-    parser.add_argument("--bem-tolerance", type=float)
+    parser.add_argument("--rolling-ball-radius-px", type=float, help="Slice-wise background subtraction radius; 0 disables")
+    parser.add_argument("--threshold-from", choices=("whole_stack", "substratum"))
+    parser.add_argument("--substratum-slices", type=int, help="First N slices for substratum Otsu")
     parser.add_argument("--conversion-range-mode", choices=("observed", "storage"))
     parser.add_argument("--conversion-max", type=float, help="Acquisition intensity maximum, e.g. 4095 for 12-bit")
     parser.add_argument("--dim-class", dest="dim_class_assignment", choices=("background", "foreground"))
@@ -529,7 +548,9 @@ if __name__ == "__main__":
             minimum_object_volume_um3=settings["minimum_object_volume_um3"],
             segmentation_approach=settings["segmentation_approach"],
             threshold_sensitivity=settings["threshold_sensitivity"],
-            bem_tolerance=settings["bem_tolerance"],
+            rolling_ball_radius_px=settings["rolling_ball_radius_px"],
+            threshold_from=settings["threshold_from"],
+            substratum_slices=settings["substratum_slices"],
             conversion_max=settings["conversion_max"],
             conversion_range_mode=settings["conversion_range_mode"],
             masks_dir=settings["masks_dir"],

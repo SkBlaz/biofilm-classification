@@ -20,6 +20,7 @@ sys.path.insert(0, "src")
 
 from feature_generator import (
     calculate_spatial_spreading,
+    fractal_dimension,
     get_cell_count,
     get_homogenity,
     get_transition_matrix,
@@ -173,6 +174,43 @@ class TestCalculateSpatialSpreading(unittest.TestCase):
 
 
 class TestSegmentationIntegration(unittest.TestCase):
+    def test_rolling_ball_preserves_raw_features_and_exact_qc(self):
+        stack = np.full((2, 16, 16), 20, dtype=np.uint8)
+        stack[:, 7:9, 7:9] = 120
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "background.tif"
+            tifffile.imwrite(path, stack, photometric="minisblack")
+            qc = root / "segmentation"
+            qc.mkdir()
+            for suffix in ("_object_labels.tif", "_segmentation_qc.png"):
+                (qc / f"background{suffix}").touch()
+            record = segment(str(path), directory, manual_threshold=50, rolling_ball_radius_px=3, feature_groups=["intensity", "geometry"])
+            converted = tifffile.imread(qc / record["thresholding_image"])
+            mask = tifffile.imread(qc / record["mask"]) > 0
+            self.assertEqual(converted[0, 0, 0], 0)
+            self.assertTrue(record["rolling_ball_applied"])
+            np.testing.assert_array_equal(mask, converted >= 50)
+            values = pd.read_csv(root / "backgroundCustomAlgos.txt", sep="\t")
+            np.testing.assert_allclose(values["RawIntensityMean"], stack.mean(axis=(1, 2)))
+            self.assertIn("FractalDimension", values)
+            self.assertIn("FractalGrayscaleBoxDimension", values)
+            self.assertNotIn("FractalDimension", record["scalar_feature_names"])
+            for suffix in ("_object_labels.tif", "_segmentation_qc.png"):
+                self.assertFalse((qc / f"background{suffix}").exists())
+
+    def test_fractal_dimension_matches_legacy_box_counts(self):
+        image = np.random.default_rng(5).integers(0, 256, (32, 32))
+        binary = image < np.median(image)
+        counts = []
+        for size in (32, 16, 8, 4):
+            boxes = [binary[y : y + size, x : x + size] for y in range(0, 32, size) for x in range(0, 32, size)]
+            counts.append(sum(0 < box.sum() < size * size for box in boxes))
+        expected = -np.polyfit(np.log([32, 16, 8, 4]), np.log(counts), 1)[0]
+        self.assertAlmostEqual(fractal_dimension(image), expected)
+        for image in (np.ones((16, 16)), np.zeros((2, 2)), np.eye(16)):
+            self.assertTrue(np.isnan(fractal_dimension(image)))
+
     def test_raw_manual_threshold_and_qc_metadata(self):
         stack = np.array(
             [
@@ -198,7 +236,8 @@ class TestSegmentationIntegration(unittest.TestCase):
             self.assertEqual(record["selected_threshold_units"], "uint8")
             self.assertEqual(record["threshold_boundary_mode"], "comstat2")
             self.assertFalse(record["no_biomass_detected"])
-            self.assertTrue((Path(directory) / "segmentation" / "sample_segmentation_qc.png").is_file())
+            self.assertFalse((Path(directory) / "segmentation" / "sample_segmentation_qc.png").exists())
+            self.assertFalse((Path(directory) / "segmentation" / "sample_object_labels.tif").exists())
 
     def test_manual_otsu_override_controls_mask_and_all_slice_qc(self):
         stack = np.array([[[0, 10], [100, 200]]] * 3, dtype=np.uint8)
@@ -317,6 +356,8 @@ class TestSegmentationIntegration(unittest.TestCase):
             count_columns = [name for name in table if name.startswith("SubstratumObjectCount-")]
             self.assertEqual(len(count_columns), 1)
             self.assertEqual(table[count_columns[0]].iloc[0], 2)
+            self.assertTrue(any(name.startswith("FractalDimension-") for name in table))
+            self.assertTrue(any(name.startswith("FractalGrayscaleBoxDimension-") for name in table))
             self.assertTrue((root / "feature_generation_settings.json").is_file())
 
     def test_3d_scalar_features_export_once_and_heights_vary(self):
@@ -334,9 +375,17 @@ class TestSegmentationIntegration(unittest.TestCase):
                 path = root / f"{stem}.tif"
                 tifffile.imwrite(path, stack, photometric="minisblack")
                 tifffile.imwrite(masks / f"{stem}_mask.tif", mask, photometric="minisblack")
-                segment(
-                    str(path), str(generated), segmentation_approach="import", masks_dir=str(masks), feature_groups=["basic", "objects"]
+                record = segment(
+                    str(path),
+                    str(generated),
+                    segmentation_approach="import",
+                    masks_dir=str(masks),
+                    feature_groups=["basic", "objects"],
+                    rolling_ball_radius_px=12.5,
+                    threshold_from="substratum",
+                    substratum_slices=2,
                 )
+                self.assertFalse(record["rolling_ball_applied"])
             for script, args in (
                 ("create_joint_df.py", [generated, root / "raw"]),
                 ("analysis.py", [root / "raw", root / "analysis"]),
@@ -346,6 +395,11 @@ class TestSegmentationIntegration(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
             table = pd.read_csv(root / "datafile.tsv", sep="\t")
             self.assertEqual(len(table), 2)
+            settings = json.loads((root / "feature_generation_settings.json").read_text())
+            self.assertEqual(settings["feature_schema_version"], 3)
+            self.assertEqual(settings["rolling_ball_radius_px"], 12.5)
+            self.assertEqual(settings["threshold_from"], "substratum")
+            self.assertEqual(settings["substratum_slices"], 2)
             for feature in (
                 "BiofilmExtentHeight_um",
                 "BiomassCenterOfMassHeight_um",

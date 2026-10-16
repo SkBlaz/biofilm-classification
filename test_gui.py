@@ -62,6 +62,40 @@ def training_table() -> bytes:
 
 
 class TestSegmentationWorkflow(unittest.TestCase):
+    def test_preprocessing_and_threshold_source_survive_execution_and_provenance(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            (paths.training_images / "sample.tif").touch()
+            config = validate_config(
+                {
+                    "job_id": paths.job_id,
+                    "rolling_ball_radius_px": 12.5,
+                    "threshold_from": "substratum",
+                    "substratum_slices": 2,
+                    "minimum_object_volume_um3": "0,025",
+                }
+            )
+            environment = execution.execution_environment(config)
+            self.assertEqual(environment["IMAGINE_ROLLING_BALL_RADIUS_PX"], "12.5")
+            self.assertEqual(environment["IMAGINE_THRESHOLD_FROM"], "substratum")
+            self.assertEqual(environment["IMAGINE_SUBSTRATUM_SLICES"], "2")
+            self.assertEqual(environment["IMAGINE_MIN_OBJECT_VOLUME_UM3"], "0.025")
+            saved = config["feature_generation_settings"]
+            self.assertEqual(saved["feature_schema_version"], 3)
+            self.assertEqual(saved["rolling_ball_radius_px"], 12.5)
+            self.assertEqual(saved["threshold_from"], "substratum")
+
+    def test_old_schema_model_requires_original_table_or_retraining(self):
+        with temporary_jobs_root():
+            model_paths = create_job()
+            (model_paths.results / "models").mkdir()
+            (model_paths.results / "models" / "rf_model.joblib").touch()
+            app.write_job_metadata(model_paths.job_id, feature_generation_settings={"segmentation_version": 2})
+            paths = create_job()
+            (paths.inference_images / "sample.tif").touch()
+            with self.assertRaisesRegex(ValueError, "retraining.*original precomputed"):
+                validate_config({"job_id": paths.job_id, "workflow": "inference", "model_job_id": model_paths.job_id})
+
     def test_manual_cutoff_is_propagated_to_execution(self):
         with temporary_jobs_root():
             paths = create_job()
@@ -110,6 +144,10 @@ class TestSegmentationWorkflow(unittest.TestCase):
             (model_paths.results / "models").mkdir()
             (model_paths.results / "models" / "rf_model.joblib").touch()
             saved = {
+                "feature_schema_version": 3,
+                "rolling_ball_radius_px": 25.0,
+                "threshold_from": "substratum",
+                "substratum_slices": 2,
                 "image_dimension": "3d",
                 "feature_groups": ["objects"],
                 "threshold_method": "otsu",
@@ -123,6 +161,9 @@ class TestSegmentationWorkflow(unittest.TestCase):
             (paths.inference_images / "sample.tif").touch()
             config = validate_config({"job_id": paths.job_id, "workflow": "inference", "model_job_id": model_paths.job_id})
             self.assertEqual(config["threshold_value"], 100)
+            self.assertEqual(config["rolling_ball_radius_px"], 25)
+            self.assertEqual(config["threshold_from"], "substratum")
+            self.assertEqual(config["substratum_slices"], 2)
             self.assertEqual(config["feature_groups"], ["objects"])
             self.assertEqual(config["voxel_size_x"], 2.0)
             self.assertEqual(config["masks_dir"], str(paths.masks))
@@ -133,6 +174,7 @@ class TestSegmentationWorkflow(unittest.TestCase):
             (paths.feature_files / "training.tsv").write_bytes(training_table())
             settings = {
                 "segmentation_version": 2,
+                "feature_schema_version": 3,
                 "segmentation_approach": "manual",
                 "threshold_method": "otsu",
                 "threshold_scale": "uint8",

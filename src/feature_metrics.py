@@ -1,7 +1,7 @@
 """Calibrated segmentation and biofilm geometry metrics.
 
-Arrays use the axis order ``(z, y, x)``. COMSTAT-compatible heights use
-layer-index coordinates, so layer zero is at height zero.
+Arrays use the axis order ``(z, y, x)``. Thickness counts filled voxels;
+maximum height includes the full extent of the highest occupied layer.
 """
 
 from __future__ import annotations
@@ -199,20 +199,18 @@ def comstat_metrics(mask: np.ndarray, voxel_size: tuple[float, float, float], in
             mean_diffusion_distance_um = float("nan")
             max_diffusion_distance_um = float("nan")
 
-    heights = np.zeros((ny, nx), dtype=float)
+    filled = binary.sum(axis=0).astype(float) * dz
     if has_biomass:
         occupied_z = np.any(binary, axis=(1, 2))
         max_layer_index = int(np.flatnonzero(occupied_z)[-1])
-        max_height_um = float(max_layer_index * dz)
+        max_height_um = float((max_layer_index + 1) * dz)
         biofilm_extent_height_um = float((max_layer_index + 1) * dz)
-        for z in range(nz):
-            heights[binary[z]] = z * dz
-        mean_thickness_um = float(heights.mean())
-        biomass_columns = heights[np.any(binary, axis=0)]
-        mean_biomass_column_thickness_um = float(biomass_columns.mean()) if biomass_columns.size else 0.0
-        compacted_um = float(binary.sum(axis=0).max() * dz)
+        mean_thickness_um = float(filled[filled > 0].mean())
+        mean_biomass_column_thickness_um = mean_thickness_um
+        compacted_um = float(filled.max())
         vertical_fill_ratio = compacted_um / biofilm_extent_height_um
-        roughness = float(np.mean(np.abs(heights - mean_thickness_um)) / mean_thickness_um) if mean_thickness_um > 0 else float("nan")
+        field_mean = float(filled.mean())
+        roughness = float(np.mean(np.abs(filled - field_mean)) / field_mean)
         height_p95_um = float((np.searchsorted(np.cumsum(occupied_per_layer), 0.95 * total_voxels) + 1) * dz)
         layer_indices = np.arange(nz, dtype=float)
         z_weights = occupied_per_layer.astype(float)

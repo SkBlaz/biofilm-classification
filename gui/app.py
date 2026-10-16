@@ -40,7 +40,7 @@ try:
         validate_job_id,
     )
     from src.input_validation import validate_feature_table, validate_image_directory
-    from src.segmentation import mask_for_image, normalize_settings, read_mask, tiff_info
+    from src.segmentation import FEATURE_SCHEMA_VERSION, mask_for_image, normalize_settings, read_mask, tiff_info
 except ModuleNotFoundError:  # Direct ``python gui/app.py`` execution.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from gui.execution import (
@@ -57,7 +57,7 @@ except ModuleNotFoundError:  # Direct ``python gui/app.py`` execution.
         validate_job_id,
     )
     from src.input_validation import validate_feature_table, validate_image_directory
-    from src.segmentation import mask_for_image, normalize_settings, read_mask, tiff_info
+    from src.segmentation import FEATURE_SCHEMA_VERSION, mask_for_image, normalize_settings, read_mask, tiff_info
 
 ROOT = Path(__file__).resolve().parents[1]
 GUI_DIR = Path(__file__).resolve().parent
@@ -161,7 +161,9 @@ def default_config() -> dict[str, object]:
         "segmentation_approach": "automatic",
         "threshold_scale": "uint8",
         "threshold_sensitivity": 1.0,
-        "bem_tolerance": 0.10,
+        "rolling_ball_radius_px": 0.0,
+        "threshold_from": "whole_stack",
+        "substratum_slices": 1,
         "conversion_max": "",
         "image_dimension": "auto",
         "feature_groups": ["all"],
@@ -341,6 +343,10 @@ def validate_config(raw: dict) -> dict:
             raise ValueError("Feature-generation settings must be valid JSON") from exc
         if not isinstance(supplied_settings, dict) or supplied_settings.get("segmentation_version") != 2:
             raise ValueError("Feature-generation settings require segmentation_version 2")
+        if supplied_settings.get("feature_schema_version") != FEATURE_SCHEMA_VERSION:
+            raise ValueError(
+                "Regenerate tables and retrain for the current feature schema, or omit image settings and use precomputed inference"
+            )
         supplied_settings.setdefault("conversion_range_mode", "storage")
         config.update(normalize_settings(supplied_settings))
         for key in DEFAULT_VOXEL_DIMENSIONS:
@@ -437,6 +443,10 @@ def validate_config(raw: dict) -> dict:
     }
     saved = model_generation_settings(model_job_id) if workflow == "inference" and not feature_file else None
     if saved:
+        if saved.get("feature_schema_version") != FEATURE_SCHEMA_VERSION:
+            raise ValueError(
+                "Raw-image inference requires retraining for the current feature schema; use original precomputed features instead"
+            )
         validated.update(saved)
         validated["conversion_range_mode"] = saved.get("conversion_range_mode", "storage")
         validated["masks_dir"] = str(paths.masks)
@@ -488,7 +498,10 @@ def prepare_generation_outputs(config):
 def generation_settings(config):
     keys = set(normalize_settings(config)) - {"masks_dir", "qc_only"}
     keys.update(DEFAULT_VOXEL_DIMENSIONS)
-    return {key: config[key] for key in keys if key in config} | {"segmentation_version": 2}
+    return {key: config[key] for key in keys if key in config} | {
+        "segmentation_version": 2,
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
+    }
 
 
 def preflight_config(config: dict) -> dict:

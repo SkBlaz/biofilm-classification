@@ -68,19 +68,19 @@ class TestComstatMetrics(unittest.TestCase):
         mask[0, 0, 0] = True
         mask[3, 0, 0] = True
         result = comstat_metrics(mask, (2, 3, 0.5))
-        self.assertEqual(result["MaxBiofilmHeight_COMSTAT_um"], 1.5)
+        self.assertEqual(result["MaxBiofilmHeight_COMSTAT_um"], 2.0)
         self.assertEqual(result["MaxCompactedColumnThickness_um"], 1.0)
         self.assertEqual(result["VerticalFillRatio"], 0.5)
 
-    def test_columns_stop_at_their_own_highest_biomass(self):
+    def test_filled_thickness_excludes_gaps_and_empty_columns(self):
         mask = np.zeros((8, 1, 3), dtype=bool)
         mask[0, 0, 0] = True
         mask[2, 0, 1] = True
         result = comstat_metrics(mask, (1, 1, 0.5))
-        self.assertAlmostEqual(result["MeanThickness_COMSTAT_um"], 1 / 3)
+        self.assertAlmostEqual(result["MeanThickness_COMSTAT_um"], 0.5)
         self.assertAlmostEqual(result["MeanThickness_BiomassColumns_um"], 0.5)
-        self.assertAlmostEqual(result["Roughness_RaStar"], 4 / 3)
-        self.assertEqual(result["MaxBiofilmHeight_COMSTAT_um"], 1)
+        self.assertAlmostEqual(result["Roughness_RaStar"], 2 / 3)
+        self.assertEqual(result["MaxBiofilmHeight_COMSTAT_um"], 1.5)
         self.assertEqual(result["MaxCompactedColumnThickness_um"], 0.5)
 
     def test_height_percentile_ignores_sparse_top_signal(self):
@@ -103,6 +103,23 @@ class TestComstatMetrics(unittest.TestCase):
         self.assertTrue(result["NoBiomassDetected"])
         self.assertTrue(np.isnan(result["MaxBiofilmHeight_COMSTAT_um"]))
         self.assertTrue(np.isnan(result["BiomassCenterOfMassHeight_um"]))
+
+    def test_substratum_voxel_has_nonzero_thickness_and_height(self):
+        result = comstat_metrics(np.array([[[True, False]]]), (2, 3, 0.5))
+        self.assertEqual(result["MeanThickness_COMSTAT_um"], 0.5)
+        self.assertEqual(result["MaxBiofilmHeight_COMSTAT_um"], 0.5)
+        self.assertEqual(result["BiofilmExtentHeight_um"], 0.5)
+        self.assertEqual(result["Biomass_um3_per_um2"], 0.25)
+        self.assertEqual(result["Roughness_RaStar"], 1)
+
+    def test_thickness_domain_and_roughness_use_separate_means(self):
+        mask = np.zeros((4, 1, 4), dtype=bool)
+        mask[:, 0, 0] = True
+        mask[3, 0, 1] = True
+        result = comstat_metrics(mask, (1, 1, 0.5))
+        self.assertEqual(result["MeanThickness_COMSTAT_um"], 1.25)
+        self.assertEqual(result["Biomass_um3_per_um2"], 0.625)
+        self.assertAlmostEqual(result["Roughness_RaStar"], 1.1)
 
     def test_physical_surface_and_diffusion_metrics_use_anisotropic_spacing(self):
         mask = np.ones((1, 1, 1), dtype=bool)

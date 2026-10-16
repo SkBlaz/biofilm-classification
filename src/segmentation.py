@@ -13,23 +13,25 @@ from scipy import ndimage
 
 try:
     from .feature_metrics import (
-        bem_threshold,
         multi_otsu_labels,
         multi_otsu_thresholds,
         otsu_threshold,
         robust_background_threshold,
     )
 except ImportError:
-    from feature_metrics import bem_threshold, multi_otsu_labels, multi_otsu_thresholds, otsu_threshold, robust_background_threshold
+    from feature_metrics import multi_otsu_labels, multi_otsu_thresholds, otsu_threshold, robust_background_threshold
 
 GROUPS = ("basic", "objects", "advanced", "intensity", "geometry", "serial")
+FEATURE_SCHEMA_VERSION = 3
 ENV_SETTINGS = {
     "segmentation_approach": "IMAGINE_SEGMENTATION_APPROACH",
     "threshold_method": "IMAGINE_THRESHOLD_METHOD",
     "threshold_scale": "IMAGINE_THRESHOLD_SCALE",
     "threshold_value": "IMAGINE_THRESHOLD_VALUE",
     "threshold_sensitivity": "IMAGINE_THRESHOLD_SENSITIVITY",
-    "bem_tolerance": "IMAGINE_BEM_TOLERANCE",
+    "rolling_ball_radius_px": "IMAGINE_ROLLING_BALL_RADIUS_PX",
+    "threshold_from": "IMAGINE_THRESHOLD_FROM",
+    "substratum_slices": "IMAGINE_SUBSTRATUM_SLICES",
     "dim_class_assignment": "IMAGINE_DIM_CLASS_ASSIGNMENT",
     "image_dimension": "IMAGINE_IMAGE_DIMENSION",
     "feature_groups": "IMAGINE_FEATURE_GROUPS",
@@ -57,7 +59,9 @@ def normalize_settings(raw):
     approach = raw.get("segmentation_approach") or ("manual" if method == "manual" or value is not None else "automatic")
     if approach not in {"automatic", "manual", "import"}:
         raise ValueError("Choose automatic, manual, or imported-mask segmentation")
-    if method not in {"otsu", "multi_otsu", "robust_background", "bem", "manual"}:
+    if method == "bem":
+        raise ValueError("BEM was removed from segmentation; choose Otsu or robust background")
+    if method not in {"otsu", "multi_otsu", "robust_background", "manual"}:
         raise ValueError("Choose a supported threshold method")
     if approach == "automatic" and (method == "manual" or value is not None):
         raise ValueError("Choose Manual / tuned threshold to apply the entered cutoff")
@@ -78,6 +82,17 @@ def normalize_settings(raw):
     dimension = str(raw.get("image_dimension", "auto")).lower()
     if dimension not in {"auto", "2d", "3d"}:
         raise ValueError("Choose 2D or 3D images")
+    threshold_from = raw.get("threshold_from", "whole_stack")
+    if threshold_from not in {"whole_stack", "substratum"}:
+        raise ValueError("Threshold source must be whole_stack or substratum")
+    if approach == "automatic" and method != "otsu" and threshold_from != "whole_stack":
+        raise ValueError("Substratum thresholding is available only for two-class Otsu")
+    try:
+        slices = float(raw.get("substratum_slices", 1))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Substratum slices must be a positive integer") from exc
+    if not math.isfinite(slices) or slices < 1 or not slices.is_integer():
+        raise ValueError("Substratum slices must be a positive integer")
     groups = raw.get("feature_groups", ["all"])
     if isinstance(groups, str):
         groups = groups.split(",")
@@ -97,6 +112,8 @@ def normalize_settings(raw):
         "threshold_boundary_mode": "comstat2",
         "threshold_scale": scale,
         "threshold_value": value,
+        "threshold_from": threshold_from,
+        "substratum_slices": int(slices),
         "dim_class_assignment": str(raw.get("dim_class_assignment", "foreground")),
         "image_dimension": dimension,
         "feature_groups": groups,
@@ -116,7 +133,7 @@ def normalize_settings(raw):
     settings["connectivity_3d"] = int(connectivity)
     for key, default in (
         ("threshold_sensitivity", 1.0),
-        ("bem_tolerance", 0.10),
+        ("rolling_ball_radius_px", 0.0),
         ("minimum_object_area_um2", 0.0),
         ("minimum_object_volume_um3", 0.0),
         ("local_density_radius_um", 2.0),
@@ -127,14 +144,12 @@ def normalize_settings(raw):
             settings[key] = None
             continue
         try:
-            item = float(item)
+            item = float(item.replace(",", ".") if isinstance(item, str) else item)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{key.replace('_', ' ')} must be numeric") from exc
-        positive = key not in {"minimum_object_area_um2", "minimum_object_volume_um3"}
+        positive = key not in {"minimum_object_area_um2", "minimum_object_volume_um3", "rolling_ball_radius_px"}
         if not math.isfinite(item) or item < 0 or (positive and item == 0):
             raise ValueError(f"{key.replace('_', ' ')} must be finite and {'positive' if positive else 'non-negative'}")
-        if key == "bem_tolerance" and item >= 1:
-            raise ValueError("BEM slope-change tolerance must be between 0 and 1")
         settings[key] = item
     return settings
 
@@ -220,6 +235,20 @@ def mask_for_image(filepath, masks_dir):
     return matches[0]
 
 
+def subtract_rolling_ball(image8, radius):
+    """Subtract slice backgrounds before thresholding; preserve calibration."""
+    from skimage.restoration import rolling_ball
+
+    if radius == 0:
+        return image8
+    corrected = np.empty_like(image8)
+    for z, layer in enumerate(image8):
+        values = layer.astype(float)
+        background = rolling_ball(values, radius=radius)
+        corrected[z] = np.floor(np.clip(values - background, 0, 255) + 0.5).astype(np.uint8)
+    return corrected
+
+
 def read_mask(path, shape):
     labels, _ = read_tiff_stack(path)
     if labels.shape != shape:
@@ -280,18 +309,19 @@ def generate_mask(image8, settings, imported=None):
         sensitivity = settings["threshold_sensitivity"]
         method = settings["threshold_method"]
         if method == "otsu":
+            source = image8
+            if settings["threshold_from"] == "substratum":
+                source = image8[: settings["substratum_slices"]]
             # Histogram Otsu places the last background bin at k.
-            cutoff = (otsu_threshold(image8) + 1) * sensitivity
+            cutoff = (otsu_threshold(source) + 1) * sensitivity
         elif method == "robust_background":
             cutoff = robust_background_threshold(image8) * sensitivity
-        elif method == "bem":
-            cutoff = bem_threshold(image8, settings["bem_tolerance"])
         elif method == "multi_otsu":
             classes = tuple(value * sensitivity for value in multi_otsu_thresholds(image8))
             cutoff = classes[0 if settings["dim_class_assignment"] == "foreground" else 1]
         else:
             raise ValueError("Automatic segmentation requires an automatic method")
-    base = cutoff / sensitivity if approach == "automatic" and method != "bem" else cutoff
+    base = cutoff / sensitivity if approach == "automatic" else cutoff
     result.update(
         threshold_uint8=float(cutoff),
         class_thresholds_uint8=classes,

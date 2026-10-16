@@ -9,7 +9,16 @@ import tifffile
 
 sys.path.insert(0, "src")
 
-from segmentation import filter_mask, generate_mask, mask_for_image, normalize_settings, read_mask, read_tiff_stack, to_uint8
+from segmentation import (
+    filter_mask,
+    generate_mask,
+    mask_for_image,
+    normalize_settings,
+    read_mask,
+    read_tiff_stack,
+    subtract_rolling_ball,
+    to_uint8,
+)
 
 
 class TestSegmentationSettings(unittest.TestCase):
@@ -45,10 +54,47 @@ class TestSegmentationSettings(unittest.TestCase):
             {"feature_groups": []},
             {"minimum_object_volume_um3": -1},
             {"connectivity_3d": 26.1},
-            {"bem_tolerance": 1},
+            {"threshold_method": "bem"},
+            {"rolling_ball_radius_px": -1},
+            {"rolling_ball_radius_px": "nan"},
+            {"threshold_from": "brightest"},
+            {"substratum_slices": 1.5},
+            {"substratum_slices": 0},
+            {"threshold_method": "robust_background", "threshold_from": "substratum"},
         ):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 normalize_settings(raw)
+
+    def test_substratum_otsu_uses_first_n_slices_for_full_mask(self):
+        image = np.array([[[0, 10], [10, 0]], [[80, 200], [200, 80]], [[80, 200], [200, 80]]], dtype=np.uint8)
+        whole, whole_result = generate_mask(image, normalize_settings({}))
+        for count in (1, 2, 20):
+            settings = normalize_settings({"threshold_from": "substratum", "substratum_slices": count})
+            with patch("segmentation.otsu_threshold", wraps=__import__("segmentation").otsu_threshold) as otsu:
+                mask, result = generate_mask(image, settings)
+            np.testing.assert_array_equal(otsu.call_args.args[0], image[:count])
+            np.testing.assert_array_equal(mask, image >= result["threshold_uint8"])
+        self.assertGreater(whole_result["threshold_uint8"], 1)
+        bottom, _ = generate_mask(image, normalize_settings({"threshold_from": "substratum"}))
+        self.assertGreater(bottom.sum(), whole.sum())
+
+    def test_fractional_size_accepts_comma_and_dot(self):
+        for text in ("0.015", "0,015"):
+            settings = normalize_settings({"minimum_object_area_um2": text})
+            mask = np.array([[[True, False, True], [False, False, True]]])
+            filtered, _ = filter_mask(mask, (0.1, 0.1, 99), settings)
+            self.assertEqual(filtered.sum(), 2)
+
+    def test_rolling_ball_removes_slice_offsets_without_mutation(self):
+        image = np.full((2, 11, 11), 20, dtype=np.uint8)
+        image[1] = 40
+        image[:, 5, 5] = [120, 140]
+        original = image.copy()
+        corrected = subtract_rolling_ball(image, 3)
+        np.testing.assert_array_equal(image, original)
+        np.testing.assert_array_equal(corrected[:, 0, 0], [0, 0])
+        np.testing.assert_array_equal(corrected[:, 5, 5], [100, 100])
+        np.testing.assert_array_equal(subtract_rolling_ball(image, 0), original)
 
     def test_three_class_chooses_one_comstat2_cutoff(self):
         image = np.array([0, 50, 100, 200], dtype=np.uint8)

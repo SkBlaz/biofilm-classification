@@ -762,19 +762,22 @@ def main():
             saved_settings = [
                 meta.get("feature_generation_settings") for meta in metadata.values() if meta.get("feature_generation_settings")
             ]
-            if saved_settings:
-                if len(saved_settings) != len(models) or any(item != saved_settings[0] for item in saved_settings):
-                    raise ValueError("Models require different feature-generation settings; use separate inference jobs")
-                from segmentation import ENV_SETTINGS
+            if not saved_settings:
+                raise ValueError("Raw-image inference requires current saved image settings; use original precomputed features or retrain")
+            if len(saved_settings) != len(models) or any(item != saved_settings[0] for item in saved_settings):
+                raise ValueError("Models require different feature-generation settings; use separate inference jobs")
+            from segmentation import ENV_SETTINGS, FEATURE_SCHEMA_VERSION
 
-                saved = saved_settings[0]
-                for key, name in ENV_SETTINGS.items():
-                    if key in saved:
-                        value = saved[key]
-                        os.environ[name] = ",".join(value) if isinstance(value, list) else "" if value is None else str(value)
-                for axis in ("X", "Y", "Z"):
-                    if f"voxel_size_{axis.lower()}" in saved:
-                        os.environ[f"IMAGINE_VOXEL_SIZE_{axis}"] = str(saved[f"voxel_size_{axis.lower()}"])
+            saved = saved_settings[0]
+            if saved.get("feature_schema_version") != FEATURE_SCHEMA_VERSION:
+                raise ValueError("Retrain for the current feature schema or supply original precomputed features")
+            for key, name in ENV_SETTINGS.items():
+                if key in saved:
+                    value = saved[key]
+                    os.environ[name] = ",".join(value) if isinstance(value, list) else "" if value is None else str(value)
+            for axis in ("X", "Y", "Z"):
+                if f"voxel_size_{axis.lower()}" in saved:
+                    os.environ[f"IMAGINE_VOXEL_SIZE_{axis}"] = str(saved[f"voxel_size_{axis.lower()}"])
             # Generate features for input images
             logger.info("Generating features for input images...")
             os.makedirs(args.temp_dir, exist_ok=True)

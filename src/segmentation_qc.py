@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tifffile
 
+from segmentation import FEATURE_SCHEMA_VERSION
+
 
 def write_qc(filepath, outfolder, image8, mask, labels, settings, result, conversion, dimensions, mask_path=None):
     directory = Path(outfolder)
@@ -14,8 +16,9 @@ def write_qc(filepath, outfolder, image8, mask, labels, settings, result, conver
     stem = Path(filepath).stem
     converted_path = directory / f"{stem}_thresholding_uint8.tif"
     mask_output = directory / f"{stem}_mask.tif"
-    label_output = directory / f"{stem}_object_labels.tif"
-    for path, data in ((converted_path, image8), (mask_output, mask.astype(np.uint8) * 255), (label_output, labels.astype(np.uint32))):
+    for suffix in ("_object_labels.tif", "_segmentation_qc.png"):
+        (directory / f"{stem}{suffix}").unlink(missing_ok=True)
+    for path, data in ((converted_path, image8), (mask_output, mask.astype(np.uint8) * 255)):
         tifffile.imwrite(path, data, photometric="minisblack", metadata={"axes": "ZYX"})
     overlay_output = directory / f"{stem}_overlay.tif"
     color_output = directory / f"{stem}_object_labels_rgb.tif"
@@ -27,8 +30,6 @@ def write_qc(filepath, outfolder, image8, mask, labels, settings, result, conver
     colored_labels = colors[inverse].reshape((*labels.shape, 3))
     for path, data in ((overlay_output, overlay), (color_output, colored_labels)):
         tifffile.imwrite(path, data, photometric="rgb", metadata={"axes": "ZYXS"})
-    overlay_name = f"{stem}_segmentation_qc.png"
-    plt.imsave(directory / overlay_name, overlay.max(axis=0))
 
     cutoff = result["threshold_uint8"]
     base = result.get("base_threshold_uint8")
@@ -71,6 +72,7 @@ def write_qc(filepath, outfolder, image8, mask, labels, settings, result, conver
     record = {
         "image": Path(filepath).name,
         "segmentation_version": 2,
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "segmentation_approach": settings["segmentation_approach"],
         "requested_method": settings["threshold_method"],
         "method": result["method"],
@@ -90,16 +92,21 @@ def write_qc(filepath, outfolder, image8, mask, labels, settings, result, conver
         "threshold_boundary_mode": "comstat2",
         "threshold_sensitivity": settings["threshold_sensitivity"] if settings["segmentation_approach"] == "automatic" else None,
         "configured_threshold_sensitivity": settings["threshold_sensitivity"],
-        "configured_bem_tolerance": settings["bem_tolerance"],
+        "rolling_ball_radius_px": settings["rolling_ball_radius_px"],
+        "rolling_ball_applied": settings["segmentation_approach"] != "import" and settings["rolling_ball_radius_px"] > 0,
+        "rolling_ball_implementation": "skimage.restoration.rolling_ball, slice-wise, rounded to uint8",
+        "threshold_from": settings["threshold_from"],
+        "substratum_slices": settings["substratum_slices"],
+        "threshold_source_slices": min(settings["substratum_slices"], image8.shape[0])
+        if result["method"] == "otsu" and settings["threshold_from"] == "substratum"
+        else None,
         "configured_conversion_max": settings["conversion_max"],
         "configured_conversion_range_mode": settings["conversion_range_mode"],
-        "bem_tolerance": settings["bem_tolerance"] if result["method"] == "bem" else None,
         "dim_class_assignment": settings["dim_class_assignment"] if result["method"] == "multi_otsu" else None,
         "conversion": conversion,
         "thresholding_image": converted_path.name,
         "imported_mask": Path(mask_path).name if mask_path else None,
         "mask": mask_output.name,
-        "object_labels": label_output.name,
         "object_labels_rgb": color_output.name,
         "overlay": overlay_output.name,
         "voxel_size_um": dict(zip(("x", "y", "z"), dimensions)),
@@ -124,7 +131,6 @@ def write_qc(filepath, outfolder, image8, mask, labels, settings, result, conver
         }
         if classes is not None
         else None,
-        "qc_overlay": overlay_name,
         "foreground_touching_image_border_definition": "foreground voxels on image edges divided by all foreground voxels; Z excluded for 2D",
         "histogram": histogram_name,
         "threshold_curve": curve_name,

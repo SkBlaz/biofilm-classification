@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MicroICS Pipeline</title>
-  <link rel="stylesheet" href="/styles.css?v=20261002-1">
+  <link rel="stylesheet" href="/styles.css?v=20261016-1">
 </head>
 <body>
   <header class="topbar">
@@ -56,8 +56,9 @@
 
         <div class="field-group" id="featureFileField">
           <div class="field-label"><label for="featureFilePicker">Complete feature table</label><button class="help-button" data-help-title="Complete feature table" data-help-text="Upload Excel (.xlsx), CSV, or TSV: one row per image, with sampleName, label, and numeric feature columns for training. For inference, upload a compatible table with sampleName and model features instead of raw images — you only need one of the two; raw images will not be regenerated." type="button" aria-label="Help for Complete feature table">?</button></div>
-          <label class="file-button upload-button" for="featureFilePicker">Choose feature table</label>
+          <label class="file-button upload-button" for="featureFilePicker">Choose Excel / CSV / TSV features</label>
           <input class="hidden" id="featureFilePicker" type="file" accept=".xlsx,.csv,.tsv,.txt">
+          <small>Add external measurements as numeric columns in the complete spreadsheet, matched by sampleName. JSON is only for optional image settings.</small>
           <small class="file-picker-status" id="featureFileStatus">No feature table uploaded. Optional if you upload inference images above.</small>
           <label class="file-button" for="settingsFilePicker">Choose matching image settings (optional)</label><input class="hidden" id="settingsFilePicker" type="file" accept=".json,application/json">
           <small id="settingsFileStatus">For image-derived training tables, also upload their feature_generation_settings.json to reproduce the image workflow at inference.</small>
@@ -82,7 +83,7 @@
           <div class="voxel-grid">
             <div class="field-group"><label for="voxelSizeX">X (<span class="physical-unit">µm</span>)</label><input id="voxelSizeX" type="number" min="0" step="any" value="0.13" required></div>
             <div class="field-group"><label for="voxelSizeY">Y (<span class="physical-unit">µm</span>)</label><input id="voxelSizeY" type="number" min="0" step="any" value="0.13" required></div>
-            <div class="field-group"><label for="voxelSizeZ">Z (<span class="physical-unit">µm</span>)</label><input id="voxelSizeZ" type="number" min="0" step="any" value="0.5" required></div>
+            <div class="field-group"><div class="field-label"><label for="voxelSizeZ">Z (<span class="physical-unit">µm</span>)</label><button class="help-button" data-help-title="Z step" data-help-text="Z step is ignored for 2D images. Only X and Y spacing affect 2D measurements." type="button" aria-label="Help for Z step">?</button></div><input id="voxelSizeZ" type="number" min="0" step="any" value="0.5" required></div>
           </div>
         </fieldset>
 
@@ -96,7 +97,7 @@
             <label><input name="feature_group" type="checkbox" value="objects" checked> 3D object features <small>Count, size, and nearest-neighbour distances from a generated or imported 3D mask.</small></label>
             <label><input name="feature_group" type="checkbox" value="advanced" checked> Advanced 3D geometry <small>Surface area, surface/volume ratio, diffusion distance, local thickness/density, porosity, and pore size. Can be time-consuming.</small></label>
             <label><input name="feature_group" type="checkbox" value="intensity" checked> Intensity (threshold-free) <small>Original-precision intensity statistics.</small></label>
-            <label><input name="feature_group" type="checkbox" value="geometry" checked> Geometric threshold-free <small>Grayscale fractal dimension and GLCM texture.</small></label>
+            <label><input name="feature_group" type="checkbox" value="geometry" checked> Geometric threshold-free <small>Fractal dimension, grayscale box dimension, and GLCM texture.</small></label>
             <label><input name="feature_group" type="checkbox" value="serial" checked> Serial / multi-threshold (ML ensemble)</label>
           </div>
         </fieldset>
@@ -107,9 +108,10 @@
           <label id="qcOnlyField"><input id="qcOnly" type="checkbox"> Run segmentation and QC only</label>
           <div class="field-group"><label for="segmentationApproach">Segmentation approach</label><select id="segmentationApproach"><option value="automatic">Automatic</option><option value="manual">Manual / tuned threshold</option><option value="import">Import masks</option></select></div>
           <div id="automaticThresholdFields">
-            <div class="field-group"><label for="thresholdMethod">Method</label><select id="thresholdMethod"><option value="otsu">Otsu (two class)</option><option value="robust_background">Robust background</option><option value="multi_otsu">Three-class Otsu</option><option value="bem">BEM</option></select></div>
+            <div class="field-group"><label for="thresholdMethod">Method</label><select id="thresholdMethod"><option value="otsu">Otsu (two class)</option><option value="robust_background">Robust background</option><option value="multi_otsu">Three-class Otsu</option></select></div>
+            <div class="field-group" id="thresholdSourceField"><div class="field-label"><label for="thresholdFrom">Otsu threshold source</label><button class="help-button" data-help-title="Otsu threshold source" data-help-text="Whole stack is the default. Substratum uses slice 0, or the first N slices, to choose one cutoff for the entire stack. Slice 0 must be the substrate; it is not selected by brightness." type="button" aria-label="Help for Otsu threshold source">?</button></div><select id="thresholdFrom"><option value="whole_stack">Whole stack</option><option value="substratum">Substratum (first slices)</option></select></div>
+            <div class="field-group hidden" id="substratumSlicesField"><label for="substratumSlices">Substratum slices</label><input id="substratumSlices" type="number" min="1" step="1" value="1"></div>
             <div class="field-group sensitivity-field" id="sensitivityField"><div class="field-label"><label for="thresholdSensitivity">Sensitivity multiplier</label><button class="help-button" data-help-title="Sensitivity multiplier" data-help-text="Multiplies the automatic cutoff. Below 1 includes dimmer signal; above 1 removes more signal." type="button" aria-label="Help for Sensitivity multiplier">?</button></div><input id="thresholdSensitivity" type="number" min="0.01" step="any" value="1"></div>
-            <div class="field-group hidden" id="bemToleranceField"><div class="field-label"><label for="bemTolerance">BEM slope-change tolerance</label><button class="help-button" data-help-title="BEM slope-change tolerance" data-help-text="Default 0.10 (10%). Controls where the biomass curve becomes less sensitive to threshold changes." type="button" aria-label="Help for BEM slope-change tolerance">?</button></div><input id="bemTolerance" type="number" min="0.001" max="0.999" step="any" value="0.1"></div>
             <div class="field-group hidden" id="dimClassField"><label for="dimClassAssignment">Dim-intensity class</label><select id="dimClassAssignment"><option value="foreground">Include in foreground</option><option value="background">Assign to background</option></select></div>
             <button class="button tertiary" id="tuneOtsuButton" type="button">Use a manual Otsu cutoff</button>
           </div>
@@ -122,11 +124,12 @@
             <small id="maskFileStatus">No masks uploaded.</small>
             <small>Same dimensions as each image; nonzero = biomass, or integer labels for objects. Name each mask like its image, optionally with _mask before the extension. Works with ImageJ, BiofilmQ, and Cellpose. Thresholding is skipped.</small>
           </div>
+          <div class="field-group" id="rollingBallField"><div class="field-label"><label for="rollingBallRadius">Rolling-ball radius (pixels)</label><button class="help-button" data-help-title="Rolling-ball background subtraction" data-help-text="0 disables subtraction. A positive radius subtracts dark background from each slice before thresholding. Start with 50 pixels and choose a radius larger than the biomass objects. Original intensity features are preserved. Uses scikit-image rolling ball; results can differ from ImageJ." type="button" aria-label="Help for rolling-ball background subtraction">?</button></div><input id="rollingBallRadius" type="number" min="0" step="0.1" value="0"></div>
           <small id="conversionFields">Images are automatically converted to 8-bit for thresholding.</small><input id="conversionMax" type="hidden">
           <div class="field-row compact-row">
             <div class="field-group" id="connectivity3dField"><div class="field-label"><label for="connectivity3d">3D connectivity</label><button class="help-button" data-help-title="3D connectivity" data-help-text="Groups neighbouring biomass voxels into objects. Higher connectivity merges more readily into fewer, larger objects. Default 26; affects object count and size. Imported object labels retain their identities." type="button" aria-label="Help for 3D connectivity">?</button></div><select id="connectivity3d"><option value="26">26 (faces, edges, corners)</option><option value="18">18 (faces, edges)</option><option value="6">6 (faces only)</option></select></div>
-            <div class="field-group" id="minimumObjectAreaField"><div class="field-label"><label for="minimumObjectArea">Minimum object area (<span class="physical-unit">µm²</span>)</label><button class="help-button" data-help-title="Minimum object size" data-help-text="Removes small objects before measurements. Default 0 keeps all objects. Higher values can remove real small cells." type="button" aria-label="Help for minimum object size">?</button></div><input id="minimumObjectArea" type="number" min="0" step="any" value="0"></div>
-            <div class="field-group" id="minimumObjectVolumeField"><div class="field-label"><label for="minimumObjectVolume">Minimum object volume (<span class="physical-unit">µm³</span>)</label><button class="help-button" data-help-title="Minimum object size" data-help-text="Removes small objects before measurements. Default 0 keeps all objects. Higher values can remove real small cells." type="button" aria-label="Help for minimum object size">?</button></div><input id="minimumObjectVolume" type="number" min="0" step="any" value="0"></div>
+            <div class="field-group" id="minimumObjectAreaField"><div class="field-label"><label for="minimumObjectArea">Minimum object area (<span class="physical-unit">µm²</span>)</label><button class="help-button" data-help-title="Minimum object size" data-help-text="Removes small objects before measurements. Default 0 keeps all objects. Higher values can remove real small cells." type="button" aria-label="Help for minimum object size">?</button></div><input id="minimumObjectArea" type="text" inputmode="decimal" value="0"><div class="decimal-stepper"><button class="button tertiary" type="button" data-size-input="minimumObjectArea" data-size-delta="-0.01" aria-label="Decrease minimum object area by 0.01">−0.01</button><button class="button tertiary" type="button" data-size-input="minimumObjectArea" data-size-delta="0.01" aria-label="Increase minimum object area by 0.01">+0.01</button></div></div>
+            <div class="field-group" id="minimumObjectVolumeField"><div class="field-label"><label for="minimumObjectVolume">Minimum object volume (<span class="physical-unit">µm³</span>)</label><button class="help-button" data-help-title="Minimum object size" data-help-text="Removes small objects before measurements. Default 0 keeps all objects. Higher values can remove real small cells." type="button" aria-label="Help for minimum object size">?</button></div><input id="minimumObjectVolume" type="text" inputmode="decimal" value="0"><div class="decimal-stepper"><button class="button tertiary" type="button" data-size-input="minimumObjectVolume" data-size-delta="-0.01" aria-label="Decrease minimum object volume by 0.01">−0.01</button><button class="button tertiary" type="button" data-size-input="minimumObjectVolume" data-size-delta="0.01" aria-label="Increase minimum object volume by 0.01">+0.01</button></div></div>
           </div>
 
           <div class="field-group" id="localDensityField"><label for="localDensityRadius">Local-density radius (<span class="physical-unit">µm</span>)</label><input id="localDensityRadius" type="number" min="0.01" step="any" value="2"></div>
@@ -183,6 +186,6 @@
       <p id="helpModalText"></p><button class="button primary help-modal-close" id="dismissHelpModal" type="button">Got it</button>
     </div>
   </div>
-  <script src="/app.js?v=20260811-2"></script>
+  <script src="/app.js?v=20261016-1"></script>
 </body>
 </html>
