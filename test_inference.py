@@ -133,6 +133,11 @@ class TestLoadModels(unittest.TestCase):
 
 
 class TestFormatPredictions(unittest.TestCase):
+    def test_current_table_models_reject_missing_measurements(self):
+        metadata = {"model1": {"feature_names": ["feature1", "assay"], "strict_feature_columns": True}}
+        with self.assertRaisesRegex(ValueError, "incompatible.*assay"):
+            format_predictions(self.models, metadata, self.X)
+
     """Test prediction formatting functionality."""
 
     def setUp(self):

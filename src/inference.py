@@ -105,8 +105,18 @@ def validate_cli_inputs(models_dir, images_dir, features_file=None):
         raise ValueError("Invalid CLI inputs:\n- " + "\n- ".join(errors) + f"\n{CLI_USAGE}")
 
 
+def validate_model_features(metadata, columns):
+    """Require complete features for current saved models."""
+    for model_name, meta in metadata.items():
+        if meta.get("strict_feature_columns") or meta.get("feature_generation_settings"):
+            missing = set(meta.get("feature_names", [])) - set(columns)
+            if missing:
+                raise ValueError(f"Feature table is incompatible with {model_name}: missing {sorted(missing)}")
+
+
 def format_predictions(models, metadata, X):
     """Format predictions from multiple models into a single DataFrame."""
+    validate_model_features(metadata, X.columns)
     results_list = []
 
     for sample_name in X.index:
@@ -264,11 +274,7 @@ def run_inference(models, metadata, features_file, output_dir, generate_explanat
     if not feature_validation["ok"]:
         raise ValueError("Feature validation failed: " + "; ".join(feature_validation["errors"]))
 
-    for model_name, meta in metadata.items():
-        if meta.get("feature_generation_settings"):
-            missing = set(meta.get("feature_names", [])) - set(data.columns)
-            if missing:
-                raise ValueError(f"Feature table is incompatible with {model_name}: missing {sorted(missing)}")
+    validate_model_features(metadata, data.columns)
 
     # Prepare results storage
     all_predictions = {}

@@ -6,6 +6,7 @@ only when it describes what will actually be passed to the learning code.
 
 from __future__ import annotations
 
+import csv
 import json
 import re
 from collections import Counter, defaultdict
@@ -199,8 +200,25 @@ def read_feature_table(path: str | Path) -> pd.DataFrame:
     """Read an image feature spreadsheet or delimited table."""
     source = Path(path)
     if source.suffix.lower() == ".xlsx":
-        return pd.read_excel(source, engine="openpyxl", dtype={"sampleName": str})
-    return pd.read_csv(source, sep="," if source.suffix.lower() == ".csv" else "\t", dtype={"sampleName": str})
+        with pd.ExcelFile(source, engine="openpyxl") as workbook:
+            header = workbook.parse(header=None, nrows=1, keep_default_na=False)
+            validate_feature_headers(header.iloc[0] if len(header) else [])
+            frame = workbook.parse(dtype={"sampleName": str})
+    else:
+        separator = "," if source.suffix.lower() == ".csv" else "\t"
+        with source.open(encoding="utf-8-sig", newline="") as stream:
+            header = next((row for row in csv.reader(stream, delimiter=separator) if any(value.strip() for value in row)), [])
+            validate_feature_headers(header)
+        frame = pd.read_csv(source, sep=separator, dtype={"sampleName": str})
+    return frame.rename(columns=str)
+
+
+def validate_feature_headers(headers) -> None:
+    """Reject ambiguous column names before pandas renames them."""
+    names = [str(value) for value in headers if pd.notna(value) and str(value)]
+    duplicates = [name for name, count in Counter(names).items() if count > 1]
+    if duplicates:
+        raise ValueError("Duplicate column names: " + ", ".join(duplicates))
 
 
 def merge_feature_tables(primary: pd.DataFrame, additional: pd.DataFrame) -> pd.DataFrame:

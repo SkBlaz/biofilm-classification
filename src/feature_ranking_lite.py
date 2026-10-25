@@ -26,10 +26,12 @@ try:
     from benchmark_outputs import write_confusion_matrices, write_feature_boxplots, write_feature_correlation
     from cv_planning import get_adaptive_cv
     from feature_taxonomy import is_threshold_derived_feature
+    from input_validation import read_feature_table
 except ImportError:  # Package import from the repository root.
     from .benchmark_outputs import write_confusion_matrices, write_feature_boxplots, write_feature_correlation
     from .cv_planning import get_adaptive_cv
     from .feature_taxonomy import is_threshold_derived_feature
+    from .input_validation import read_feature_table
 
 warnings.simplefilter(action="ignore", category=DataConversionWarning)
 
@@ -261,7 +263,7 @@ def load_data(path_to_data: str):
     Loads the data into pandas dataframe, replaces nans and infinities
     with something negative and (max of finite) + something, respectively.
     """
-    data = pd.read_csv(path_to_data, sep="\t", index_col="sampleName")
+    data = read_feature_table(path_to_data).set_index("sampleName")
     # inf --> max + 3.14
     # nan --> -666
     for c in data.columns:
@@ -932,6 +934,7 @@ def do_classification_simple(
                     # Save metadata
                     metadata = {
                         "feature_names": list(all_cols),
+                        "strict_feature_columns": True,
                         "target_mapping": catmap,
                         "n_components": config["n_components"],
                         "thr_features": config["thr_features"],

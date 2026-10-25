@@ -19,6 +19,31 @@ from src.input_validation import (
 
 
 class TestInputValidation(unittest.TestCase):
+    def test_duplicate_headers_fail_before_pandas_renames_them(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for suffix in (".xlsx", ".csv", ".tsv", ".txt"):
+                for column in ("sampleName", "assay", "NA"):
+                    with self.subTest(suffix=suffix, column=column):
+                        path = Path(directory) / f"features{suffix}"
+                        columns = ["sampleName", "label", column, column]
+                        frame = pd.DataFrame([["sample", "A", 1, 2]], columns=columns)
+                        if suffix == ".xlsx":
+                            frame.to_excel(path, index=False)
+                        else:
+                            frame.to_csv(path, sep="," if suffix == ".csv" else "\t", index=False)
+                        report = validate_feature_table(path)
+                        self.assertFalse(report["ok"])
+                        self.assertIn("Duplicate column names", report["errors"][0])
+
+    def test_excel_numeric_headers_match_delimited_names(self):
+        with tempfile.TemporaryDirectory() as directory:
+            primary = pd.DataFrame({"sampleName": ["a"], "label": ["A"], "1": [1]})
+            additional = pd.DataFrame({"sampleName": ["a"], 1: [2]})
+            path = Path(directory) / "measurements.xlsx"
+            additional.to_excel(path, index=False)
+            with self.assertRaisesRegex(ValueError, "overlap: 1"):
+                merge_feature_tables(primary, read_feature_table(path))
+
     def test_join_preserves_exact_names_and_agreeing_labels(self):
         primary = pd.DataFrame({"sampleName": ["001", "1"], "label": ["a", "b"], "feature": [1, 2]})
         additional = pd.DataFrame({"sampleName": ["1", "001"], "label": ["b", "a"], "assay": [20, 10]})

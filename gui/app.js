@@ -38,6 +38,7 @@ const stepIcons = { segmentation: '◩', features: '1', validate: '✓', models:
 let uploadJobId = '';
 let featureFileName = '';
 let additionalFeatureFileName = '';
+const featureUploadErrors = { primary: '', additional: '' };
 let trainingUploadCount = 0;
 let inferenceUploadCount = 0;
 let maskUploadCount = 0;
@@ -336,16 +337,24 @@ async function uploadFiles(input, kind, statusElement) {
 async function uploadFeatureFile(input, additional = false) {
   const file = input.files[0];
   if (!file) return;
+  const slot = additional ? 'additional' : 'primary';
+  featureUploadErrors[slot] = '';
+  if (additional) additionalFeatureFileName = '';
+  else featureFileName = '';
   pendingUploads += 1;
   const statusElement = document.querySelector(additional ? '#additionalFeatureFileStatus' : '#featureFileStatus');
   statusElement.textContent = `Uploading ${file.name}…`;
   try {
     const headers = { 'Content-Type': file.type || 'application/octet-stream', 'X-Upload-Name': file.name };
     const payload = await uploadInJob('/api/upload-feature', headers, file);
+    featureUploadErrors[slot] = '';
     if (additional) additionalFeatureFileName = payload.file;
     else featureFileName = payload.file;
     statusElement.textContent = `${payload.file} uploaded to job ${uploadJobId.slice(0, 8)}.`;
   } catch (error) {
+    featureUploadErrors[slot] = error.message;
+    if (additional) additionalFeatureFileName = '';
+    else featureFileName = '';
     statusElement.textContent = error.message;
   } finally {
     pendingUploads -= 1;
@@ -359,12 +368,20 @@ document.querySelector('#maskFilePicker').addEventListener('change', (event) => 
 document.querySelector('#additionalFeatureFilePicker').addEventListener('change', (event) => uploadFeatureFile(event.target, true));
 document.querySelector('#clearAdditionalFeatures').addEventListener('click', () => {
   if (pendingUploads) return;
+  featureUploadErrors.additional = '';
   additionalFeatureFileName = '';
   document.querySelector('#additionalFeatureFileStatus').textContent = 'No additional table uploaded.';
 });
 document.querySelector('#featureFilePicker').addEventListener('change', (event) => uploadFeatureFile(event.target));
 
 function configFromForm() {
+  const workflow = document.querySelector('input[name="workflow"]:checked').value;
+  if (['train', 'inference', 'full'].includes(workflow) && featureUploadErrors.primary) {
+    throw new Error('Resolve the failed primary table upload before starting.');
+  }
+  if (workflow === 'train' && featureUploadErrors.additional) {
+    throw new Error('Retry or clear the failed additional table upload.');
+  }
   return {
     workflow: document.querySelector('input[name="workflow"]:checked').value,
     job_id: uploadJobId,
@@ -607,6 +624,8 @@ resetButton.addEventListener('click', async () => {
     uploadJobId = '';
     featureFileName = '';
     additionalFeatureFileName = '';
+    featureUploadErrors.primary = '';
+    featureUploadErrors.additional = '';
     trainingUploadCount = 0;
     inferenceUploadCount = 0;
     maskUploadCount = 0;
