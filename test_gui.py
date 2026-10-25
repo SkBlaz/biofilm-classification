@@ -62,6 +62,67 @@ def training_table() -> bytes:
 
 
 class TestSegmentationWorkflow(unittest.TestCase):
+    def test_training_merges_uploaded_tables_by_sample_name(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            primary = pd.DataFrame({"sampleName": ["a", "b"], "label": ["A", "B"], "RawIntensityMean": [1, 2]})
+            primary.to_csv(paths.feature_files / "primary.tsv", sep="\t", index=False)
+            extra = pd.DataFrame({"sampleName": ["b", "a"], "assay": [20, 10]})
+            extra.to_excel(paths.feature_files / "additional.xlsx", index=False)
+            config = validate_config(
+                {
+                    "job_id": paths.job_id,
+                    "workflow": "train",
+                    "feature_file": "primary.tsv",
+                    "additional_feature_file": "additional.xlsx",
+                }
+            )
+            report = app.preflight_config(config)
+            self.assertTrue(report["ok"], report)
+            self.assertEqual(report["features"]["features_read"], 2)
+            self.assertEqual(report["features"]["external_feature_names"], ["assay"])
+            staged = execution.stage_training_features(config)
+            merged = pd.read_csv(staged, sep="\t")
+            self.assertEqual(merged["sampleName"].tolist(), ["a", "b"])
+            self.assertEqual(merged["assay"].tolist(), [10, 20])
+            self.assertEqual(merged["label"].tolist(), ["A", "B"])
+            self.assertEqual(merged["RawIntensityMean"].tolist(), [1, 2])
+            self.assertIn(str(staged), build_execution_steps(config)[0].commands[0])
+            pd.testing.assert_frame_equal(pd.read_csv(paths.feature_files / "primary.tsv", sep="\t"), primary)
+
+    def test_training_preflight_rejects_unsafe_table_merges(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            pd.DataFrame({"sampleName": ["a", "b"], "label": ["A", "B"], "feature": [1, 2]}).to_csv(
+                paths.feature_files / "primary.tsv", sep="\t", index=False
+            )
+            cases = [
+                ({"sampleName": ["a", "a"], "assay": [1, 2]}, "duplicate sampleName"),
+                ({"sampleName": ["a"], "assay": [1]}, "1 missing"),
+                ({"sampleName": ["a", "b", "c"], "assay": [1, 2, 3]}, "1 extra"),
+                ({"sampleName": ["a", None], "assay": [1, 2]}, "missing sampleName"),
+                ({"sampleName": ["a", "b"], "feature": [1, 2]}, "overlap"),
+                ({"sampleName": ["a", "b"], "label": ["B", "A"], "assay": [1, 2]}, "conflicting label"),
+                ({"sampleName": ["a", "b"], "assay": ["bad", 2]}, "Could not parse"),
+                ({"sampleName": ["a", "b"]}, "requires numeric feature"),
+                ({"assay": [1, 2]}, "requires sampleName"),
+            ]
+            for data, error in cases:
+                with self.subTest(error=error):
+                    pd.DataFrame(data).to_csv(paths.feature_files / "additional.csv", index=False)
+                    config = validate_config(
+                        {
+                            "job_id": paths.job_id,
+                            "workflow": "train",
+                            "feature_file": "primary.tsv",
+                            "additional_feature_file": "additional.csv",
+                        }
+                    )
+                    report = app.preflight_config(config)
+                    self.assertFalse(report["ok"])
+                    self.assertIn(error, str(report["features"]["errors"]))
+                    self.assertFalse((paths.results / "datafile.tsv").exists())
+
     def test_preprocessing_and_threshold_source_survive_execution_and_provenance(self):
         with temporary_jobs_root():
             paths = create_job()
@@ -69,20 +130,17 @@ class TestSegmentationWorkflow(unittest.TestCase):
             config = validate_config(
                 {
                     "job_id": paths.job_id,
-                    "rolling_ball_radius_px": 12.5,
                     "threshold_from": "substratum",
                     "substratum_slices": 2,
                     "minimum_object_volume_um3": "0,025",
                 }
             )
             environment = execution.execution_environment(config)
-            self.assertEqual(environment["IMAGINE_ROLLING_BALL_RADIUS_PX"], "12.5")
             self.assertEqual(environment["IMAGINE_THRESHOLD_FROM"], "substratum")
             self.assertEqual(environment["IMAGINE_SUBSTRATUM_SLICES"], "2")
             self.assertEqual(environment["IMAGINE_MIN_OBJECT_VOLUME_UM3"], "0.025")
             saved = config["feature_generation_settings"]
-            self.assertEqual(saved["feature_schema_version"], 3)
-            self.assertEqual(saved["rolling_ball_radius_px"], 12.5)
+            self.assertEqual(saved["feature_schema_version"], 4)
             self.assertEqual(saved["threshold_from"], "substratum")
 
     def test_old_schema_model_requires_original_table_or_retraining(self):
@@ -90,7 +148,7 @@ class TestSegmentationWorkflow(unittest.TestCase):
             model_paths = create_job()
             (model_paths.results / "models").mkdir()
             (model_paths.results / "models" / "rf_model.joblib").touch()
-            app.write_job_metadata(model_paths.job_id, feature_generation_settings={"segmentation_version": 2})
+            app.write_job_metadata(model_paths.job_id, feature_generation_settings={"segmentation_version": 2, "feature_schema_version": 3})
             paths = create_job()
             (paths.inference_images / "sample.tif").touch()
             with self.assertRaisesRegex(ValueError, "retraining.*original precomputed"):
@@ -144,8 +202,7 @@ class TestSegmentationWorkflow(unittest.TestCase):
             (model_paths.results / "models").mkdir()
             (model_paths.results / "models" / "rf_model.joblib").touch()
             saved = {
-                "feature_schema_version": 3,
-                "rolling_ball_radius_px": 25.0,
+                "feature_schema_version": 4,
                 "threshold_from": "substratum",
                 "substratum_slices": 2,
                 "image_dimension": "3d",
@@ -161,36 +218,19 @@ class TestSegmentationWorkflow(unittest.TestCase):
             (paths.inference_images / "sample.tif").touch()
             config = validate_config({"job_id": paths.job_id, "workflow": "inference", "model_job_id": model_paths.job_id})
             self.assertEqual(config["threshold_value"], 100)
-            self.assertEqual(config["rolling_ball_radius_px"], 25)
             self.assertEqual(config["threshold_from"], "substratum")
             self.assertEqual(config["substratum_slices"], 2)
             self.assertEqual(config["feature_groups"], ["objects"])
             self.assertEqual(config["voxel_size_x"], 2.0)
             self.assertEqual(config["masks_dir"], str(paths.masks))
 
-    def test_training_table_can_carry_matching_image_settings(self):
+    def test_training_table_does_not_use_image_settings_upload(self):
         with temporary_jobs_root():
             paths = create_job()
             (paths.feature_files / "training.tsv").write_bytes(training_table())
-            settings = {
-                "segmentation_version": 2,
-                "feature_schema_version": 3,
-                "segmentation_approach": "manual",
-                "threshold_method": "otsu",
-                "threshold_scale": "uint8",
-                "threshold_value": 123,
-                "feature_groups": ["intensity"],
-                "voxel_size_x": 0.2,
-                "voxel_size_y": 0.3,
-                "voxel_size_z": 0.5,
-            }
-            (paths.feature_files / "settings.json").write_text(json.dumps(settings))
-            config = validate_config(
-                {"job_id": paths.job_id, "workflow": "train", "feature_file": "training.tsv", "feature_settings_file": "settings.json"}
-            )
-            self.assertEqual(config["feature_generation_settings"]["threshold_value"], 123)
-            self.assertEqual(config["feature_generation_settings"]["feature_groups"], ["intensity"])
-            self.assertEqual(config["voxel_size_y"], 0.3)
+            config = validate_config({"job_id": paths.job_id, "workflow": "train", "feature_file": "training.tsv"})
+            self.assertIsNone(config["feature_generation_settings"])
+            self.assertNotIn("feature_settings_file", config)
 
     def test_qc_rerun_removes_stale_plots_and_preserves_training_provenance(self):
         with temporary_jobs_root():

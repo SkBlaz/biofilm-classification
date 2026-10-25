@@ -150,7 +150,7 @@ def default_config() -> dict[str, object]:
         "workflow": "features_labelled",
         "job_id": "",
         "feature_file": "",
-        "feature_settings_file": "",
+        "additional_feature_file": "",
         "model_job_id": "",
         "workers": min(4, os.cpu_count() or 1),
         "top_features": 10,
@@ -161,7 +161,6 @@ def default_config() -> dict[str, object]:
         "segmentation_approach": "automatic",
         "threshold_scale": "uint8",
         "threshold_sensitivity": 1.0,
-        "rolling_ball_radius_px": 0.0,
         "threshold_from": "whole_stack",
         "substratum_slices": 1,
         "conversion_max": "",
@@ -331,29 +330,6 @@ def validate_config(raw: dict) -> dict:
     job_id = validate_job_id(str(config.get("job_id", "")))
     paths = job_paths(job_id)
 
-    supplied_settings = None
-    if config.get("feature_settings_file"):
-        name = safe_uploaded_name(str(config["feature_settings_file"]), {".json"})
-        settings_path = (paths.feature_files / name).resolve()
-        if settings_path.parent != paths.feature_files.resolve() or not settings_path.is_file():
-            raise ValueError("The feature-generation settings file is not uploaded")
-        try:
-            supplied_settings = json.loads(settings_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError("Feature-generation settings must be valid JSON") from exc
-        if not isinstance(supplied_settings, dict) or supplied_settings.get("segmentation_version") != 2:
-            raise ValueError("Feature-generation settings require segmentation_version 2")
-        if supplied_settings.get("feature_schema_version") != FEATURE_SCHEMA_VERSION:
-            raise ValueError(
-                "Regenerate tables and retrain for the current feature schema, or omit image settings and use precomputed inference"
-            )
-        supplied_settings.setdefault("conversion_range_mode", "storage")
-        config.update(normalize_settings(supplied_settings))
-        for key in DEFAULT_VOXEL_DIMENSIONS:
-            if key not in supplied_settings:
-                raise ValueError(f"Feature-generation settings must contain {key}")
-            config[key] = supplied_settings[key]
-
     try:
         workers = int(config.get("workers", 4))
         top_features = int(config.get("top_features", 10))
@@ -378,7 +354,7 @@ def validate_config(raw: dict) -> dict:
             raise ValueError(f"Voxel size {axis.upper()} must be a positive number")
         voxel_dimensions[key] = dimension
 
-    if "segmentation_approach" not in raw and supplied_settings is None:
+    if "segmentation_approach" not in raw:
         config["segmentation_approach"] = None
     config["masks_dir"] = str(paths.masks)
     segmentation = normalize_settings(config)
@@ -397,6 +373,9 @@ def validate_config(raw: dict) -> dict:
         raise ValueError("Choose a supported learner")
 
     feature_file = uploaded_feature_path(paths, config.get("feature_file"))
+    additional_file = uploaded_feature_path(paths, config.get("additional_feature_file"))
+    if additional_file and (workflow != "train" or not feature_file):
+        raise ValueError("Additional features require Train models and a primary table")
     if workflow in {"features_labelled", "full"} and not feature_file and not has_images(paths.training_images):
         raise ValueError("Upload labelled training images or a complete training feature table")
     if workflow == "features_unlabelled" and not has_images(paths.inference_images):
@@ -427,7 +406,7 @@ def validate_config(raw: dict) -> dict:
         "inference_images": str(paths.inference_images),
         "feature_file": str(feature_file) if feature_file else "",
         "feature_file_name": feature_file.name if feature_file else "",
-        "feature_settings_file": str(config.get("feature_settings_file", "")),
+        "additional_feature_file": str(additional_file) if additional_file else "",
         "model_job_id": model_job_id,
         "models_dir": str(models_dir),
         "results_dir": str(paths.results),
@@ -451,9 +430,7 @@ def validate_config(raw: dict) -> dict:
         validated["conversion_range_mode"] = saved.get("conversion_range_mode", "storage")
         validated["masks_dir"] = str(paths.masks)
         validated["qc_only"] = False
-    validated["feature_generation_settings"] = (
-        generation_settings(validated) if supplied_settings or (not feature_file and workflow != "train") else None
-    )
+    validated["feature_generation_settings"] = generation_settings(validated) if not feature_file and workflow != "train" else None
     if workflow == "inference" and not feature_file and not saved:
         validated["feature_generation_settings"] = None
     return validated
@@ -512,7 +489,9 @@ def preflight_config(config: dict) -> dict:
     if workflow == "features_unlabelled":
         report["images"] = validate_image_directory(config["inference_images"], labelled=False)
     if workflow in {"train", "inference", "full"} and config.get("feature_file") and not config.get("qc_only"):
-        report["features"] = validate_feature_table(config["feature_file"], require_label=workflow != "inference")
+        report["features"] = validate_feature_table(
+            config["feature_file"], require_label=workflow != "inference", additional_path=config.get("additional_feature_file")
+        )
     if workflow in {"inference", "full"} and not config.get("qc_only") and not (workflow == "inference" and config.get("feature_file")):
         report["inference_images"] = validate_image_directory(config["inference_images"], labelled=False)
     image_directories = []
@@ -1108,11 +1087,9 @@ class Handler(BaseHTTPRequestHandler):
             except (FileNotFoundError, ValueError) as exc:
                 json_response(self, {"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return
-        if parsed.path in {"/api/upload", "/api/upload-feature", "/api/upload-settings"}:
+        if parsed.path in {"/api/upload", "/api/upload-feature"}:
             try:
-                if parsed.path == "/api/upload-settings":
-                    result = receive_upload(self, "feature", {".json"}, "feature-generation settings JSON files")
-                elif parsed.path == "/api/upload-feature":
+                if parsed.path == "/api/upload-feature":
                     result = receive_upload(
                         self,
                         "feature",

@@ -31,7 +31,6 @@ from segmentation import (
     normalize_settings,
     read_mask,
     read_tiff_stack,
-    subtract_rolling_ball,
     to_uint8,
 )
 from segmentation_qc import write_qc
@@ -89,15 +88,21 @@ def rgb2gray(rgb):
 
 def fractal_dimension(Z):
     """Legacy median-binarized boundary box dimension per slice."""
+    Z = np.asarray(Z)
+    return mask_fractal_dimension(Z < np.median(Z))
+
+
+def mask_fractal_dimension(Z):
+    """Boundary box dimension of a binary slice."""
 
     def boxcount(Z, k):
         S = np.add.reduceat(np.add.reduceat(Z, np.arange(0, Z.shape[0], k), axis=0), np.arange(0, Z.shape[1], k), axis=1)
         return len(np.where((S > 0) & (S < k * k))[0])
 
-    Z = np.asarray(Z)
+    Z = np.asarray(Z, dtype=np.uint8)
     if Z.ndim != 2 or min(Z.shape) < 8 or np.ptp(Z) == 0:
         return float("nan")
-    Z = Z < np.median(Z)
+    Z = Z.astype(bool)
     p = min(Z.shape)
     n = 2 ** np.floor(np.log(p) / np.log(2))
     n = int(np.log(n) / np.log(2))
@@ -306,7 +311,6 @@ def segment(
     *,
     segmentation_approach=None,
     threshold_sensitivity=1.0,
-    rolling_ball_radius_px=0.0,
     threshold_from="whole_stack",
     substratum_slices=1,
     conversion_max=None,
@@ -327,7 +331,6 @@ def segment(
             "threshold_scale": threshold_scale,
             "threshold_value": manual_threshold,
             "threshold_sensitivity": threshold_sensitivity,
-            "rolling_ball_radius_px": rolling_ball_radius_px,
             "threshold_from": threshold_from,
             "substratum_slices": substratum_slices,
             "dim_class_assignment": dim_class,
@@ -350,8 +353,6 @@ def segment(
     if actual_dimension == "2d":
         settings["feature_groups"] = ["2d", "intensity", "geometry"]
     image8, conversion = to_uint8(raw_stack, conversion_max, bits, conversion_range_mode)
-    if settings["segmentation_approach"] != "import":
-        image8 = subtract_rolling_ball(image8, settings["rolling_ball_radius_px"])
     imported_labels = None
     mask_path = None
     if settings["segmentation_approach"] == "import":
@@ -402,10 +403,10 @@ def segment(
             sweep_mask = threshold_space >= cutoff
             sweep_mask, _ = filter_mask(sweep_mask, dimensions, settings)
             metrics = comstat_metrics(sweep_mask, dimensions, include_geometry=False)
-            out_df[f"BioVolumeThr{cutoff}"] = metrics["Biomass_um3_per_um2"]
-            out_df[f"ThicknessThreshold={cutoff}"] = metrics["MeanThickness_COMSTAT_um"]
+            out_df[f"LayerArea_um2Thr{cutoff}"] = metrics["LayerArea_um2"]
+            out_df[f"ThicknessThreshold={cutoff}"] = metrics["MeanThickness_BiomassColumns_um"]
             out_df[f"RoughnessThreshold={cutoff}"] = metrics["Roughness_RaStar"]
-    slice_values = out_df[[name for name in out_df if not name.startswith(("BioVolumeThr", "ThicknessThreshold=", "RoughnessThreshold="))]]
+    slice_values = out_df[[name for name in out_df if not name.startswith(("ThicknessThreshold=", "RoughnessThreshold="))]]
     totals = slice_values.sum(axis=0).replace(0, np.nan)
     normalized = (100 * slice_values.div(totals)).fillna(0)
     normalized.columns = [f"{column}Normalized" for column in normalized.columns]
@@ -413,7 +414,8 @@ def segment(
     per_slice_columns = set(out_df.columns)
     if "geometry" in groups:
         out_df["FractalDimension"] = [fractal_dimension(layer) for layer in raw_stack]
-        per_slice_columns.add("FractalDimension")
+        out_df["MaskFractalDimension"] = [mask_fractal_dimension(layer) for layer in binary_mask]
+        per_slice_columns.update(("FractalDimension", "MaskFractalDimension"))
         out_df["Homogeneity"] = get_homogenity(image_space)
         for name, value in gpt_calculate_texture_features(image_space).mean(axis=0).items():
             out_df[name] = value
@@ -429,7 +431,6 @@ def segment(
             out_df["SpreadingHorizontal"] = horizontal
             out_df["SpreadingVertical"] = vertical
             out_df["SpreadingTotal"] = total
-            out_df["FilledThicknessMean_um"] = float(binary_mask.sum(axis=0).mean() * voxel_size_z)
     if "2d" in groups or groups == set(GROUPS):
         out_df = out_df.copy()
         mask2d = binary_mask[0]
@@ -488,7 +489,7 @@ def segment(
         name
         for name in out_df.columns
         if (name not in per_slice_columns and name not in {"LayerArea_um2", "LayerOccupancy_pct"})
-        or name.startswith(("BioVolumeThr", "ThicknessThreshold=", "RoughnessThreshold="))
+        or name.startswith(("ThicknessThreshold=", "RoughnessThreshold="))
     ]
     record["scalar_feature_names"] = scalar_columns
     (Path(outfolder) / "segmentation" / f"{stem}_segmentation.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
@@ -516,7 +517,6 @@ if __name__ == "__main__":
     parser.add_argument("--threshold-scale", choices=("stack_normalized", "uint8", "raw"))
     parser.add_argument("--threshold", dest="threshold_value", type=float)
     parser.add_argument("--threshold-sensitivity", type=float)
-    parser.add_argument("--rolling-ball-radius-px", type=float, help="Slice-wise background subtraction radius; 0 disables")
     parser.add_argument("--threshold-from", choices=("whole_stack", "substratum"))
     parser.add_argument("--substratum-slices", type=int, help="First N slices for substratum Otsu")
     parser.add_argument("--conversion-range-mode", choices=("observed", "storage"))
@@ -548,7 +548,6 @@ if __name__ == "__main__":
             minimum_object_volume_um3=settings["minimum_object_volume_um3"],
             segmentation_approach=settings["segmentation_approach"],
             threshold_sensitivity=settings["threshold_sensitivity"],
-            rolling_ball_radius_px=settings["rolling_ball_radius_px"],
             threshold_from=settings["threshold_from"],
             substratum_slices=settings["substratum_slices"],
             conversion_max=settings["conversion_max"],

@@ -72,6 +72,7 @@ MICROICS_PREFIXES = (
     "SurfaceToVolume",
     "MeanDiffusion",
     "MaxDiffusion",
+    "MaskFractalDimension",
     "LayerArea",
     "LayerOccupancy",
     "ObjectCount3D",
@@ -198,15 +199,44 @@ def read_feature_table(path: str | Path) -> pd.DataFrame:
     """Read an image feature spreadsheet or delimited table."""
     source = Path(path)
     if source.suffix.lower() == ".xlsx":
-        return pd.read_excel(source, engine="openpyxl")
-    return pd.read_csv(source, sep="," if source.suffix.lower() == ".csv" else "\t")
+        return pd.read_excel(source, engine="openpyxl", dtype={"sampleName": str})
+    return pd.read_csv(source, sep="," if source.suffix.lower() == ".csv" else "\t", dtype={"sampleName": str})
 
 
-def validate_feature_table(path: str | Path, require_label: bool = True) -> dict[str, Any]:
+def merge_feature_tables(primary: pd.DataFrame, additional: pd.DataFrame) -> pd.DataFrame:
+    """Join measurements by exact, unique sample names."""
+    for name, frame in (("Primary", primary), ("Additional", additional)):
+        if "sampleName" not in frame:
+            raise ValueError(f"{name} table requires sampleName")
+        keys = frame["sampleName"]
+        if frame.empty or keys.isna().any() or keys.astype(str).str.strip().eq("").any():
+            raise ValueError(f"{name} table has missing sampleName values or no rows")
+        if keys.duplicated().any():
+            raise ValueError(f"{name} table has duplicate sampleName values")
+    missing = set(primary["sampleName"]) - set(additional["sampleName"])
+    extra = set(additional["sampleName"]) - set(primary["sampleName"])
+    if missing or extra:
+        raise ValueError(f"sampleName mismatch: {len(missing)} missing and {len(extra)} extra samples in additional table")
+    features = [column for column in additional if column not in METADATA_COLUMNS and not str(column).startswith("Unnamed:")]
+    if not features:
+        raise ValueError("Additional table requires numeric feature columns")
+    overlap = set(features) & set(primary.columns)
+    if overlap:
+        raise ValueError("Feature columns overlap: " + ", ".join(sorted(map(str, overlap))))
+    aligned = additional.set_index("sampleName").loc[primary["sampleName"]]
+    if "label" in additional:
+        if "label" not in primary or not np.array_equal(primary["label"].to_numpy(), aligned["label"].to_numpy()):
+            raise ValueError("Tables have conflicting label values")
+    return primary.merge(additional[["sampleName", *features]], on="sampleName", how="left", sort=False, validate="one_to_one")
+
+
+def validate_feature_table(path: str | Path, require_label: bool = True, additional_path: str | Path | None = None) -> dict[str, Any]:
     """Validate feature columns without silently coercing bad values."""
     source = Path(path)
     try:
         frame = read_feature_table(source)
+        if additional_path:
+            frame = merge_feature_tables(frame, read_feature_table(additional_path))
     except Exception as exc:  # pandas has several parser exception types
         return {"path": str(source), "ok": False, "errors": [f"Could not read feature table: {exc}"]}
 

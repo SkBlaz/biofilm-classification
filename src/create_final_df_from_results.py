@@ -95,7 +95,6 @@ if __name__ == "__main__":
                     "threshold_scale": record["submitted_threshold_units"] or "uint8",
                     "threshold_value": record["submitted_threshold_value"],
                     "threshold_sensitivity": record["configured_threshold_sensitivity"],
-                    "rolling_ball_radius_px": record["rolling_ball_radius_px"],
                     "threshold_from": record["threshold_from"],
                     "substratum_slices": record["substratum_slices"],
                     "conversion_max": record["configured_conversion_max"],

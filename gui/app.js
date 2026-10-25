@@ -37,11 +37,12 @@ const deleteModelJobButton = document.querySelector('#deleteModelJobButton');
 const stepIcons = { segmentation: '◩', features: '1', validate: '✓', models: '2', reports: '▧', inference: '3' };
 let uploadJobId = '';
 let featureFileName = '';
-let featureSettingsName = '';
+let additionalFeatureFileName = '';
 let trainingUploadCount = 0;
 let inferenceUploadCount = 0;
 let maskUploadCount = 0;
 let pendingUploads = 0;
+let inputUploadQueue = Promise.resolve();
 let latestState = null;
 let pollTimer = null;
 let runStartedAt = null;
@@ -73,7 +74,6 @@ function updateSegmentation() {
   show('dimClassField', method === 'multi_otsu');
   show('thresholdSourceField', method === 'otsu');
   show('substratumSlicesField', method === 'otsu' && value('thresholdFrom') === 'substratum');
-  show('rollingBallField', approach !== 'import');
   show('tuneOtsuButton', method === 'otsu');
   show('featureGroups3d', !is2d);
   show('features2dHelp', is2d);
@@ -172,6 +172,7 @@ function setWorkflow(workflow) {
   document.querySelector('#trainingImagesField').classList.toggle('hidden', !['features_labelled', 'full'].includes(workflow));
   document.querySelector('#inferenceImagesField').classList.toggle('hidden', !['features_unlabelled', 'inference', 'full'].includes(workflow));
   document.querySelector('#featureFileField').classList.toggle('hidden', !['train', 'inference', 'full'].includes(workflow));
+  document.querySelector('#additionalFeatureField').classList.toggle('hidden', workflow !== 'train');
   document.querySelector('#modelJobField').classList.toggle('hidden', workflow !== 'inference');
   document.querySelector('#inheritedSettingsHelp').classList.toggle('hidden', workflow !== 'inference');
   document.querySelector('#modelFields').classList.toggle('hidden', !['train', 'full'].includes(workflow));
@@ -276,7 +277,6 @@ async function loadDefaults() {
   document.querySelector('#thresholdMethod').value = config.threshold_method;
   document.querySelector('#segmentationApproach').value = config.segmentation_approach || 'automatic';
   document.querySelector('#thresholdSensitivity').value = config.threshold_sensitivity;
-  document.querySelector('#rollingBallRadius').value = config.rolling_ball_radius_px;
   document.querySelector('#thresholdFrom').value = config.threshold_from;
   document.querySelector('#substratumSlices').value = config.substratum_slices;
   document.querySelector('#conversionMax').value = config.conversion_max ?? '';
@@ -293,6 +293,19 @@ async function loadDefaults() {
   updateSegmentation();
 }
 
+function uploadInJob(endpoint, headers, file) {
+  const request = inputUploadQueue.then(async () => {
+    if (uploadJobId) headers['X-Job-ID'] = uploadJobId;
+    const response = await fetch(endpoint, { method: 'POST', headers, body: file });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'Upload failed');
+    uploadJobId = payload.job_id;
+    return payload;
+  });
+  inputUploadQueue = request.catch(() => {});
+  return request;
+}
+
 async function uploadFiles(input, kind, statusElement) {
   const files = [...input.files];
   if (!files.length) return;
@@ -305,11 +318,7 @@ async function uploadFiles(input, kind, statusElement) {
         'X-Upload-Name': files[index].name,
         'X-Upload-Kind': kind,
       };
-      if (uploadJobId) headers['X-Job-ID'] = uploadJobId;
-      const response = await fetch('/api/upload', { method: 'POST', headers, body: files[index] });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || 'Upload failed');
-      uploadJobId = payload.job_id;
+      await uploadInJob('/api/upload', headers, files[index]);
     }
     if (kind === 'training') trainingUploadCount += files.length;
     else if (kind === 'mask') maskUploadCount += files.length;
@@ -324,20 +333,16 @@ async function uploadFiles(input, kind, statusElement) {
   }
 }
 
-async function uploadFeatureFile(input, settings = false) {
+async function uploadFeatureFile(input, additional = false) {
   const file = input.files[0];
   if (!file) return;
   pendingUploads += 1;
-  const statusElement = document.querySelector(settings ? '#settingsFileStatus' : '#featureFileStatus');
+  const statusElement = document.querySelector(additional ? '#additionalFeatureFileStatus' : '#featureFileStatus');
   statusElement.textContent = `Uploading ${file.name}…`;
   try {
     const headers = { 'Content-Type': file.type || 'application/octet-stream', 'X-Upload-Name': file.name };
-    if (uploadJobId) headers['X-Job-ID'] = uploadJobId;
-    const response = await fetch(settings ? '/api/upload-settings' : '/api/upload-feature', { method: 'POST', headers, body: file });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || 'Upload failed');
-    uploadJobId = payload.job_id;
-    if (settings) featureSettingsName = payload.file;
+    const payload = await uploadInJob('/api/upload-feature', headers, file);
+    if (additional) additionalFeatureFileName = payload.file;
     else featureFileName = payload.file;
     statusElement.textContent = `${payload.file} uploaded to job ${uploadJobId.slice(0, 8)}.`;
   } catch (error) {
@@ -351,7 +356,12 @@ async function uploadFeatureFile(input, settings = false) {
 document.querySelector('#trainingFilePicker').addEventListener('change', (event) => uploadFiles(event.target, 'training', document.querySelector('#trainingFileStatus')));
 document.querySelector('#inferenceFilePicker').addEventListener('change', (event) => uploadFiles(event.target, 'inference', document.querySelector('#inferenceFileStatus')));
 document.querySelector('#maskFilePicker').addEventListener('change', (event) => uploadFiles(event.target, 'mask', document.querySelector('#maskFileStatus')));
-document.querySelector('#settingsFilePicker').addEventListener('change', (event) => uploadFeatureFile(event.target, true));
+document.querySelector('#additionalFeatureFilePicker').addEventListener('change', (event) => uploadFeatureFile(event.target, true));
+document.querySelector('#clearAdditionalFeatures').addEventListener('click', () => {
+  if (pendingUploads) return;
+  additionalFeatureFileName = '';
+  document.querySelector('#additionalFeatureFileStatus').textContent = 'No additional table uploaded.';
+});
 document.querySelector('#featureFilePicker').addEventListener('change', (event) => uploadFeatureFile(event.target));
 
 function configFromForm() {
@@ -359,7 +369,7 @@ function configFromForm() {
     workflow: document.querySelector('input[name="workflow"]:checked').value,
     job_id: uploadJobId,
     feature_file: featureFileName,
-    feature_settings_file: featureSettingsName,
+    additional_feature_file: document.querySelector('input[name="workflow"]:checked').value === 'train' ? additionalFeatureFileName : '',
     model_job_id: modelJob.value,
     workers: Number(value('workers')),
     top_features: Number(value('topFeatures')),
@@ -370,7 +380,6 @@ function configFromForm() {
     threshold_method: value('thresholdMethod'),
     segmentation_approach: value('segmentationApproach'),
     threshold_sensitivity: Number(value('thresholdSensitivity')),
-    rolling_ball_radius_px: Number(value('rollingBallRadius')),
     threshold_from: value('thresholdMethod') === 'otsu' ? value('thresholdFrom') : 'whole_stack',
     substratum_slices: Number(value('substratumSlices')),
     conversion_max: value('conversionMax'),
@@ -593,16 +602,18 @@ form.addEventListener('submit', async (event) => {
 stopButton.addEventListener('click', async () => { try { await post('/api/stop'); } catch (error) { setFormMessage(error.message, 'error'); } });
 resetButton.addEventListener('click', async () => {
   try {
+    if (pendingUploads) throw new Error('Please wait for uploads to finish.');
     renderState(await post('/api/reset'));
     uploadJobId = '';
     featureFileName = '';
-  featureSettingsName = '';
+    additionalFeatureFileName = '';
     trainingUploadCount = 0;
     inferenceUploadCount = 0;
-  maskUploadCount = 0;
+    maskUploadCount = 0;
     document.querySelector('#trainingFileStatus').textContent = 'No training images uploaded.';
     document.querySelector('#inferenceFileStatus').textContent = 'No inference images uploaded.';
     document.querySelector('#featureFileStatus').textContent = 'No feature table uploaded.';
+    document.querySelector('#additionalFeatureFileStatus').textContent = 'No additional table uploaded.';
     setFormMessage('Ready for a new isolated job.', 'info');
   } catch (error) { setFormMessage(error.message, 'error'); }
 });

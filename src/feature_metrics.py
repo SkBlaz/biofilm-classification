@@ -204,11 +204,8 @@ def comstat_metrics(mask: np.ndarray, voxel_size: tuple[float, float, float], in
         occupied_z = np.any(binary, axis=(1, 2))
         max_layer_index = int(np.flatnonzero(occupied_z)[-1])
         max_height_um = float((max_layer_index + 1) * dz)
-        biofilm_extent_height_um = float((max_layer_index + 1) * dz)
-        mean_thickness_um = float(filled[filled > 0].mean())
-        mean_biomass_column_thickness_um = mean_thickness_um
+        mean_biomass_column_thickness_um = float(filled[filled > 0].mean())
         compacted_um = float(filled.max())
-        vertical_fill_ratio = compacted_um / biofilm_extent_height_um
         field_mean = float(filled.mean())
         roughness = float(np.mean(np.abs(filled - field_mean)) / field_mean)
         height_p95_um = float((np.searchsorted(np.cumsum(occupied_per_layer), 0.95 * total_voxels) + 1) * dz)
@@ -219,11 +216,8 @@ def comstat_metrics(mask: np.ndarray, voxel_size: tuple[float, float, float], in
     else:
         height_p95_um = float("nan")
         max_height_um = float("nan")
-        biofilm_extent_height_um = float("nan")
-        mean_thickness_um = float("nan")
         mean_biomass_column_thickness_um = float("nan")
         compacted_um = float("nan")
-        vertical_fill_ratio = float("nan")
         roughness = float("nan")
         z_com_um = float("nan")
         z_spread_um = float("nan")
@@ -237,12 +231,9 @@ def comstat_metrics(mask: np.ndarray, voxel_size: tuple[float, float, float], in
         "MeanDiffusionDistance_um": mean_diffusion_distance_um,
         "MaxDiffusionDistance_um": max_diffusion_distance_um,
         "MaxBiofilmHeight_COMSTAT_um": max_height_um,
-        "BiofilmExtentHeight_um": biofilm_extent_height_um,
         "BiomassHeightP95_um": height_p95_um,
-        "MeanThickness_COMSTAT_um": mean_thickness_um,
         "MeanThickness_BiomassColumns_um": mean_biomass_column_thickness_um,
         "MaxCompactedColumnThickness_um": compacted_um,
-        "VerticalFillRatio": vertical_fill_ratio,
         "Roughness_RaStar": roughness,
         "SubstratumCoverage_pct": float(layer_occupancy_pct[0]) if nz else float("nan"),
         "LayerArea_um2": layer_area_um2,

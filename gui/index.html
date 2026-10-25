@@ -58,10 +58,14 @@
           <div class="field-label"><label for="featureFilePicker">Complete feature table</label><button class="help-button" data-help-title="Complete feature table" data-help-text="Upload Excel (.xlsx), CSV, or TSV: one row per image, with sampleName, label, and numeric feature columns for training. For inference, upload a compatible table with sampleName and model features instead of raw images — you only need one of the two; raw images will not be regenerated." type="button" aria-label="Help for Complete feature table">?</button></div>
           <label class="file-button upload-button" for="featureFilePicker">Choose Excel / CSV / TSV features</label>
           <input class="hidden" id="featureFilePicker" type="file" accept=".xlsx,.csv,.tsv,.txt">
-          <small>Add external measurements as numeric columns in the complete spreadsheet, matched by sampleName. JSON is only for optional image settings.</small>
+          <small>For training, optionally add a second table below; measurements are joined by exact sampleName.</small>
           <small class="file-picker-status" id="featureFileStatus">No feature table uploaded. Optional if you upload inference images above.</small>
-          <label class="file-button" for="settingsFilePicker">Choose matching image settings (optional)</label><input class="hidden" id="settingsFilePicker" type="file" accept=".json,application/json">
-          <small id="settingsFileStatus">For image-derived training tables, also upload their feature_generation_settings.json to reproduce the image workflow at inference.</small>
+          <div id="additionalFeatureField" class="hidden">
+            <label class="file-button" for="additionalFeatureFilePicker">Choose additional measurements (optional)</label><input class="hidden" id="additionalFeatureFilePicker" type="file" accept=".xlsx,.csv,.tsv,.txt">
+            <small>One row per sample, with sampleName and numeric measurements. Both tables must contain exactly the same samples and distinct feature columns. Row order can differ; label is optional and must agree if supplied.</small>
+            <small id="additionalFeatureFileStatus">No additional table uploaded.</small>
+            <button class="button tertiary" id="clearAdditionalFeatures" type="button">Clear additional table</button>
+          </div>
         </div>
 
         <div class="field-group hidden" id="modelJobField">
@@ -93,12 +97,12 @@
           <p id="features2dHelp" class="hidden">2D images use one complete package: coverage, biomass area, object count/density, size statistics, equivalent diameter, nearest-neighbour distances, porosity and pore sizes, intensity statistics, and GLCM texture.</p>
           <div id="featureGroups3d" class="feature-group-options">
             <label><input id="allFeatureGroups" type="checkbox" checked> All</label>
-            <label><input name="feature_group" type="checkbox" value="basic" checked> Basic biofilm metrics <small>Biomass, maximum height, filled thickness, vertical fill ratio, roughness, coverage, layer occupancy, centre-of-mass height, vertical spread.</small></label>
+            <label><input name="feature_group" type="checkbox" value="basic" checked> Basic biofilm metrics <small>Biomass, maximum height, filled thickness, roughness, coverage, layer occupancy, centre-of-mass height, vertical spread.</small></label>
             <label><input name="feature_group" type="checkbox" value="objects" checked> 3D object features <small>Count, size, and nearest-neighbour distances from a generated or imported 3D mask.</small></label>
             <label><input name="feature_group" type="checkbox" value="advanced" checked> Advanced 3D geometry <small>Surface area, surface/volume ratio, diffusion distance, local thickness/density, porosity, and pore size. Can be time-consuming.</small></label>
             <label><input name="feature_group" type="checkbox" value="intensity" checked> Intensity (threshold-free) <small>Original-precision intensity statistics.</small></label>
-            <label><input name="feature_group" type="checkbox" value="geometry" checked> Geometric threshold-free <small>Fractal dimension, grayscale box dimension, and GLCM texture.</small></label>
-            <label><input name="feature_group" type="checkbox" value="serial" checked> Serial / multi-threshold (ML ensemble)</label>
+            <label><input name="feature_group" type="checkbox" value="geometry" checked> Geometry and texture <small>Image fractal dimension, grayscale box dimension, binary-mask fractal dimension, and GLCM texture.</small></label>
+            <label><input name="feature_group" type="checkbox" value="serial" checked> Serial / multi-threshold (ML ensemble) <small>Per-slice biomass area and counts across thresholds, aggregated over the stack.</small></label>
           </div>
         </fieldset>
 
@@ -124,7 +128,6 @@
             <small id="maskFileStatus">No masks uploaded.</small>
             <small>Same dimensions as each image; nonzero = biomass, or integer labels for objects. Name each mask like its image, optionally with _mask before the extension. Works with ImageJ, BiofilmQ, and Cellpose. Thresholding is skipped.</small>
           </div>
-          <div class="field-group" id="rollingBallField"><div class="field-label"><label for="rollingBallRadius">Rolling-ball radius (pixels)</label><button class="help-button" data-help-title="Rolling-ball background subtraction" data-help-text="0 disables subtraction. A positive radius subtracts dark background from each slice before thresholding. Start with 50 pixels and choose a radius larger than the biomass objects. Original intensity features are preserved. Uses scikit-image rolling ball; results can differ from ImageJ." type="button" aria-label="Help for rolling-ball background subtraction">?</button></div><input id="rollingBallRadius" type="number" min="0" step="0.1" value="0"></div>
           <small id="conversionFields">Images are automatically converted to 8-bit for thresholding.</small><input id="conversionMax" type="hidden">
           <div class="field-row compact-row">
             <div class="field-group" id="connectivity3dField"><div class="field-label"><label for="connectivity3d">3D connectivity</label><button class="help-button" data-help-title="3D connectivity" data-help-text="Groups neighbouring biomass voxels into objects. Higher connectivity merges more readily into fewer, larger objects. Default 26; affects object count and size. Imported object labels retain their identities." type="button" aria-label="Help for 3D connectivity">?</button></div><select id="connectivity3d"><option value="26">26 (faces, edges, corners)</option><option value="18">18 (faces, edges)</option><option value="6">6 (faces only)</option></select></div>

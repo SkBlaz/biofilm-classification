@@ -22,14 +22,13 @@ except ImportError:
     from feature_metrics import multi_otsu_labels, multi_otsu_thresholds, otsu_threshold, robust_background_threshold
 
 GROUPS = ("basic", "objects", "advanced", "intensity", "geometry", "serial")
-FEATURE_SCHEMA_VERSION = 3
+FEATURE_SCHEMA_VERSION = 4
 ENV_SETTINGS = {
     "segmentation_approach": "IMAGINE_SEGMENTATION_APPROACH",
     "threshold_method": "IMAGINE_THRESHOLD_METHOD",
     "threshold_scale": "IMAGINE_THRESHOLD_SCALE",
     "threshold_value": "IMAGINE_THRESHOLD_VALUE",
     "threshold_sensitivity": "IMAGINE_THRESHOLD_SENSITIVITY",
-    "rolling_ball_radius_px": "IMAGINE_ROLLING_BALL_RADIUS_PX",
     "threshold_from": "IMAGINE_THRESHOLD_FROM",
     "substratum_slices": "IMAGINE_SUBSTRATUM_SLICES",
     "dim_class_assignment": "IMAGINE_DIM_CLASS_ASSIGNMENT",
@@ -133,7 +132,6 @@ def normalize_settings(raw):
     settings["connectivity_3d"] = int(connectivity)
     for key, default in (
         ("threshold_sensitivity", 1.0),
-        ("rolling_ball_radius_px", 0.0),
         ("minimum_object_area_um2", 0.0),
         ("minimum_object_volume_um3", 0.0),
         ("local_density_radius_um", 2.0),
@@ -147,7 +145,7 @@ def normalize_settings(raw):
             item = float(item.replace(",", ".") if isinstance(item, str) else item)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{key.replace('_', ' ')} must be numeric") from exc
-        positive = key not in {"minimum_object_area_um2", "minimum_object_volume_um3", "rolling_ball_radius_px"}
+        positive = key not in {"minimum_object_area_um2", "minimum_object_volume_um3"}
         if not math.isfinite(item) or item < 0 or (positive and item == 0):
             raise ValueError(f"{key.replace('_', ' ')} must be finite and {'positive' if positive else 'non-negative'}")
         settings[key] = item
@@ -233,20 +231,6 @@ def mask_for_image(filepath, masks_dir):
     if len(matches) != 1:
         raise ValueError(f"{Path(filepath).name}: upload exactly one matching mask named {stem}.tif or {stem}_mask.tif")
     return matches[0]
-
-
-def subtract_rolling_ball(image8, radius):
-    """Subtract slice backgrounds before thresholding; preserve calibration."""
-    from skimage.restoration import rolling_ball
-
-    if radius == 0:
-        return image8
-    corrected = np.empty_like(image8)
-    for z, layer in enumerate(image8):
-        values = layer.astype(float)
-        background = rolling_ball(values, radius=radius)
-        corrected[z] = np.floor(np.clip(values - background, 0, 255) + 0.5).astype(np.uint8)
-    return corrected
 
 
 def read_mask(path, shape):

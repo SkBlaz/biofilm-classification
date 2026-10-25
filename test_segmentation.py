@@ -10,13 +10,13 @@ import tifffile
 sys.path.insert(0, "src")
 
 from segmentation import (
+    environment_settings,
     filter_mask,
     generate_mask,
     mask_for_image,
     normalize_settings,
     read_mask,
     read_tiff_stack,
-    subtract_rolling_ball,
     to_uint8,
 )
 
@@ -55,8 +55,6 @@ class TestSegmentationSettings(unittest.TestCase):
             {"minimum_object_volume_um3": -1},
             {"connectivity_3d": 26.1},
             {"threshold_method": "bem"},
-            {"rolling_ball_radius_px": -1},
-            {"rolling_ball_radius_px": "nan"},
             {"threshold_from": "brightest"},
             {"substratum_slices": 1.5},
             {"substratum_slices": 0},
@@ -85,16 +83,10 @@ class TestSegmentationSettings(unittest.TestCase):
             filtered, _ = filter_mask(mask, (0.1, 0.1, 99), settings)
             self.assertEqual(filtered.sum(), 2)
 
-    def test_rolling_ball_removes_slice_offsets_without_mutation(self):
-        image = np.full((2, 11, 11), 20, dtype=np.uint8)
-        image[1] = 40
-        image[:, 5, 5] = [120, 140]
-        original = image.copy()
-        corrected = subtract_rolling_ball(image, 3)
-        np.testing.assert_array_equal(image, original)
-        np.testing.assert_array_equal(corrected[:, 0, 0], [0, 0])
-        np.testing.assert_array_equal(corrected[:, 5, 5], [100, 100])
-        np.testing.assert_array_equal(subtract_rolling_ball(image, 0), original)
+    def test_removed_preprocessing_is_absent_from_settings(self):
+        settings = normalize_settings({})
+        self.assertNotIn("rolling_ball_radius_px", settings)
+        self.assertNotIn("rolling_ball_radius_px", environment_settings({"IMAGINE_ROLLING_BALL_RADIUS_PX": "50"}))
 
     def test_three_class_chooses_one_comstat2_cutoff(self):
         image = np.array([0, 50, 100, 200], dtype=np.uint8)

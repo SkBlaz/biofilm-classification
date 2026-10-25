@@ -92,9 +92,6 @@ def write_qc(filepath, outfolder, image8, mask, labels, settings, result, conver
         "threshold_boundary_mode": "comstat2",
         "threshold_sensitivity": settings["threshold_sensitivity"] if settings["segmentation_approach"] == "automatic" else None,
         "configured_threshold_sensitivity": settings["threshold_sensitivity"],
-        "rolling_ball_radius_px": settings["rolling_ball_radius_px"],
-        "rolling_ball_applied": settings["segmentation_approach"] != "import" and settings["rolling_ball_radius_px"] > 0,
-        "rolling_ball_implementation": "skimage.restoration.rolling_ball, slice-wise, rounded to uint8",
         "threshold_from": settings["threshold_from"],
         "substratum_slices": settings["substratum_slices"],
         "threshold_source_slices": min(settings["substratum_slices"], image8.shape[0])

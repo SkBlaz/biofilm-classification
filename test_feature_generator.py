@@ -24,6 +24,7 @@ from feature_generator import (
     get_cell_count,
     get_homogenity,
     get_transition_matrix,
+    mask_fractal_dimension,
     read_voxel_dimensions,
     rgb2gray,
     segment,
@@ -174,7 +175,59 @@ class TestCalculateSpatialSpreading(unittest.TestCase):
 
 
 class TestSegmentationIntegration(unittest.TestCase):
-    def test_rolling_ball_preserves_raw_features_and_exact_qc(self):
+    def test_threshold_layer_areas_reach_aggregated_training_table(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for folder in ("feature_generator", "raw", "analysis"):
+                (root / folder).mkdir()
+            stack = np.zeros((3, 16, 16), dtype=np.uint8)
+            stack[0, 2:4, 2:4] = 20
+            stack[1, 2:6, 2:6] = 100
+            stem = "04072023_s_Lm_st_L1323_p_C08_pos004_tm_24_ch_Syto9_z_21"
+            path = root / f"{stem}.tif"
+            tifffile.imwrite(path, stack, photometric="minisblack")
+            with patch("feature_generator.voxel_size_x", 2), patch("feature_generator.voxel_size_y", 3):
+                record = segment(str(path), str(root / "feature_generator"), feature_groups=["serial", "geometry"])
+            slices = pd.read_csv(root / "feature_generator" / f"{stem}CustomAlgos.txt", sep="\t")
+            names = [name for name in slices if name.startswith("LayerArea_um2Thr") and not name.endswith("Normalized")]
+            self.assertEqual(len(names), 29)
+            self.assertFalse(any(name.startswith("BioVolumeThr") for name in slices))
+            for name in names:
+                cutoff = float(name.removeprefix("LayerArea_um2Thr"))
+                expected = (stack / 255 >= cutoff).sum(axis=(1, 2)) * 6
+                np.testing.assert_allclose(slices[name], expected)
+                total = expected.sum()
+                np.testing.assert_allclose(slices[name + "Normalized"], 100 * expected / total)
+                self.assertNotIn(name, record["scalar_feature_names"])
+            for script, args in (
+                ("create_joint_df.py", [root / "feature_generator", root / "raw"]),
+                ("analysis.py", [root / "raw", root / "analysis"]),
+                ("create_final_df_from_results.py", [root / "analysis", root / "datafile.tsv"]),
+            ):
+                result = subprocess.run([sys.executable, str(Path("src") / script), *map(str, args)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            table = pd.read_csv(root / "datafile.tsv", sep="\t")
+            for statistic in ("mean", "std", "min", "max"):
+                column = f"{names[0]}-SUMMARYCustomAlgos.tsv_{statistic}.txt"
+                expected = getattr(slices[names[0]], statistic)()
+                self.assertAlmostEqual(table[column].iloc[0], expected)
+            for feature in ("FractalDimension", "FractalGrayscaleBoxDimension", "MaskFractalDimension"):
+                self.assertTrue(any(name.startswith(feature + "-") for name in table), feature)
+
+    def test_mask_fractal_uses_foreground_without_median_thresholding(self):
+        mask = np.zeros((32, 32), dtype=bool)
+        mask[3:12, 4:15] = True
+        counts = []
+        for size in (32, 16, 8, 4):
+            boxes = [mask[y : y + size, x : x + size] for y in range(0, 32, size) for x in range(0, 32, size)]
+            counts.append(sum(0 < box.sum() < size * size for box in boxes))
+        expected = -np.polyfit(np.log([32, 16, 8, 4]), np.log(counts), 1)[0]
+        self.assertAlmostEqual(mask_fractal_dimension(mask), expected)
+        self.assertTrue(np.isnan(fractal_dimension(mask.astype(float))))
+        for empty in (np.zeros((32, 32)), np.ones((32, 32)), np.eye(2)):
+            self.assertTrue(np.isnan(mask_fractal_dimension(empty)))
+
+    def test_unmodified_threshold_image_preserves_raw_features_and_exact_qc(self):
         stack = np.full((2, 16, 16), 20, dtype=np.uint8)
         stack[:, 7:9, 7:9] = 120
         with tempfile.TemporaryDirectory() as directory:
@@ -185,15 +238,17 @@ class TestSegmentationIntegration(unittest.TestCase):
             qc.mkdir()
             for suffix in ("_object_labels.tif", "_segmentation_qc.png"):
                 (qc / f"background{suffix}").touch()
-            record = segment(str(path), directory, manual_threshold=50, rolling_ball_radius_px=3, feature_groups=["intensity", "geometry"])
+            record = segment(str(path), directory, manual_threshold=50, feature_groups=["intensity", "geometry"])
             converted = tifffile.imread(qc / record["thresholding_image"])
             mask = tifffile.imread(qc / record["mask"]) > 0
-            self.assertEqual(converted[0, 0, 0], 0)
-            self.assertTrue(record["rolling_ball_applied"])
+            np.testing.assert_array_equal(converted, stack)
+            self.assertNotIn("rolling_ball_applied", record)
             np.testing.assert_array_equal(mask, converted >= 50)
             values = pd.read_csv(root / "backgroundCustomAlgos.txt", sep="\t")
             np.testing.assert_allclose(values["RawIntensityMean"], stack.mean(axis=(1, 2)))
             self.assertIn("FractalDimension", values)
+            self.assertIn("MaskFractalDimension", values)
+            self.assertNotIn("MaskFractalDimension", record["scalar_feature_names"])
             self.assertIn("FractalGrayscaleBoxDimension", values)
             self.assertNotIn("FractalDimension", record["scalar_feature_names"])
             for suffix in ("_object_labels.tif", "_segmentation_qc.png"):
@@ -381,11 +436,10 @@ class TestSegmentationIntegration(unittest.TestCase):
                     segmentation_approach="import",
                     masks_dir=str(masks),
                     feature_groups=["basic", "objects"],
-                    rolling_ball_radius_px=12.5,
                     threshold_from="substratum",
                     substratum_slices=2,
                 )
-                self.assertFalse(record["rolling_ball_applied"])
+                self.assertNotIn("rolling_ball_applied", record)
             for script, args in (
                 ("create_joint_df.py", [generated, root / "raw"]),
                 ("analysis.py", [root / "raw", root / "analysis"]),
@@ -395,23 +449,24 @@ class TestSegmentationIntegration(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
             table = pd.read_csv(root / "datafile.tsv", sep="\t")
             self.assertEqual(len(table), 2)
+            for removed in ("BiofilmExtentHeight_um", "MeanThickness_COMSTAT_um", "VerticalFillRatio", "FilledThicknessMean_um"):
+                self.assertFalse(any(name.startswith(removed) for name in table))
             settings = json.loads((root / "feature_generation_settings.json").read_text())
-            self.assertEqual(settings["feature_schema_version"], 3)
-            self.assertEqual(settings["rolling_ball_radius_px"], 12.5)
+            self.assertEqual(settings["feature_schema_version"], 4)
+            self.assertNotIn("rolling_ball_radius_px", settings)
             self.assertEqual(settings["threshold_from"], "substratum")
             self.assertEqual(settings["substratum_slices"], 2)
             for feature in (
-                "BiofilmExtentHeight_um",
+                "MaxBiofilmHeight_COMSTAT_um",
                 "BiomassCenterOfMassHeight_um",
                 "BiomassVolume_um3",
-                "FilledThicknessMean_um",
+                "MeanThickness_BiomassColumns_um",
                 "Roughness_RaStar",
                 "SpreadingHorizontal",
                 "ObjectCount3D",
                 "ObjectDensity3D_per_um3",
                 "ObjectNearestNeighbor3DIQR_um",
                 "ObjectVolume3DIQR_um3",
-                "MeanThickness_COMSTAT_um",
                 "MeanThickness_BiomassColumns_um",
                 "MaxCompactedColumnThickness_um",
             ):

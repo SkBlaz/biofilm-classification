@@ -14,7 +14,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from src.input_validation import read_feature_table
+from src.input_validation import merge_feature_tables, read_feature_table
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT / "src"
@@ -134,7 +134,6 @@ def execution_environment(config: dict) -> dict[str, str]:
             "IMAGINE_CONVERSION_RANGE_MODE": config.get("conversion_range_mode", "observed"),
             "IMAGINE_SEGMENTATION_APPROACH": config.get("segmentation_approach", "automatic"),
             "IMAGINE_THRESHOLD_SENSITIVITY": str(config.get("threshold_sensitivity", 1.0)),
-            "IMAGINE_ROLLING_BALL_RADIUS_PX": str(config.get("rolling_ball_radius_px", 0.0)),
             "IMAGINE_THRESHOLD_FROM": config.get("threshold_from", "whole_stack"),
             "IMAGINE_SUBSTRATUM_SLICES": str(config.get("substratum_slices", 1)),
             "IMAGINE_CONVERSION_MAX": "" if config.get("conversion_max") is None else str(config["conversion_max"]),
@@ -159,8 +158,10 @@ def stage_training_features(config: dict) -> Path | None:
     destination = Path(config["results_dir"]) / "datafile.tsv"
     destination.parent.mkdir(parents=True, exist_ok=True)
     source = Path(feature_file)
-    if source.resolve() != destination.resolve():
-        read_feature_table(source).to_csv(destination, sep="\t", index=False)
+    frame = read_feature_table(source)
+    if config.get("additional_feature_file"):
+        frame = merge_feature_tables(frame, read_feature_table(config["additional_feature_file"]))
+    frame.to_csv(destination, sep="\t", index=False)
     return destination
 
 

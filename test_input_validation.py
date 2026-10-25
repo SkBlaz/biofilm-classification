@@ -10,6 +10,7 @@ import pandas as pd
 
 from src.input_validation import (
     assess_replication_units,
+    merge_feature_tables,
     read_feature_table,
     replication_group,
     validate_feature_table,
@@ -18,6 +19,24 @@ from src.input_validation import (
 
 
 class TestInputValidation(unittest.TestCase):
+    def test_join_preserves_exact_names_and_agreeing_labels(self):
+        primary = pd.DataFrame({"sampleName": ["001", "1"], "label": ["a", "b"], "feature": [1, 2]})
+        additional = pd.DataFrame({"sampleName": ["1", "001"], "label": ["b", "a"], "assay": [20, 10]})
+        with tempfile.TemporaryDirectory() as directory:
+            for suffix in (".xlsx", ".csv", ".tsv", ".txt"):
+                with self.subTest(suffix=suffix):
+                    path = Path(directory) / f"measurements{suffix}"
+                    if suffix == ".xlsx":
+                        additional.to_excel(path, index=False)
+                    else:
+                        additional.to_csv(path, sep="," if suffix == ".csv" else "\t", index=False)
+                    merged = merge_feature_tables(primary, read_feature_table(path))
+                    self.assertEqual(merged["sampleName"].tolist(), ["001", "1"])
+                    self.assertEqual(merged["assay"].tolist(), [10, 20])
+                    self.assertEqual(merged["label"].tolist(), ["a", "b"])
+        with self.assertRaisesRegex(ValueError, "Primary.*duplicate"):
+            merge_feature_tables(pd.concat([primary, primary.iloc[:1]]), additional)
+
     def test_excel_csv_and_tsv_have_the_same_feature_contract(self):
         frame = pd.DataFrame({"sampleName": ["image1", "image2"], "label": ["a", "b"], "measured_area": [2.5, 7.0]})
         with tempfile.TemporaryDirectory() as directory:

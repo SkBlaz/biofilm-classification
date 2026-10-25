@@ -16,6 +16,8 @@ FEATURE_GROUPS = (
 _THRESHOLD_PREFIXES = (
     "counts(",
     "BioVolumeThr",
+    "LayerArea_um2Thr",
+    "MaskFractalDimension",
     "ThicknessThreshold",
     "RoughnessThreshold",
     "NoBiomassDetected",
@@ -66,7 +68,7 @@ def classify_feature(name: str) -> str:
     feature = str(name)
     if feature.startswith(("Substratum", "Area2D", "ObjectCount2D", "ObjectArea2D")):
         return "2D substratum structure"
-    if feature.startswith(("counts(", "BioVolumeThr", "ThicknessThreshold", "RoughnessThreshold")):
+    if feature.startswith(("counts(", "BioVolumeThr", "LayerArea_um2Thr", "ThicknessThreshold", "RoughnessThreshold")):
         return "Serial and multi-threshold"
     if feature.startswith(
         (
@@ -85,6 +87,7 @@ def classify_feature(name: str) -> str:
         return "3D object features"
     if feature.startswith(
         (
+            "MaskFractalDimension",
             "Biomass_",
             "BiomassVolume",
             "MaxBiofilmHeight",
