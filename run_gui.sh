@@ -16,4 +16,7 @@ PORT="${MICROICS_PORT:-8765}"
 echo "Building $IMAGE_NAME..." >&2
 docker build -t "$IMAGE_NAME" .
 echo "MicroICS will be available at http://localhost:$PORT" >&2
-exec docker run --rm -p "$PORT:8765" "$IMAGE_NAME"
+DATA_DIR="$ROOT_DIR/.microics-data"
+mkdir -p "$DATA_DIR"
+echo "Job inputs and results are stored in $DATA_DIR" >&2
+exec docker run --rm --user "$(id -u):$(id -g)" -e MPLCONFIGDIR=/tmp/microics-matplotlib -p "$PORT:8765" --mount "type=bind,source=$DATA_DIR,target=/data" "$IMAGE_NAME"

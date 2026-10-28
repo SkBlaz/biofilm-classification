@@ -206,10 +206,16 @@ def model_file_candidates(models_dir: Path) -> list[Path]:
     return sorted(path for path in models_dir.glob("*.joblib") if not path.name.endswith("_metadata.joblib"))
 
 
-def list_jobs() -> list[dict]:
+def list_jobs(include_sizes: bool = False) -> list[dict]:
     JOBS_ROOT.mkdir(parents=True, exist_ok=True)
     jobs = []
-    for root in sorted(JOBS_ROOT.iterdir(), key=lambda path: path.stat().st_mtime, reverse=True):
+    roots = []
+    for path in JOBS_ROOT.iterdir():
+        try:
+            roots.append((path.stat().st_mtime, path))
+        except FileNotFoundError:
+            continue
+    for _, root in sorted(roots, reverse=True):
         if not root.is_dir():
             continue
         try:
@@ -220,9 +226,19 @@ def list_jobs() -> list[dict]:
         model_files = model_file_candidates(paths.results / "models")
         has_models = bool(model_files)
         has_output = any(path.is_file() for path in paths.output.rglob("*"))
+        with state_lock:
+            is_active = runtime["active_job_id"] == root.name and state["status"] in {"starting", "running"}
+        size_bytes = None
+        if include_sizes:
+            try:
+                size_bytes = sum(path.stat().st_size for path in root.rglob("*") if path.is_file() and not path.is_symlink())
+            except OSError:
+                pass
         jobs.append(
             {
                 "job_id": root.name,
+                "is_active": is_active,
+                "size_bytes": size_bytes,
                 "status": metadata.get("status", "draft"),
                 "workflow": metadata.get("workflow", "draft"),
                 "created_at": metadata.get("created_at"),
@@ -249,10 +265,12 @@ def delete_job(job_id: str) -> None:
     with state_lock:
         if runtime["active_job_id"] == job_id and state["status"] in {"starting", "running"}:
             raise ValueError("Stop the active job before deleting it")
-    root = paths.root.resolve()
-    if root.parent != JOBS_ROOT.resolve() or root == JOBS_ROOT.resolve():
-        raise ValueError("Invalid job path")
-    shutil.rmtree(root)
+        root = paths.root.resolve()
+        if root.parent != JOBS_ROOT.resolve() or root == JOBS_ROOT.resolve():
+            raise ValueError("Invalid job path")
+        shutil.rmtree(root)
+        if state["job_id"] == job_id:
+            reset_pipeline()
 
 
 def upload_directory(job_id: str, kind: str) -> Path:
@@ -894,6 +912,10 @@ def start_pipeline(raw_config: dict) -> tuple[bool, str | None]:
 
     job_id = config["job_id"]
     with state_lock:
+        if state["status"] in {"starting", "running"}:
+            return False, "A pipeline is already running"
+        if not (JOBS_ROOT / job_id).is_dir():
+            return False, "Job was removed; upload the inputs again"
         runtime.update(stop_requested=False, active_job_id=job_id)
         state.update(
             {
@@ -1003,16 +1025,14 @@ def resolve_artifact(job_id: str, relative: str) -> Path:
     return candidate
 
 
-def create_results_zip(job_id: str) -> Path:
-    paths = job_paths(validate_job_id(job_id))
-    archive = paths.work / f"microics-results-{job_id}.zip"
-    temporary = archive.with_suffix(".zip.tmp")
-    with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-        for path in sorted(paths.output.rglob("*")):
-            if path.is_file():
-                bundle.write(path, path.relative_to(paths.output))
-    temporary.replace(archive)
-    return archive
+def write_results_zip(output: Path, target) -> None:
+    """Stream ZIP64 results without a disk copy."""
+    with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as bundle:
+        for path in output.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                resolved = path.resolve()
+                if output.resolve() in resolved.parents:
+                    bundle.write(path, path.relative_to(output))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1036,7 +1056,7 @@ class Handler(BaseHTTPRequestHandler):
             json_response(self, hardware_defaults())
             return
         if parsed.path == "/api/jobs":
-            json_response(self, {"jobs": list_jobs()})
+            json_response(self, {"jobs": list_jobs(include_sizes=True)})
             return
         if parsed.path in {"/api/artifact", "/api/preview"}:
             query = parse_qs(parsed.query)
@@ -1055,12 +1075,27 @@ class Handler(BaseHTTPRequestHandler):
             return
         job_download = re.fullmatch(r"/api/jobs/([a-f0-9]{32})/download", parsed.path)
         if job_download:
+            job_id = job_download.group(1)
             try:
-                archive = create_results_zip(job_download.group(1))
+                output = job_paths(validate_job_id(job_id)).output
+                if not output.is_dir():
+                    raise FileNotFoundError("Job output does not exist")
             except (FileNotFoundError, OSError, ValueError) as exc:
                 json_response(self, {"error": str(exc)}, HTTPStatus.NOT_FOUND)
                 return
-            self.serve_file(archive, download_name=archive.name)
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", f'attachment; filename="microics-results-{job_id}.zip"')
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            try:
+                write_results_zip(output, self.wfile)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except OSError as exc:
+                print(f"Result download failed for {job_id}: {exc}", file=sys.stderr, flush=True)
             return
         if parsed.path in {"/", "/index.html"}:
             self.serve_file(GUI_DIR / "index.html")

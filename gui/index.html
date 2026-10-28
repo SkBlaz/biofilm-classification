@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MicroICS Pipeline</title>
-  <link rel="stylesheet" href="/styles.css?v=20261016-1">
+  <link rel="stylesheet" href="/styles.css?v=20261028-1">
 </head>
 <body>
   <header class="topbar">
@@ -147,7 +147,7 @@
         <div class="hardware-actions"><button class="button tertiary" id="hardwareDefaultsButton" type="button">Suggested workers</button><small id="hardwareDefaultsMessage">Uses a conservative share of the CPUs available to this container.</small></div>
         <aside class="result-delivery" id="resultDelivery" aria-label="Where results are saved">
           <strong>Where do the results go?</strong>
-          <span>They appear in <b>Inspect results</b> on this page. After the run, <b>Download results ZIP</b> saves a copy to your browser's configured download location; no output folder selection is needed.</span>
+          <span>They appear in <b>Inspect results</b> on this page. After the run, <b>Download results ZIP</b> saves a copy to your browser's configured download location. If you started Docker with a host folder mounted at <code>/data</code>, results are already in that folder under <code>jobs/&lt;job-id&gt;/output/</code>.</span>
         </aside>
         <div class="form-actions"><button class="button primary" id="runButton" type="submit"><span class="button-icon">▶</span>Run pipeline</button><button class="button secondary hidden" id="stopButton" type="button"><span class="button-icon">■</span>Stop</button><a class="button tertiary hidden" id="downloadButton" href="#" download>Download results ZIP</a></div>
         <p class="form-message" id="formMessage" role="status"></p>
@@ -189,6 +189,17 @@
       <p id="helpModalText"></p><button class="button primary help-modal-close" id="dismissHelpModal" type="button">Got it</button>
     </div>
   </div>
-  <script src="/app.js?v=20261016-1"></script>
+  <dialog class="cleanup-modal-dialog" id="cleanupDialog" aria-labelledby="cleanupTitle" aria-describedby="cleanupDescription">
+    <div class="cleanup-modal-heading"><h2 id="cleanupTitle">Keep or remove previous jobs?</h2></div>
+    <p id="cleanupDescription">Select old jobs to free disk space. Deletion permanently removes each selected job's uploaded images, working files, results, and saved models. Keep any copies you need first. Nothing is selected automatically.</p>
+    <div id="cleanupJobs" class="cleanup-job-list"></div>
+    <p id="cleanupMessage" role="status" aria-live="polite"></p>
+    <div class="cleanup-modal-actions">
+      <button class="button tertiary" id="cancelCleanup" type="button">Cancel</button>
+      <button class="button secondary" id="keepJobs" type="button">Keep all and continue</button>
+      <button class="button primary danger-button" id="deleteJobs" type="button" disabled>Delete selected and continue</button>
+    </div>
+  </dialog>
+  <script src="/app.js?v=20261028-1"></script>
 </body>
 </html>

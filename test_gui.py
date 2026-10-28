@@ -24,7 +24,6 @@ import gui.app as app
 import gui.execution as execution
 from gui.app import (
     Handler,
-    create_results_zip,
     delete_job,
     preflight_error,
     receive_upload,
@@ -33,6 +32,7 @@ from gui.app import (
     start_pipeline,
     state,
     validate_config,
+    write_results_zip,
     write_run_summary,
 )
 from gui.execution import ExecutionStep, build_execution_steps, create_job, job_paths
@@ -275,6 +275,46 @@ class TestJobUploads(unittest.TestCase):
             delete_job(first.job_id)
             self.assertFalse(first.root.exists())
             self.assertTrue(second.root.exists())
+
+    def test_cleanup_listing_includes_sizes_and_active_job_protection(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            (paths.training_images / "image.tif").write_bytes(b"1234")
+            (paths.results / "datafile.tsv").write_bytes(b"table")
+            original_state, original_runtime = dict(state), dict(runtime)
+            try:
+                state.update(status="running", job_id=paths.job_id)
+                runtime.update(active_job_id=paths.job_id)
+                self.assertIsNone(app.list_jobs()[0]["size_bytes"])
+                listing = app.list_jobs(include_sizes=True)[0]
+                self.assertEqual(listing["size_bytes"], 9)
+                self.assertTrue(listing["is_active"])
+                with self.assertRaisesRegex(ValueError, "Stop the active job"):
+                    delete_job(paths.job_id)
+                self.assertTrue(paths.root.exists())
+            finally:
+                state.clear()
+                state.update(original_state)
+                runtime.clear()
+                runtime.update(original_runtime)
+
+    def test_deleting_displayed_completed_job_resets_state(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            original_state, original_runtime = dict(state), dict(runtime)
+            try:
+                state.update(status="completed", job_id=paths.job_id)
+                runtime.update(active_job_id=None, process=None)
+                delete_job(paths.job_id)
+                self.assertFalse(paths.root.exists())
+                self.assertEqual(app.snapshot(refresh=True)["status"], "idle")
+                self.assertIsNone(state["job_id"])
+                self.assertIsNone(state["download_url"])
+            finally:
+                state.clear()
+                state.update(original_state)
+                runtime.clear()
+                runtime.update(original_runtime)
 
     def test_jobs_have_isolated_input_work_and_output_directories(self):
         with temporary_jobs_root():
@@ -547,10 +587,36 @@ class TestResultsAndRecovery(unittest.TestCase):
             result = paths.results / "datafile.tsv"
             result.write_text("sampleName\tfeature\nA\t1\n", encoding="utf-8")
 
-            archive = create_results_zip(paths.job_id)
+            archive = io.BytesIO()
+            write_results_zip(paths.output, archive)
 
             with zipfile.ZipFile(archive) as bundle:
                 self.assertEqual(bundle.namelist(), ["results/datafile.tsv"])
+
+    def test_zip_stream_supports_zip64_without_seeking_or_disk_cache(self):
+        class Stream:
+            def __init__(self):
+                self.data = bytearray()
+
+            def write(self, chunk):
+                self.data.extend(chunk)
+                return len(chunk)
+
+            def flush(self):
+                pass
+
+        with temporary_jobs_root():
+            paths = create_job()
+            payload = bytes(range(256)) * 32
+            (paths.results / "stack.tif").write_bytes(payload)
+            stream = Stream()
+            with patch.object(zipfile, "ZIP64_LIMIT", 1024):
+                write_results_zip(paths.output, stream)
+            with zipfile.ZipFile(io.BytesIO(stream.data)) as bundle:
+                self.assertEqual(bundle.read("results/stack.tif"), payload)
+                self.assertGreaterEqual(bundle.getinfo("results/stack.tif").extract_version, 45)
+                self.assertIsNone(bundle.testzip())
+            self.assertEqual(list(paths.work.iterdir()), [])
 
     def test_failed_subprocess_marks_job_failed_without_raising(self):
         with temporary_jobs_root():
@@ -625,6 +691,49 @@ class TestHTTPAndImage(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+    def test_download_sends_headers_before_building_zip_and_keeps_results(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            result = paths.results / "datafile.tsv"
+            result.write_bytes(b"sampleName\tfeature\nA\t1\n")
+            release = threading.Event()
+            server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            original = app.write_results_zip
+
+            def delayed_write(output, target):
+                if not release.wait(timeout=5):
+                    raise RuntimeError("Headers were not received before ZIP generation")
+                original(output, target)
+
+            try:
+                url = f"http://127.0.0.1:{server.server_port}/api/jobs/{paths.job_id}/download"
+                with patch("gui.app.write_results_zip", side_effect=delayed_write):
+                    with urllib.request.urlopen(url, timeout=3) as response:
+                        self.assertEqual(response.status, 200)
+                        self.assertEqual(response.headers["Content-Type"], "application/zip")
+                        self.assertIn(paths.job_id, response.headers["Content-Disposition"])
+                        release.set()
+                        data = response.read()
+                with zipfile.ZipFile(io.BytesIO(data)) as bundle:
+                    self.assertEqual(bundle.read("results/datafile.tsv"), result.read_bytes())
+                    self.assertIsNone(bundle.testzip())
+                # A repeat download must not reuse or create an archive.
+                with urllib.request.urlopen(url, timeout=3) as response:
+                    with zipfile.ZipFile(io.BytesIO(response.read())) as bundle:
+                        self.assertIsNone(bundle.testzip())
+                self.assertEqual(list(paths.work.iterdir()), [])
+                self.assertTrue(result.exists())
+                with self.assertRaises(urllib.error.HTTPError) as missing:
+                    urllib.request.urlopen(url.replace(paths.job_id, "0" * 32), timeout=3)
+                self.assertEqual(missing.exception.code, 404)
+            finally:
+                release.set()
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
 
     def test_dockerfile_launches_one_self_contained_gui(self):
         repository = Path(__file__).parent

@@ -49,6 +49,7 @@ let pollTimer = null;
 let runStartedAt = null;
 let previousRunStatus = null;
 let copyLogResetTimer = null;
+let cleanupBeforeRun = true;
 
 function value(id) { return document.querySelector(`#${id}`).value.trim(); }
 
@@ -577,12 +578,86 @@ async function poll(refresh = false) {
   pollTimer = setTimeout(() => poll(false), 900);
 }
 
+async function reviewPreviousJobs(protectedIds = []) {
+  const response = await fetch('/api/jobs', {cache: 'no-store'});
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || 'Could not list previous jobs');
+  const jobs = payload.jobs.filter((job) => job.job_id !== uploadJobId || !protectedIds.includes(uploadJobId));
+  if (!jobs.length) return true;
+  const dialog = document.querySelector('#cleanupDialog');
+  const list = document.querySelector('#cleanupJobs');
+  const message = document.querySelector('#cleanupMessage');
+  const remove = document.querySelector('#deleteJobs');
+  const keep = document.querySelector('#keepJobs');
+  const cancel = document.querySelector('#cancelCleanup');
+  let busy = false;
+  list.innerHTML = '';
+  message.textContent = '';
+  for (const job of jobs) {
+    const protectedJob = job.is_active || protectedIds.includes(job.job_id);
+    const date = job.created_at ? new Date(job.created_at).toLocaleString() : 'Date unavailable';
+    const size = job.size_bytes == null ? 'Size unavailable' : formatBytes(job.size_bytes);
+    const models = job.has_models ? ` · ${job.model_count} saved model(s)` : '';
+    const reason = job.is_active ? ' · Running job: cannot delete' : protectedJob ? ' · Selected for this run: cannot delete' : '';
+    const row = document.createElement('label');
+    row.className = 'cleanup-job-row';
+    row.innerHTML = `<input type="checkbox" value="${escapeHtml(job.job_id)}" ${protectedJob ? 'disabled' : ''}><span><strong>${escapeHtml(date)} · ${escapeHtml(job.workflow.replaceAll('_', ' '))}</strong><small>${escapeHtml(job.job_id)}</small><small>${escapeHtml(size)} · ${escapeHtml(job.status)}${escapeHtml(models + reason)}</small></span>`;
+    list.append(row);
+  }
+  const selected = () => [...list.querySelectorAll('input:checked:not(:disabled)')];
+  const update = () => {
+    remove.disabled = busy || !selected().length;
+    message.textContent = selected().length ? `${selected().length} job(s) selected for permanent deletion.` : 'No jobs selected. Keep all to continue.';
+  };
+  list.onchange = update;
+  update();
+  return new Promise((resolve) => {
+    dialog.returnValue = '';
+    dialog.onclose = () => resolve(dialog.returnValue === 'continue');
+    dialog.oncancel = (event) => { if (busy) event.preventDefault(); };
+    cancel.onclick = () => dialog.close();
+    keep.onclick = () => dialog.close('continue');
+    remove.onclick = async () => {
+      const rows = selected();
+      if (!rows.length || !window.confirm(`Permanently delete ${rows.length} selected job(s), including uploads, results, and models?`)) return;
+      busy = true;
+      remove.disabled = keep.disabled = cancel.disabled = true;
+      list.querySelectorAll('input').forEach((input) => { input.disabled = true; });
+      try {
+        for (const input of rows) {
+          const deleted = await fetch(`/api/jobs/${encodeURIComponent(input.value)}`, {method: 'DELETE'});
+          const result = await deleted.json();
+          if (!deleted.ok) throw new Error(result.error || 'Could not delete job');
+          input.closest('label').remove();
+        }
+        dialog.close('continue');
+      } catch (error) {
+        message.textContent = `Deletion stopped: ${error.message} Already deleted jobs stay deleted.`;
+      } finally {
+        busy = false;
+        keep.disabled = cancel.disabled = false;
+        for (const input of list.querySelectorAll('input')) {
+          const job = jobs.find((item) => item.job_id === input.value);
+          input.disabled = job.is_active || protectedIds.includes(job.job_id);
+        }
+        remove.disabled = !selected().length;
+      }
+    };
+    dialog.showModal();
+  });
+}
+
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
     if (pendingUploads) throw new Error('Please wait for uploads to finish.');
     if (!uploadJobId) throw new Error('Upload the required input files first.');
     const config = configFromForm();
+    runButton.disabled = true;
+    if (cleanupBeforeRun) {
+      if (!await reviewPreviousJobs([uploadJobId, config.workflow === 'inference' ? config.model_job_id : ''].filter(Boolean))) return;
+      cleanupBeforeRun = false;
+    }
     const inputDescription = config.feature_file ? 'Validating the uploaded feature table' : 'Validating uploaded images';
     renderState({
       ...(latestState || {}),
@@ -620,7 +695,10 @@ stopButton.addEventListener('click', async () => { try { await post('/api/stop')
 resetButton.addEventListener('click', async () => {
   try {
     if (pendingUploads) throw new Error('Please wait for uploads to finish.');
+    resetButton.disabled = true;
+    if (!await reviewPreviousJobs()) return;
     renderState(await post('/api/reset'));
+    cleanupBeforeRun = false;
     uploadJobId = '';
     featureFileName = '';
     additionalFeatureFileName = '';
@@ -635,6 +713,7 @@ resetButton.addEventListener('click', async () => {
     document.querySelector('#additionalFeatureFileStatus').textContent = 'No additional table uploaded.';
     setFormMessage('Ready for a new isolated job.', 'info');
   } catch (error) { setFormMessage(error.message, 'error'); }
+  finally { resetButton.disabled = false; }
 });
 document.querySelector('#refreshButton').addEventListener('click', () => poll(true));
 
