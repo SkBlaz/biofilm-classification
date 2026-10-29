@@ -276,6 +276,7 @@ async function loadDefaults() {
   document.querySelector('#voxelSizeY').value = config.voxel_size_y;
   document.querySelector('#voxelSizeZ').value = config.voxel_size_z;
   document.querySelector('#learner').value = config.learner;
+  document.querySelector('#replicationUnit').value = config.replication_unit || '';
   document.querySelector('#thresholdMethod').value = config.threshold_method;
   document.querySelector('#segmentationApproach').value = config.segmentation_approach || 'automatic';
   document.querySelector('#thresholdSensitivity').value = config.threshold_sensitivity;
@@ -392,6 +393,7 @@ function configFromForm() {
     workers: Number(value('workers')),
     top_features: Number(value('topFeatures')),
     correlation_threshold: Number(value('correlationThreshold')),
+    replication_unit: value('replicationUnit'),
     voxel_size_x: Number(value('voxelSizeX')),
     voxel_size_y: Number(value('voxelSizeY')),
     voxel_size_z: Number(value('voxelSizeZ')),

@@ -39,7 +39,13 @@ try:
         unique_upload_path,
         validate_job_id,
     )
-    from src.input_validation import validate_feature_table, validate_image_directory
+    from src.input_validation import (
+        REPLICATION_UNITS,
+        assess_replication_from_feature_table,
+        assess_replication_from_images,
+        validate_feature_table,
+        validate_image_directory,
+    )
     from src.segmentation import FEATURE_SCHEMA_VERSION, mask_for_image, normalize_settings, read_mask, tiff_info
 except ModuleNotFoundError:  # Direct ``python gui/app.py`` execution.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -56,7 +62,13 @@ except ModuleNotFoundError:  # Direct ``python gui/app.py`` execution.
         unique_upload_path,
         validate_job_id,
     )
-    from src.input_validation import validate_feature_table, validate_image_directory
+    from src.input_validation import (
+        REPLICATION_UNITS,
+        assess_replication_from_feature_table,
+        assess_replication_from_images,
+        validate_feature_table,
+        validate_image_directory,
+    )
     from src.segmentation import FEATURE_SCHEMA_VERSION, mask_for_image, normalize_settings, read_mask, tiff_info
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -157,6 +169,7 @@ def default_config() -> dict[str, object]:
         "correlation_threshold": 0.8,
         "all_learners": False,
         "learner": "rf",
+        "replication_unit": "",
         "threshold_method": "otsu",
         "segmentation_approach": "automatic",
         "threshold_scale": "uint8",
@@ -360,6 +373,9 @@ def validate_config(raw: dict) -> dict:
         raise ValueError("Top features must be between 1 and 500")
     if not 0 < correlation_threshold <= 1:
         raise ValueError("Correlation threshold must be between 0 and 1")
+    replication_unit = str(config.get("replication_unit", ""))
+    if replication_unit and replication_unit not in REPLICATION_UNITS:
+        raise ValueError("Choose a supported unit of replication")
 
     voxel_dimensions = {}
     for axis in ("x", "y", "z"):
@@ -435,6 +451,7 @@ def validate_config(raw: dict) -> dict:
         "correlation_threshold": correlation_threshold,
         "all_learners": bool(config.get("all_learners")),
         "learner": learner,
+        "replication_unit": replication_unit,
         **segmentation,
         **voxel_dimensions,
     }
@@ -510,6 +527,16 @@ def preflight_config(config: dict) -> dict:
         report["features"] = validate_feature_table(
             config["feature_file"], require_label=workflow != "inference", additional_path=config.get("additional_feature_file")
         )
+    if config.get("replication_unit") and workflow in {"train", "full"}:
+        require_nested = bool(config.get("all_learners")) or config.get("learner") in {"rf", "gridsearch"}
+        if config.get("feature_file"):
+            report["replication"] = assess_replication_from_feature_table(
+                config["feature_file"], selected_unit=config["replication_unit"], require_nested_cv=require_nested
+            )
+        else:
+            report["replication"] = assess_replication_from_images(
+                config["training_images"], selected_unit=config["replication_unit"], require_nested_cv=require_nested
+            )
     if workflow in {"inference", "full"} and not config.get("qc_only") and not (workflow == "inference" and config.get("feature_file")):
         report["inference_images"] = validate_image_directory(config["inference_images"], labelled=False)
     image_directories = []
@@ -948,6 +975,7 @@ def start_pipeline(raw_config: dict) -> tuple[bool, str | None]:
         error=None,
         learner=config.get("learner"),
         all_learners=bool(config.get("all_learners")),
+        replication_unit=config.get("replication_unit") or "stratified",
         **settings_metadata(config),
     )
     thread = threading.Thread(target=run_pipeline, args=(config, job_id), daemon=True)

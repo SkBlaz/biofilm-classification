@@ -137,12 +137,12 @@ class TestBenchmarkRuntimeConfig(unittest.TestCase):
         with patch.object(feature_ranking_lite, "PARALLELISM", 3):
             self.assertEqual(configured_parallelism(), 3)
 
-    def test_partial_cache_is_pinned_to_published_main_protocol(self):
+    def test_partial_cache_is_separate_for_each_replication_protocol(self):
         date_path = partial_evaluation_path("partial", "all", 0, 16, True, "rf", 0, "date")
         well_path = partial_evaluation_path("partial", "all", 0, 16, True, "rf", 0, "well")
 
-        self.assertEqual(date_path, well_path)
-        self.assertIn("_reppublished-main_", date_path)
+        self.assertNotEqual(date_path, well_path)
+        self.assertIn("_repgrouped-date_", date_path)
         self.assertIn("/v6_", date_path)
 
     def test_fold_preprocessing_is_reusable_across_learners(self):
@@ -194,12 +194,12 @@ class TestBenchmarkRuntimeConfig(unittest.TestCase):
             ],
         )
 
-    def test_classification_ignores_replication_groups_for_published_protocol(self):
+    def test_classification_uses_selected_replication_groups(self):
         rng = np.random.default_rng(7)
         labels = pd.Series(["A"] * 9 + ["B"] * 9)
         features = pd.DataFrame(
             rng.normal(size=(len(labels), 4)),
-            index=[f"sample-{index}" for index in range(len(labels))],
+            index=[f"{date:08d}_s_Lm_st_{label}_p_C01_pos001_tm_24_ch_Syto9_z_21" for date in range(9) for label in ("L1", "L2")],
             columns=[f"feature-{index}" for index in range(4)],
         )
         runtime = {"n_iter": 1, "repetitions": 1, "n_components": ["all"]}
@@ -259,10 +259,12 @@ class TestConvertToOneHot(unittest.TestCase):
 
 
 class TestAblationEvaluation(unittest.TestCase):
-    def test_ablation_preserves_published_column_counts_and_ignores_replication_groups(self):
+    def test_ablation_preserves_column_counts_with_replication_groups(self):
         rng = np.random.default_rng(42)
         labels = pd.Series(["L1"] * 12 + ["L2"] * 12)
-        features = pd.DataFrame(rng.normal(size=(len(labels), 42)), index=[f"sample-{index}" for index in range(len(labels))])
+        sample_names = [f"{date:08d}_s_Lm_st_{label}_p_C01_pos001_tm_24_ch_Syto9_z_21" for date in range(12) for label in ("L1", "L2")]
+        labels = pd.Series([label for _date in range(12) for label in ("L1", "L2")])
+        features = pd.DataFrame(rng.normal(size=(len(labels), 42)), index=sample_names)
 
         np.random.seed(123)
         first = compute_ablation_scores(features, labels, replication_unit="date")
