@@ -6,6 +6,7 @@ only when it describes what will actually be passed to the learning code.
 
 from __future__ import annotations
 
+import csv
 import json
 import re
 from collections import Counter, defaultdict
@@ -37,11 +38,16 @@ MICROICS_PREFIXES = (
     "std",
     "min",
     "minProp",
+    "q10",
+    "q25",
+    "q75",
+    "q90",
     "BioVolume",
     "Substratum",
     "Homogen",
     "Spreading",
     "GPT",
+    "GLCM",
     "CustomAlgos",
     "DiffGlobal",
     "eigen",
@@ -53,6 +59,36 @@ MICROICS_PREFIXES = (
     "surf3D",
     "vol3D",
     "compactness",
+    "Biomass_",
+    "BiomassVolume",
+    "MaxBiofilmHeight",
+    "BiofilmExtentHeight",
+    "BiomassHeightP95",
+    "MeanThickness",
+    "FilledThickness",
+    "MaxCompactedColumnThickness",
+    "VerticalFillRatio",
+    "Roughness_RaStar",
+    "SurfaceArea",
+    "SurfaceToVolume",
+    "MeanDiffusion",
+    "MaxDiffusion",
+    "MaskFractalDimension",
+    "LayerArea",
+    "LayerOccupancy",
+    "ObjectCount3D",
+    "ObjectDensity3D",
+    "ObjectVolume3D",
+    "ObjectNearestNeighbor3D",
+    "InternalPore",
+    "InternalPorosity",
+    "LocalBiomassDensity",
+    "LocalThickness",
+    "RawIntensity",
+    "FractalGrayscale",
+    "BiomassCenterOfMass",
+    "BiomassVerticalSpread",
+    "NoBiomassDetected",
 )
 REPLICATION_UNITS = ("date", "well", "position")
 
@@ -160,11 +196,65 @@ def _is_microics_feature(name: str) -> bool:
     return name.startswith(MICROICS_PREFIXES)
 
 
-def validate_feature_table(path: str | Path, require_label: bool = True) -> dict[str, Any]:
+def read_feature_table(path: str | Path) -> pd.DataFrame:
+    """Read an image feature spreadsheet or delimited table."""
+    source = Path(path)
+    if source.suffix.lower() == ".xlsx":
+        with pd.ExcelFile(source, engine="openpyxl") as workbook:
+            header = workbook.parse(header=None, nrows=1, keep_default_na=False)
+            validate_feature_headers(header.iloc[0] if len(header) else [])
+            frame = workbook.parse(dtype={"sampleName": str})
+    else:
+        separator = "," if source.suffix.lower() == ".csv" else "\t"
+        with source.open(encoding="utf-8-sig", newline="") as stream:
+            header = next((row for row in csv.reader(stream, delimiter=separator) if any(value.strip() for value in row)), [])
+            validate_feature_headers(header)
+        frame = pd.read_csv(source, sep=separator, dtype={"sampleName": str})
+    return frame.rename(columns=str)
+
+
+def validate_feature_headers(headers) -> None:
+    """Reject ambiguous column names before pandas renames them."""
+    names = [str(value) for value in headers if pd.notna(value) and str(value)]
+    duplicates = [name for name, count in Counter(names).items() if count > 1]
+    if duplicates:
+        raise ValueError("Duplicate column names: " + ", ".join(duplicates))
+
+
+def merge_feature_tables(primary: pd.DataFrame, additional: pd.DataFrame) -> pd.DataFrame:
+    """Join measurements by exact, unique sample names."""
+    for name, frame in (("Primary", primary), ("Additional", additional)):
+        if "sampleName" not in frame:
+            raise ValueError(f"{name} table requires sampleName")
+        keys = frame["sampleName"]
+        if frame.empty or keys.isna().any() or keys.astype(str).str.strip().eq("").any():
+            raise ValueError(f"{name} table has missing sampleName values or no rows")
+        if keys.duplicated().any():
+            raise ValueError(f"{name} table has duplicate sampleName values")
+    missing = set(primary["sampleName"]) - set(additional["sampleName"])
+    extra = set(additional["sampleName"]) - set(primary["sampleName"])
+    if missing or extra:
+        raise ValueError(f"sampleName mismatch: {len(missing)} missing and {len(extra)} extra samples in additional table")
+    features = [column for column in additional if column not in METADATA_COLUMNS and not str(column).startswith("Unnamed:")]
+    if not features:
+        raise ValueError("Additional table requires numeric feature columns")
+    overlap = set(features) & set(primary.columns)
+    if overlap:
+        raise ValueError("Feature columns overlap: " + ", ".join(sorted(map(str, overlap))))
+    aligned = additional.set_index("sampleName").loc[primary["sampleName"]]
+    if "label" in additional:
+        if "label" not in primary or not np.array_equal(primary["label"].to_numpy(), aligned["label"].to_numpy()):
+            raise ValueError("Tables have conflicting label values")
+    return primary.merge(additional[["sampleName", *features]], on="sampleName", how="left", sort=False, validate="one_to_one")
+
+
+def validate_feature_table(path: str | Path, require_label: bool = True, additional_path: str | Path | None = None) -> dict[str, Any]:
     """Validate feature columns without silently coercing bad values."""
     source = Path(path)
     try:
-        frame = pd.read_csv(source, sep="\t")
+        frame = read_feature_table(source)
+        if additional_path:
+            frame = merge_feature_tables(frame, read_feature_table(additional_path))
     except Exception as exc:  # pandas has several parser exception types
         return {"path": str(source), "ok": False, "errors": [f"Could not read feature table: {exc}"]}
 
@@ -329,7 +419,7 @@ def assess_replication_from_feature_table(
 ) -> dict[str, Any]:
     """Assess replication using the exact rows that model training will consume."""
     try:
-        frame = pd.read_csv(path, sep="\t")
+        frame = read_feature_table(path)
     except Exception as exc:
         return {
             "selected_unit": selected_unit or "",

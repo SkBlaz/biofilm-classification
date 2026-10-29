@@ -25,9 +25,13 @@ from xgboost import XGBClassifier
 try:
     from benchmark_outputs import write_confusion_matrices, write_feature_boxplots, write_feature_correlation
     from cv_planning import get_adaptive_cv
+    from feature_taxonomy import is_threshold_derived_feature
+    from input_validation import read_feature_table
 except ImportError:  # Package import from the repository root.
     from .benchmark_outputs import write_confusion_matrices, write_feature_boxplots, write_feature_correlation
     from .cv_planning import get_adaptive_cv
+    from .feature_taxonomy import is_threshold_derived_feature
+    from .input_validation import read_feature_table
 
 warnings.simplefilter(action="ignore", category=DataConversionWarning)
 
@@ -259,7 +263,7 @@ def load_data(path_to_data: str):
     Loads the data into pandas dataframe, replaces nans and infinities
     with something negative and (max of finite) + something, respectively.
     """
-    data = pd.read_csv(path_to_data, sep="\t", index_col="sampleName")
+    data = read_feature_table(path_to_data).set_index("sampleName")
     # inf --> max + 3.14
     # nan --> -666
     for c in data.columns:
@@ -417,11 +421,7 @@ def do_classification_simple(
     progress_phase_total=5,
 ):
     all_cols = X.columns
-    thr_indices = []
-    for enx, x in enumerate(all_cols):
-        if "Threshold" in x:
-            thr_indices.append(enx)
-    thr_indices = np.array(thr_indices)
+    thr_indices = np.asarray([enx for enx, column in enumerate(all_cols) if is_threshold_derived_feature(column)])
     X = X.values
     y = pd.Categorical(ys.values).codes
     catmap = dict(zip(y, ys.values))
@@ -934,6 +934,7 @@ def do_classification_simple(
                     # Save metadata
                     metadata = {
                         "feature_names": list(all_cols),
+                        "strict_feature_columns": True,
                         "target_mapping": catmap,
                         "n_components": config["n_components"],
                         "thr_features": config["thr_features"],
@@ -943,6 +944,14 @@ def do_classification_simple(
                         "cv_accuracy": config["accuracy"],
                         "svd_transformer": svd_transformer,
                     }
+
+                    feature_settings = json.loads(os.environ.get("IMAGINE_FEATURE_SETTINGS_JSON", "{}"))
+                    settings_path = os.path.join(base_dir, "feature_generation_settings.json")
+                    if not feature_settings and os.path.isfile(settings_path):
+                        with open(settings_path, encoding="utf-8") as settings_file:
+                            feature_settings = json.load(settings_file)
+                    if feature_settings:
+                        metadata["feature_generation_settings"] = feature_settings
 
                     # Add hyperparameter tuning info for RandomizedSearchCV models
                     if hasattr(final_model, "best_params_"):

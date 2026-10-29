@@ -1,6 +1,6 @@
 # How MicroICS works
 
-MicroICS converts 3D biofilm microscopy images into measurements, learns which measurements distinguish known biological classes, and applies the trained models to new images. One Docker image supplies both the browser GUI and reproducible scientific environment; all computation runs in that same container.
+MicroICS converts 2D and 3D biofilm microscopy images into measurements, learns which measurements distinguish known biological classes, and applies the trained models to new images. One Docker image supplies both the browser GUI and reproducible scientific environment; all computation runs in that same container.
 
 ## Using MicroICS through the GUI
 
@@ -8,30 +8,34 @@ The GUI presents the analysis as three biological questions rather than a list o
 
 ### 1. Generate features
 
-Feature generation measures each 3D TIFF image and writes one row per image.
+Feature generation measures each 2D image or 3D TIFF stack and writes one row per image.
 
 **Labelled images** are images whose filenames contain a known class, such as a strain. Choose this option when preparing a table for model training. MicroICS checks the filename convention, reports the number of images in each class and acquisition date, and writes `datafile.tsv`.
 
 **Unlabelled images** are new or unknown samples whose class is not yet known. Choose this option when preparing images for prediction. Their filenames do not need to contain a class. MicroICS writes `unknown_features.tsv` while preserving the filenames so predictions can be traced back to images.
 
-Before either calculation, enter the physical voxel dimensions X, Y, and Z in micrometres. MicroICS uses them for measurements expressed as physical area, volume, or thickness. The displayed defaults (0.13, 0.13, and 0.5 µm) should be replaced with the values recorded by the microscope when they differ.
+Before either calculation, enter the physical voxel dimensions X, Y, and Z in micrometres. MicroICS uses them for measurements expressed as physical area, volume, or thickness. The displayed defaults (0.13, 0.13, and 0.5 µm) should be replaced with the values recorded by the microscope when they differ. Z is ignored for 2D images; only X and Y spacing affect 2D measurements.
 
 Feature families describe complementary aspects of biofilm structure, including:
 
-- intensity and thresholded biomass counts;
-- layer-to-layer intensity differences;
-- mean, median, maximum, standard deviation, and normalized dispersion;
-- biovolume and substratum coverage;
-- homogeneity and spatial spreading;
-- thresholded thickness and roughness;
-- 2D area and 3D surface, volume, and compactness;
-- fractal and gray-level co-occurrence measurements.
+- stack-normalized intensity and threshold-sweep object counts;
+- layer-to-layer intensity differences and normalized dispersion;
+- calibrated biomass, voxel-extent maximum height, mean thickness, compacted column thickness, roughness, and substratum coverage;
+- substratum coverage/biomass area, object count/density/size, equivalent diameter, enclosed pore summaries, and anisotropy-aware nearest-neighbour summaries;
+- biomass centre-of-mass height, vertical spread, surface area, surface-to-volume ratio, and diffusion distance;
+- intensity quantiles, homogeneity, anisotropy-aware spatial spreading, and 32-level directional gray-level co-occurrence summaries.
 
-MicroICS deliberately generates many threshold-dependent measurements because the most informative threshold may differ between biological questions. Feature ranking and cross-validation then assess which measurements are useful.
+Feature calculation is selected in the GUI: 2D inputs use one complete structural/intensity/texture package; 3D inputs offer basic biofilm, object, advanced geometry, intensity, grayscale geometry/texture, and serial-threshold groups. Object features require a valid multi-slice mask. Deselected packages are not calculated. Object and pore distributions accompany their numeric ML summaries.
+
+Segmentation operates on a reproducible 8-bit conversion of the whole stack. Acquisition metadata or an explicit maximum (4095 for genuine 12-bit data) defines the range; absent metadata, non-8-bit images use the observed minimum and maximum across the complete stack. Existing unsigned 8-bit images remain unchanged. Conversion bounds and range mode are recorded; the CLI can explicitly restore storage-range conversion. The exact converted TIFF is available for ImageJ tuning. Original-precision intensity measurements remain separate. Automatic Otsu, three-class Otsu, BiofilmQ-style trimmed robust background, and manual cutoffs share fixed COMSTAT2 inclusive boundaries. Three-class Otsu chooses one of its two cutoffs according to the dim-class assignment; these are intensity classes, not biological cell states. Scikit-image rolling-ball subtraction has been removed; thresholding uses the converted stack directly. Whole-stack Otsu remains the default; an optional substratum source estimates one cutoff from the first N slices. BEM has been removed from selectable methods because its input restrictions repeatedly reject these data. Imported binary or integer-labelled masks bypass thresholding and preserve supplied object identities. Connectivity and physical-size filtering affect the actual biomass mask before QC and measurements.
+
+QC exports full-stack biomass masks, reproducible random-colour RGB labels, RGB overlays, the exact 8-bit intensity histogram, a biomass-versus-threshold curve, and applied-setting metadata under `feature_generator/segmentation/`. Numeric object-label TIFFs and projection QC PNGs are omitted; RGB labels and full-stack overlays remain. Separate first/middle/top PNGs are also omitted. Both plots mark the base automatic and sensitivity-adjusted thresholds. Border QC measures edge foreground as a fraction of all foreground and excludes the singleton Z axis for 2D images. Imported masks have no threshold curve. Tune settings on a small upload before a full batch. Saved generation settings reproduce the segmentation/feature contract during raw-image inference; older models need compatible original feature tables or retraining. QC supports visual assessment and does not certify biological validity.
+
+Spatial spreading uses the selected mask with independent x/y/z calibration. Surface area uses a voxel-face estimator; local thickness uses a calibrated digital voxel-centre sphere convention, not a continuous mesh. Local density samples a physical-radius sphere around biomass voxels. Internal porosity and pores exclude border-connected background. Synthetic masks check filled thickness, roughness, height extent, and calibrated geometry; exact agreement with exported COMSTAT measurements remains a separate validation task. See `RUN.md` for conversion, units, workflow, and algorithm details.
 
 ### 2. Train models
 
-Training asks whether structural measurements can distinguish the known labels. It reads a complete tab-separated feature table containing `sampleName`, `label`, and numeric feature columns. The table can be generated by MicroICS or assembled externally; if external measurements are added, they must already be joined to the matching MicroICS rows by `sampleName` before selection.
+Training asks whether structural measurements can distinguish the known labels. It reads a complete Excel XLSX, CSV, TSV, or tab-separated TXT feature table containing `sampleName`, `label`, and numeric feature columns. The table can be generated by MicroICS or assembled externally. The GUI also accepts a second measurement table and joins numeric columns by exact `sampleName` before training. The tables must have identical sample sets and unique, nonempty names; row order may differ. Duplicate headers, overlapping feature names, and conflicting optional labels are rejected. Exact sample identifiers, including leading zeros, are preserved through training. The combined table is exported with the job results.
 
 Learning follows the published main-branch evaluation protocol. Samples are assigned with ordinary stratified cross-validation rather than grouped by acquisition date, well, or imaging position. This compatibility choice keeps new GUI and command-line benchmark results comparable with the published results.
 
@@ -70,3 +74,7 @@ The browser uploads data to a per-job directory under `/data`. `gui/execution.py
 The learning benchmark uses adaptive ordinary stratified cross-validation. The published benchmark sequence is retained: three seeded repetitions and both threshold-flag passes for every requested component count. Model selection is evaluated on held-out folds, while final saved models are refitted on all labelled samples using the chosen configuration. Dimensionality reduction and threshold-feature selection are fitted within training folds. Classification plots keep all-column, threshold-only, and SVD configurations separate, while confusion matrices use the all-column evaluation and display row-normalized percentages. Ablation preserves the published procedure: a plain random forest ranks every generated feature-table column once using the complete labelled table, then plain random forests evaluate the top 1, 21, 41, 61, 81, and subsequent column prefixes with ordinary stratified folds. Aggregation-statistic columns remain independent ranked features. The dotted ablation marker is a descriptive plateau estimate (later observed scores within 0.01), not model selection.
 
 The reported accuracy, weighted F1 results, class predictions, and confusion matrices should be interpreted together with class balance, replication design, and the number of independent biological experiments. High image counts do not compensate for too few independent experimental units.
+
+Per-image scalar features are exported once, while slice measurements retain their aggregations. Both 2D imported-mask and 3D runs assemble complete feature tables. Mean thickness now counts filled voxels per occupied column, excluding internal gaps and empty columns. Roughness uses the filled column thickness and its whole-field mean, including zeros. Maximum height includes the full highest occupied voxel. `BiomassHeightP95_um` complements it with the slice-extent height containing 95% of biomass voxels. These definitions implement the requested comparison protocol without claiming exact agreement with every COMSTAT version. Feature schema 4 requires regenerated tables and retrained models for raw-image inference; original precomputed tables remain usable. Both image-based fractal features remain active: per-slice median-binarized boundary box counting (`FractalDimension`) and grayscale differential box counting (`FractalGrayscaleBoxDimension`). The additional `MaskFractalDimension` applies boundary box counting directly to the selected, size-filtered binary mask per slice, then aggregates across slices. Serial-threshold biomass measurements use per-slice `LayerArea_um2Thr*` (foreground pixels times calibrated pixel area) at every cutoff from 0.01 to 0.29; areas and stack-normalized percentages receive the usual slice aggregations. Whole-stack `BioVolumeThr*` is removed. `BiofilmExtentHeight_um`, `MeanThickness_COMSTAT_um`, `VerticalFillRatio`, and `FilledThicknessMean_um` are also removed as redundant or unsuitable features.
+
+External measurements can be supplied as numeric columns in a complete Excel XLSX, CSV, TSV, or tab-separated TXT feature table, with one row per image, `sampleName`, and training `label`. Training no longer accepts image-settings JSON uploads. Image workflows still record generation settings automatically; models trained from uploaded tables require compatible precomputed inference tables containing the combined features. Newly saved models enforce complete feature columns at inference even without image-generation settings.

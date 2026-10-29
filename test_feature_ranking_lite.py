@@ -26,6 +26,7 @@ from feature_ranking_lite import (
     emit_pipeline_progress,
     get_adaptive_cv,
     get_benchmark_runtime_config,
+    load_data,
     partial_evaluation_path,
     prepare_fold_features,
     search_fit_count,
@@ -84,6 +85,36 @@ class TestAdaptiveCV(unittest.TestCase):
 
 
 class TestBenchmarkRuntimeConfig(unittest.TestCase):
+    def test_uploaded_table_model_preserves_names_and_requires_all_features(self):
+        from inference import load_models, run_inference
+
+        names = [f"{index:03d}" for index in range(1, 19)]
+        frame = pd.DataFrame(
+            {"sampleName": names, "label": ["A"] * 9 + ["B"] * 9, "LayerArea_um2Thr0.1": range(18), "assay": range(18, 36)}
+        )
+        runtime = {"n_iter": 1, "repetitions": 1, "n_components": ["all"]}
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(feature_ranking_lite, "get_benchmark_runtime_config", return_value=runtime),
+            patch.dict("os.environ", {"IMAGINE_FEATURE_SETTINGS_JSON": "{}"}),
+        ):
+            path = Path(directory) / "datafile.tsv"
+            frame.to_csv(path, sep="\t", index=False)
+            training = load_data(str(path))
+            self.assertEqual(training.index.tolist(), names)
+            feature_ranking_lite.do_classification_simple(
+                training.drop(columns="label"), training["label"], str(path), learner="dummy", save_models=True
+            )
+            models, metadata = load_models(str(Path(directory) / "models"))
+            self.assertTrue(models)
+            self.assertTrue(all(item["strict_feature_columns"] for item in metadata.values()))
+            self.assertTrue(all(not item.get("feature_generation_settings") for item in metadata.values()))
+            with self.assertRaisesRegex(ValueError, "incompatible.*assay"):
+                missing = Path(directory) / "missing.tsv"
+                frame.drop(columns="assay").to_csv(missing, sep="\t", index=False)
+                run_inference(models, metadata, str(missing), directory, generate_explanations=False)
+            self.assertEqual(run_inference(models, metadata, str(path), directory, generate_explanations=False), len(models))
+
     """Test benchmark runtime tuning for CI and local runs."""
 
     def test_uses_fast_runtime_config_in_ci(self):

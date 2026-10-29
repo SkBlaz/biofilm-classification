@@ -23,6 +23,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+import joblib
+
 try:
     from gui.execution import (
         JOBS_ROOT,
@@ -38,6 +40,7 @@ try:
         validate_job_id,
     )
     from src.input_validation import validate_feature_table, validate_image_directory
+    from src.segmentation import FEATURE_SCHEMA_VERSION, mask_for_image, normalize_settings, read_mask, tiff_info
 except ModuleNotFoundError:  # Direct ``python gui/app.py`` execution.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from gui.execution import (
@@ -54,6 +57,7 @@ except ModuleNotFoundError:  # Direct ``python gui/app.py`` execution.
         validate_job_id,
     )
     from src.input_validation import validate_feature_table, validate_image_directory
+    from src.segmentation import FEATURE_SCHEMA_VERSION, mask_for_image, normalize_settings, read_mask, tiff_info
 
 ROOT = Path(__file__).resolve().parents[1]
 GUI_DIR = Path(__file__).resolve().parent
@@ -146,12 +150,29 @@ def default_config() -> dict[str, object]:
         "workflow": "features_labelled",
         "job_id": "",
         "feature_file": "",
+        "additional_feature_file": "",
         "model_job_id": "",
         "workers": min(4, os.cpu_count() or 1),
         "top_features": 10,
         "correlation_threshold": 0.8,
         "all_learners": False,
         "learner": "rf",
+        "threshold_method": "otsu",
+        "segmentation_approach": "automatic",
+        "threshold_scale": "uint8",
+        "threshold_sensitivity": 1.0,
+        "threshold_from": "whole_stack",
+        "substratum_slices": 1,
+        "conversion_max": "",
+        "image_dimension": "auto",
+        "feature_groups": ["all"],
+        "qc_only": False,
+        "threshold_value": "",
+        "dim_class_assignment": "foreground",
+        "local_density_radius_um": 2.0,
+        "connectivity_3d": 26,
+        "minimum_object_area_um2": 0.0,
+        "minimum_object_volume_um3": 0.0,
         **DEFAULT_VOXEL_DIMENSIONS,
     }
 
@@ -185,10 +206,16 @@ def model_file_candidates(models_dir: Path) -> list[Path]:
     return sorted(path for path in models_dir.glob("*.joblib") if not path.name.endswith("_metadata.joblib"))
 
 
-def list_jobs() -> list[dict]:
+def list_jobs(include_sizes: bool = False) -> list[dict]:
     JOBS_ROOT.mkdir(parents=True, exist_ok=True)
     jobs = []
-    for root in sorted(JOBS_ROOT.iterdir(), key=lambda path: path.stat().st_mtime, reverse=True):
+    roots = []
+    for path in JOBS_ROOT.iterdir():
+        try:
+            roots.append((path.stat().st_mtime, path))
+        except FileNotFoundError:
+            continue
+    for _, root in sorted(roots, reverse=True):
         if not root.is_dir():
             continue
         try:
@@ -199,9 +226,19 @@ def list_jobs() -> list[dict]:
         model_files = model_file_candidates(paths.results / "models")
         has_models = bool(model_files)
         has_output = any(path.is_file() for path in paths.output.rglob("*"))
+        with state_lock:
+            is_active = runtime["active_job_id"] == root.name and state["status"] in {"starting", "running"}
+        size_bytes = None
+        if include_sizes:
+            try:
+                size_bytes = sum(path.stat().st_size for path in root.rglob("*") if path.is_file() and not path.is_symlink())
+            except OSError:
+                pass
         jobs.append(
             {
                 "job_id": root.name,
+                "is_active": is_active,
+                "size_bytes": size_bytes,
                 "status": metadata.get("status", "draft"),
                 "workflow": metadata.get("workflow", "draft"),
                 "created_at": metadata.get("created_at"),
@@ -228,10 +265,12 @@ def delete_job(job_id: str) -> None:
     with state_lock:
         if runtime["active_job_id"] == job_id and state["status"] in {"starting", "running"}:
             raise ValueError("Stop the active job before deleting it")
-    root = paths.root.resolve()
-    if root.parent != JOBS_ROOT.resolve() or root == JOBS_ROOT.resolve():
-        raise ValueError("Invalid job path")
-    shutil.rmtree(root)
+        root = paths.root.resolve()
+        if root.parent != JOBS_ROOT.resolve() or root == JOBS_ROOT.resolve():
+            raise ValueError("Invalid job path")
+        shutil.rmtree(root)
+        if state["job_id"] == job_id:
+            reset_pipeline()
 
 
 def upload_directory(job_id: str, kind: str) -> Path:
@@ -241,6 +280,7 @@ def upload_directory(job_id: str, kind: str) -> Path:
         "inference": paths.inference_images,
         "feature": paths.feature_files,
         "model": paths.results / "models",
+        "mask": paths.masks,
     }
     try:
         return directories[kind]
@@ -288,7 +328,7 @@ def receive_upload(
 def uploaded_feature_path(paths, filename: object) -> Path | None:
     if not filename:
         return None
-    safe_name = safe_uploaded_name(str(filename), {".tsv", ".txt"})
+    safe_name = safe_uploaded_name(str(filename), {".tsv", ".txt", ".csv", ".xlsx"})
     candidate = (paths.feature_files / safe_name).resolve()
     if candidate.parent != paths.feature_files.resolve() or not candidate.is_file():
         raise ValueError("The selected feature table is not available in this job")
@@ -332,18 +372,35 @@ def validate_config(raw: dict) -> dict:
             raise ValueError(f"Voxel size {axis.upper()} must be a positive number")
         voxel_dimensions[key] = dimension
 
+    if "segmentation_approach" not in raw:
+        config["segmentation_approach"] = None
+    config["masks_dir"] = str(paths.masks)
+    segmentation = normalize_settings(config)
+    if segmentation["qc_only"] and workflow not in {"features_labelled", "features_unlabelled", "full"}:
+        raise ValueError("Segmentation/QC only requires an image feature workflow")
+    if raw.get("threshold_upper_value") not in (None, "") or raw.get("representative_images") not in (None, "", {}):
+        raise ValueError("Use uploaded images and one manual cutoff; representative maps and second cutoffs were removed")
+
+    if segmentation["qc_only"]:
+        image_dir = paths.inference_images if workflow == "features_unlabelled" else paths.training_images
+        if not has_images(image_dir):
+            raise ValueError("Upload images before running segmentation and QC")
+
     learner = str(config.get("learner", "rf"))
     if learner not in {"rf", "dummy", "decisiontree", "logistic", "xgb", "gridsearch"}:
         raise ValueError("Choose a supported learner")
 
     feature_file = uploaded_feature_path(paths, config.get("feature_file"))
+    additional_file = uploaded_feature_path(paths, config.get("additional_feature_file"))
+    if additional_file and (workflow != "train" or not feature_file):
+        raise ValueError("Additional features require Train models and a primary table")
     if workflow in {"features_labelled", "full"} and not feature_file and not has_images(paths.training_images):
         raise ValueError("Upload labelled training images or a complete training feature table")
     if workflow == "features_unlabelled" and not has_images(paths.inference_images):
         raise ValueError("Upload at least one inference image")
     if workflow == "train" and not feature_file:
         raise ValueError("Train models requires an uploaded complete feature table")
-    if workflow == "full" and not has_images(paths.inference_images):
+    if workflow == "full" and not segmentation["qc_only"] and not has_images(paths.inference_images):
         raise ValueError("All together requires inference images to classify")
     if workflow == "inference" and not feature_file and not has_images(paths.inference_images):
         raise ValueError("Inference requires uploaded images or a compatible feature table")
@@ -360,13 +417,14 @@ def validate_config(raw: dict) -> dict:
     else:
         models_dir = paths.results / "models"
 
-    return {
+    validated = {
         "workflow": workflow,
         "job_id": job_id,
         "training_images": str(paths.training_images),
         "inference_images": str(paths.inference_images),
         "feature_file": str(feature_file) if feature_file else "",
         "feature_file_name": feature_file.name if feature_file else "",
+        "additional_feature_file": str(additional_file) if additional_file else "",
         "model_job_id": model_job_id,
         "models_dir": str(models_dir),
         "results_dir": str(paths.results),
@@ -377,21 +435,121 @@ def validate_config(raw: dict) -> dict:
         "correlation_threshold": correlation_threshold,
         "all_learners": bool(config.get("all_learners")),
         "learner": learner,
+        **segmentation,
         **voxel_dimensions,
+    }
+    saved = model_generation_settings(model_job_id) if workflow == "inference" and not feature_file else None
+    if saved:
+        if saved.get("feature_schema_version") != FEATURE_SCHEMA_VERSION:
+            raise ValueError(
+                "Raw-image inference requires retraining for the current feature schema; use original precomputed features instead"
+            )
+        validated.update(saved)
+        validated["conversion_range_mode"] = saved.get("conversion_range_mode", "storage")
+        validated["masks_dir"] = str(paths.masks)
+        validated["qc_only"] = False
+    validated["feature_generation_settings"] = generation_settings(validated) if not feature_file and workflow != "train" else None
+    if workflow == "inference" and not feature_file and not saved:
+        validated["feature_generation_settings"] = None
+    return validated
+
+
+def model_generation_settings(job_id):
+    """Restore settings from a GUI job or imported metadata."""
+    paths = job_paths(job_id)
+    saved = read_job_metadata(job_id).get("feature_generation_settings")
+    model_files = model_file_candidates(paths.results / "models")
+    configurations = []
+    for model_file in model_files:
+        stem = model_file.stem.removesuffix("_model")
+        companion = model_file.with_name(stem + "_metadata.joblib")
+        if not companion.is_file():
+            return saved
+        metadata = joblib.load(companion)
+        settings = metadata.get("feature_generation_settings") if isinstance(metadata, dict) else None
+        if not settings or settings.get("segmentation_version") != 2:
+            return saved
+        configurations.append(settings)
+    if configurations and any(item != configurations[0] for item in configurations):
+        raise ValueError("Models require different feature-generation settings; run separate jobs")
+    return configurations[0] if configurations else None
+
+
+def settings_metadata(config):
+    key = "segmentation_settings" if config.get("qc_only") else "feature_generation_settings"
+    return {key: config.get("feature_generation_settings")}
+
+
+def prepare_generation_outputs(config):
+    """Keep QC tuning separate from trained-table provenance."""
+    results = Path(config["results_dir"])
+    results.mkdir(parents=True, exist_ok=True)
+    if config.get("qc_only"):
+        shutil.rmtree(results / "feature_generator", ignore_errors=True)
+    filename = "segmentation_settings.json" if config.get("qc_only") else "feature_generation_settings.json"
+    (results / filename).write_text(json.dumps(config.get("feature_generation_settings"), indent=2), encoding="utf-8")
+
+
+def generation_settings(config):
+    keys = set(normalize_settings(config)) - {"masks_dir", "qc_only"}
+    keys.update(DEFAULT_VOXEL_DIMENSIONS)
+    return {key: config[key] for key in keys if key in config} | {
+        "segmentation_version": 2,
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
     }
 
 
 def preflight_config(config: dict) -> dict:
     workflow = config["workflow"]
     report: dict[str, object] = {}
-    if workflow in {"features_labelled", "full"} and not config.get("feature_file"):
-        report["images"] = validate_image_directory(config["training_images"], labelled=True)
+    if workflow in {"features_labelled", "full"} and (not config.get("feature_file") or config.get("qc_only")):
+        report["images"] = validate_image_directory(config["training_images"], labelled=not config.get("qc_only"))
     if workflow == "features_unlabelled":
         report["images"] = validate_image_directory(config["inference_images"], labelled=False)
-    if workflow in {"train", "inference", "full"} and config.get("feature_file"):
-        report["features"] = validate_feature_table(config["feature_file"], require_label=workflow != "inference")
-    if workflow in {"inference", "full"} and not (workflow == "inference" and config.get("feature_file")):
+    if workflow in {"train", "inference", "full"} and config.get("feature_file") and not config.get("qc_only"):
+        report["features"] = validate_feature_table(
+            config["feature_file"], require_label=workflow != "inference", additional_path=config.get("additional_feature_file")
+        )
+    if workflow in {"inference", "full"} and not config.get("qc_only") and not (workflow == "inference" and config.get("feature_file")):
         report["inference_images"] = validate_image_directory(config["inference_images"], labelled=False)
+    image_directories = []
+    if "images" in report:
+        image_directories.append(config["inference_images"] if workflow == "features_unlabelled" else config["training_images"])
+    if "inference_images" in report:
+        image_directories.append(config["inference_images"])
+    if image_directories:
+        errors, dimensions = [], set()
+        if config.get("feature_file") and not config.get("qc_only") and not config.get("feature_generation_settings"):
+            errors.append(
+                "Raw-image inference requires saved feature-generation settings; provide a compatible inference feature table or train from images in this workflow"
+            )
+        if workflow == "inference" and not config.get("feature_generation_settings"):
+            errors.append(
+                "This model job has no saved 8-bit feature-generation settings. Use a compatible feature table or retrain with the current image workflow"
+            )
+        for directory in image_directories:
+            for path in sorted(Path(directory).iterdir()):
+                if path.suffix.lower() not in {".tif", ".tiff"}:
+                    continue
+                try:
+                    shape, _ = tiff_info(path)
+                    dimension = "2d" if shape[0] == 1 else "3d"
+                    dimensions.add(dimension)
+                    if config["image_dimension"] not in {"auto", dimension}:
+                        raise ValueError(f"{path.name}: image is {dimension.upper()}, but {config['image_dimension'].upper()} is selected")
+                    if config["segmentation_approach"] == "import":
+                        read_mask(mask_for_image(path, config["masks_dir"]), shape)
+                except (ValueError, OSError) as exc:
+                    errors.append(str(exc))
+        if len(dimensions) > 1:
+            errors.append("Run 2D images and 3D stacks in separate jobs")
+        if len(dimensions) == 1 and config["image_dimension"] == "auto":
+            config["image_dimension"] = dimensions.pop()
+            if config["image_dimension"] == "2d":
+                config["feature_groups"] = ["2d", "intensity", "geometry"]
+        if not config.get("feature_file") or config.get("qc_only"):
+            config["feature_generation_settings"] = generation_settings(config)
+        report["segmentation"] = {"ok": not errors, "errors": errors}
     report["ok"] = bool(report) and all(section.get("ok", False) for section in report.values() if isinstance(section, dict))
     return report
 
@@ -644,6 +802,25 @@ def refresh_artifacts(job_id: str | None):
         state["download_url"] = f"/api/jobs/{job_id}/download" if job_id and artifacts else None
 
 
+def write_run_summary(config: dict, status: str, *, finished_at: str | None = None, validation=None, error=None):
+    """Persist submitted settings and the outcome as a job lab notebook."""
+    summary = {
+        "job_id": config["job_id"],
+        "status": status,
+        "started_at": state.get("started_at"),
+        "finished_at": finished_at,
+        "parameters": {key: value for key, value in config.items() if key != "job_id"},
+        "validation": validation,
+        "error": error,
+    }
+    results_dir = Path(config["results_dir"])
+    results_dir.mkdir(parents=True, exist_ok=True)
+    target = results_dir / "run_summary.json"
+    temporary = target.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(target)
+
+
 def run_pipeline(config: dict, job_id: str):
     try:
         steps = build_execution_steps(config)
@@ -665,7 +842,7 @@ def run_pipeline(config: dict, job_id: str):
                 "indeterminate": True,
             }
             runtime["progress_context"] = progress_context(config, steps)
-        write_job_metadata(job_id, status="running", workflow=config["workflow"])
+        write_job_metadata(job_id, status="running", workflow=config["workflow"], **settings_metadata(config))
         add_log("Pipeline started inside the MicroICS container", job_id)
         add_log(validation_detail, job_id)
 
@@ -674,11 +851,15 @@ def run_pipeline(config: dict, job_id: str):
             if runtime["active_job_id"] != job_id:
                 return
             state["validation"] = preflight
+        write_run_summary(config, "running", validation=preflight)
         if not preflight["ok"]:
             raise ValueError(preflight_error(preflight))
 
         with state_lock:
             state["progress"].update(label="Preparing inputs", detail="Preparing the validated inputs for processing", indeterminate=True)
+        environment = execution_environment(config)
+        write_job_metadata(job_id, **settings_metadata(config))
+        prepare_generation_outputs(config)
         stage_training_features(config)
         for step in steps:
             if not execute_step(step, environment, job_id):
@@ -698,6 +879,7 @@ def run_pipeline(config: dict, job_id: str):
             state["finished_at"] = now()
             error = state["error"]
         write_job_metadata(job_id, status=final_status, workflow=config["workflow"], error=error)
+        write_run_summary(config, final_status, finished_at=state.get("finished_at"), validation=preflight, error=error)
         add_log("Pipeline complete" if final_status == "completed" else f"Pipeline {final_status}", job_id)
         refresh_artifacts(job_id)
     except Exception as exc:
@@ -708,6 +890,10 @@ def run_pipeline(config: dict, job_id: str):
             state["error"] = str(exc)
             state["finished_at"] = now()
         write_job_metadata(job_id, status="failed", workflow=config.get("workflow"), error=str(exc))
+        try:
+            write_run_summary(config, "failed", finished_at=state.get("finished_at"), validation=state.get("validation"), error=str(exc))
+        except Exception:
+            pass
         add_log(f"Unexpected error: {exc}", job_id)
     finally:
         with state_lock:
@@ -726,6 +912,10 @@ def start_pipeline(raw_config: dict) -> tuple[bool, str | None]:
 
     job_id = config["job_id"]
     with state_lock:
+        if state["status"] in {"starting", "running"}:
+            return False, "A pipeline is already running"
+        if not (JOBS_ROOT / job_id).is_dir():
+            return False, "Job was removed; upload the inputs again"
         runtime.update(stop_requested=False, active_job_id=job_id)
         state.update(
             {
@@ -758,6 +948,7 @@ def start_pipeline(raw_config: dict) -> tuple[bool, str | None]:
         error=None,
         learner=config.get("learner"),
         all_learners=bool(config.get("all_learners")),
+        **settings_metadata(config),
     )
     thread = threading.Thread(target=run_pipeline, args=(config, job_id), daemon=True)
     with state_lock:
@@ -834,16 +1025,14 @@ def resolve_artifact(job_id: str, relative: str) -> Path:
     return candidate
 
 
-def create_results_zip(job_id: str) -> Path:
-    paths = job_paths(validate_job_id(job_id))
-    archive = paths.work / f"microics-results-{job_id}.zip"
-    temporary = archive.with_suffix(".zip.tmp")
-    with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-        for path in sorted(paths.output.rglob("*")):
-            if path.is_file():
-                bundle.write(path, path.relative_to(paths.output))
-    temporary.replace(archive)
-    return archive
+def write_results_zip(output: Path, target) -> None:
+    """Stream ZIP64 results without a disk copy."""
+    with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as bundle:
+        for path in output.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                resolved = path.resolve()
+                if output.resolve() in resolved.parents:
+                    bundle.write(path, path.relative_to(output))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -867,7 +1056,7 @@ class Handler(BaseHTTPRequestHandler):
             json_response(self, hardware_defaults())
             return
         if parsed.path == "/api/jobs":
-            json_response(self, {"jobs": list_jobs()})
+            json_response(self, {"jobs": list_jobs(include_sizes=True)})
             return
         if parsed.path in {"/api/artifact", "/api/preview"}:
             query = parse_qs(parsed.query)
@@ -886,12 +1075,27 @@ class Handler(BaseHTTPRequestHandler):
             return
         job_download = re.fullmatch(r"/api/jobs/([a-f0-9]{32})/download", parsed.path)
         if job_download:
+            job_id = job_download.group(1)
             try:
-                archive = create_results_zip(job_download.group(1))
+                output = job_paths(validate_job_id(job_id)).output
+                if not output.is_dir():
+                    raise FileNotFoundError("Job output does not exist")
             except (FileNotFoundError, OSError, ValueError) as exc:
                 json_response(self, {"error": str(exc)}, HTTPStatus.NOT_FOUND)
                 return
-            self.serve_file(archive, download_name=archive.name)
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", f'attachment; filename="microics-results-{job_id}.zip"')
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            try:
+                write_results_zip(output, self.wfile)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except OSError as exc:
+                print(f"Result download failed for {job_id}: {exc}", file=sys.stderr, flush=True)
             return
         if parsed.path in {"/", "/index.html"}:
             self.serve_file(GUI_DIR / "index.html")
@@ -924,8 +1128,8 @@ class Handler(BaseHTTPRequestHandler):
                     result = receive_upload(
                         self,
                         "feature",
-                        {".tsv", ".txt"},
-                        "tab-separated .tsv or .txt files",
+                        {".tsv", ".txt", ".csv", ".xlsx"},
+                        "Excel .xlsx, CSV, or tab-separated files",
                     )
                 else:
                     kind = self.headers.get("X-Upload-Kind", "training")

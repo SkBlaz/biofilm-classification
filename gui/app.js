@@ -34,19 +34,75 @@ const modelFilePicker = document.querySelector('#modelFilePicker');
 const modelFileStatus = document.querySelector('#modelFileStatus');
 const deleteModelJobButton = document.querySelector('#deleteModelJobButton');
 
-const stepIcons = { features: '1', validate: '✓', models: '2', reports: '▧', inference: '3' };
+const stepIcons = { segmentation: '◩', features: '1', validate: '✓', models: '2', reports: '▧', inference: '3' };
 let uploadJobId = '';
 let featureFileName = '';
+let additionalFeatureFileName = '';
+const featureUploadErrors = { primary: '', additional: '' };
 let trainingUploadCount = 0;
 let inferenceUploadCount = 0;
+let maskUploadCount = 0;
 let pendingUploads = 0;
+let inputUploadQueue = Promise.resolve();
 let latestState = null;
 let pollTimer = null;
 let runStartedAt = null;
 let previousRunStatus = null;
 let copyLogResetTimer = null;
+let cleanupBeforeRun = true;
 
 function value(id) { return document.querySelector(`#${id}`).value.trim(); }
+
+function decimalValue(id) { return Number(value(id).replace(',', '.')); }
+
+document.querySelectorAll('[data-size-delta]').forEach((button) => {
+  button.addEventListener('click', () => {
+    const input = document.querySelector(`#${button.dataset.sizeInput}`);
+    const current = decimalValue(input.id);
+    if (!Number.isFinite(current)) { input.focus(); return; }
+    input.value = String(Math.max(0, Math.round((current + Number(button.dataset.sizeDelta)) * 1e10) / 1e10));
+  });
+});
+
+function updateSegmentation() {
+  const approach = value('segmentationApproach');
+  const method = value('thresholdMethod');
+  const is2d = value('imageDimension') === '2d';
+  const show = (id, visible) => document.querySelector(`#${id}`).classList.toggle('hidden', !visible);
+  show('automaticThresholdFields', approach === 'automatic');
+  show('manualThresholdFields', approach === 'manual');
+  show('maskUploadFields', approach === 'import');
+  show('conversionFields', approach !== 'import');
+  show('dimClassField', method === 'multi_otsu');
+  show('thresholdSourceField', method === 'otsu');
+  show('substratumSlicesField', method === 'otsu' && value('thresholdFrom') === 'substratum');
+  show('tuneOtsuButton', method === 'otsu');
+  show('featureGroups3d', !is2d);
+  show('features2dHelp', is2d);
+  show('connectivity3dField', !is2d);
+  show('minimumObjectAreaField', is2d);
+  show('minimumObjectVolumeField', !is2d);
+  show('localDensityField', !is2d && document.querySelector('input[value="advanced"]').checked);
+  const threshold = document.querySelector('#thresholdValue');
+  threshold.required = approach === 'manual';
+  threshold.disabled = approach !== 'manual';
+  threshold.max = value('thresholdScale') === 'uint8' ? 255 : 1;
+}
+
+['segmentationApproach', 'thresholdMethod', 'thresholdScale', 'imageDimension', 'thresholdFrom'].forEach((id) => document.querySelector(`#${id}`).addEventListener('change', updateSegmentation));
+document.querySelector('#tuneOtsuButton').addEventListener('click', () => {
+  document.querySelector('#segmentationApproach').value = 'manual';
+  updateSegmentation();
+  document.querySelector('#thresholdValue').focus();
+});
+document.querySelector('#allFeatureGroups').addEventListener('change', (event) => {
+  document.querySelectorAll('input[name="feature_group"]').forEach((input) => { input.checked = event.target.checked; });
+  updateSegmentation();
+});
+document.querySelectorAll('input[name="feature_group"]').forEach((input) => input.addEventListener('change', () => {
+  document.querySelector('#allFeatureGroups').checked = [...document.querySelectorAll('input[name="feature_group"]')].every((field) => field.checked);
+  updateSegmentation();
+}));
 function escapeHtml(text) { return String(text).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char])); }
 function setFormMessage(message = '', tone = '') {
   formMessage.textContent = message;
@@ -113,13 +169,19 @@ copyLogButton.addEventListener('click', (event) => {
 });
 
 function setWorkflow(workflow) {
+  document.querySelector('#correlationField').classList.toggle('hidden', !['train', 'full'].includes(workflow));
   document.querySelectorAll('.workflow-option').forEach((option) => option.classList.toggle('active', option.dataset.workflow === workflow));
   document.querySelector('#trainingImagesField').classList.toggle('hidden', !['features_labelled', 'full'].includes(workflow));
   document.querySelector('#inferenceImagesField').classList.toggle('hidden', !['features_unlabelled', 'inference', 'full'].includes(workflow));
   document.querySelector('#featureFileField').classList.toggle('hidden', !['train', 'inference', 'full'].includes(workflow));
+  document.querySelector('#additionalFeatureField').classList.toggle('hidden', workflow !== 'train');
   document.querySelector('#modelJobField').classList.toggle('hidden', workflow !== 'inference');
+  document.querySelector('#inheritedSettingsHelp').classList.toggle('hidden', workflow !== 'inference');
   document.querySelector('#modelFields').classList.toggle('hidden', !['train', 'full'].includes(workflow));
   document.querySelector('#voxelFields').classList.toggle('hidden', workflow === 'train');
+  document.querySelector('#featurePackageFields').classList.toggle('hidden', workflow === 'train');
+  document.querySelector('#segmentationFields').classList.toggle('hidden', workflow === 'train');
+  document.querySelector('#qcOnlyField').classList.toggle('hidden', !['features_labelled', 'features_unlabelled', 'full'].includes(workflow));
 
   // Only 'inference' lets users choose images OR a feature table; other workflows require one specific input.
   const inferenceStatus = document.querySelector('#inferenceFileStatus');
@@ -214,7 +276,36 @@ async function loadDefaults() {
   document.querySelector('#voxelSizeY').value = config.voxel_size_y;
   document.querySelector('#voxelSizeZ').value = config.voxel_size_z;
   document.querySelector('#learner').value = config.learner;
+  document.querySelector('#thresholdMethod').value = config.threshold_method;
+  document.querySelector('#segmentationApproach').value = config.segmentation_approach || 'automatic';
+  document.querySelector('#thresholdSensitivity').value = config.threshold_sensitivity;
+  document.querySelector('#thresholdFrom').value = config.threshold_from;
+  document.querySelector('#substratumSlices').value = config.substratum_slices;
+  document.querySelector('#conversionMax').value = config.conversion_max ?? '';
+  document.querySelector('#imageDimension').value = config.image_dimension === '2d' ? '2d' : '3d';
+  document.querySelector('#qcOnly').checked = config.qc_only;
+  document.querySelector('#thresholdScale').value = config.threshold_scale;
+  document.querySelector('#thresholdValue').value = config.threshold_value ?? '';
+  document.querySelector('#dimClassAssignment').value = config.dim_class_assignment;
+  document.querySelector('#localDensityRadius').value = config.local_density_radius_um;
+  document.querySelector('#connectivity3d').value = config.connectivity_3d;
+  document.querySelector('#minimumObjectArea').value = config.minimum_object_area_um2;
+  document.querySelector('#minimumObjectVolume').value = config.minimum_object_volume_um3;
   renderModelJobs(payload.model_jobs);
+  updateSegmentation();
+}
+
+function uploadInJob(endpoint, headers, file) {
+  const request = inputUploadQueue.then(async () => {
+    if (uploadJobId) headers['X-Job-ID'] = uploadJobId;
+    const response = await fetch(endpoint, { method: 'POST', headers, body: file });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'Upload failed');
+    uploadJobId = payload.job_id;
+    return payload;
+  });
+  inputUploadQueue = request.catch(() => {});
+  return request;
 }
 
 async function uploadFiles(input, kind, statusElement) {
@@ -229,15 +320,12 @@ async function uploadFiles(input, kind, statusElement) {
         'X-Upload-Name': files[index].name,
         'X-Upload-Kind': kind,
       };
-      if (uploadJobId) headers['X-Job-ID'] = uploadJobId;
-      const response = await fetch('/api/upload', { method: 'POST', headers, body: files[index] });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || 'Upload failed');
-      uploadJobId = payload.job_id;
+      await uploadInJob('/api/upload', headers, files[index]);
     }
     if (kind === 'training') trainingUploadCount += files.length;
+    else if (kind === 'mask') maskUploadCount += files.length;
     else inferenceUploadCount += files.length;
-    const total = kind === 'training' ? trainingUploadCount : inferenceUploadCount;
+    const total = kind === 'training' ? trainingUploadCount : (kind === 'mask' ? maskUploadCount : inferenceUploadCount);
     statusElement.textContent = `${total} image${total === 1 ? '' : 's'} uploaded to job ${uploadJobId.slice(0, 8)}.`;
   } catch (error) {
     statusElement.textContent = error.message;
@@ -247,22 +335,27 @@ async function uploadFiles(input, kind, statusElement) {
   }
 }
 
-async function uploadFeatureFile(input) {
+async function uploadFeatureFile(input, additional = false) {
   const file = input.files[0];
   if (!file) return;
+  const slot = additional ? 'additional' : 'primary';
+  featureUploadErrors[slot] = '';
+  if (additional) additionalFeatureFileName = '';
+  else featureFileName = '';
   pendingUploads += 1;
-  const statusElement = document.querySelector('#featureFileStatus');
+  const statusElement = document.querySelector(additional ? '#additionalFeatureFileStatus' : '#featureFileStatus');
   statusElement.textContent = `Uploading ${file.name}…`;
   try {
     const headers = { 'Content-Type': file.type || 'application/octet-stream', 'X-Upload-Name': file.name };
-    if (uploadJobId) headers['X-Job-ID'] = uploadJobId;
-    const response = await fetch('/api/upload-feature', { method: 'POST', headers, body: file });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || 'Upload failed');
-    uploadJobId = payload.job_id;
-    featureFileName = payload.file;
+    const payload = await uploadInJob('/api/upload-feature', headers, file);
+    featureUploadErrors[slot] = '';
+    if (additional) additionalFeatureFileName = payload.file;
+    else featureFileName = payload.file;
     statusElement.textContent = `${payload.file} uploaded to job ${uploadJobId.slice(0, 8)}.`;
   } catch (error) {
+    featureUploadErrors[slot] = error.message;
+    if (additional) additionalFeatureFileName = '';
+    else featureFileName = '';
     statusElement.textContent = error.message;
   } finally {
     pendingUploads -= 1;
@@ -272,13 +365,29 @@ async function uploadFeatureFile(input) {
 
 document.querySelector('#trainingFilePicker').addEventListener('change', (event) => uploadFiles(event.target, 'training', document.querySelector('#trainingFileStatus')));
 document.querySelector('#inferenceFilePicker').addEventListener('change', (event) => uploadFiles(event.target, 'inference', document.querySelector('#inferenceFileStatus')));
+document.querySelector('#maskFilePicker').addEventListener('change', (event) => uploadFiles(event.target, 'mask', document.querySelector('#maskFileStatus')));
+document.querySelector('#additionalFeatureFilePicker').addEventListener('change', (event) => uploadFeatureFile(event.target, true));
+document.querySelector('#clearAdditionalFeatures').addEventListener('click', () => {
+  if (pendingUploads) return;
+  featureUploadErrors.additional = '';
+  additionalFeatureFileName = '';
+  document.querySelector('#additionalFeatureFileStatus').textContent = 'No additional table uploaded.';
+});
 document.querySelector('#featureFilePicker').addEventListener('change', (event) => uploadFeatureFile(event.target));
 
 function configFromForm() {
+  const workflow = document.querySelector('input[name="workflow"]:checked').value;
+  if (['train', 'inference', 'full'].includes(workflow) && featureUploadErrors.primary) {
+    throw new Error('Resolve the failed primary table upload before starting.');
+  }
+  if (workflow === 'train' && featureUploadErrors.additional) {
+    throw new Error('Retry or clear the failed additional table upload.');
+  }
   return {
     workflow: document.querySelector('input[name="workflow"]:checked').value,
     job_id: uploadJobId,
     feature_file: featureFileName,
+    additional_feature_file: document.querySelector('input[name="workflow"]:checked').value === 'train' ? additionalFeatureFileName : '',
     model_job_id: modelJob.value,
     workers: Number(value('workers')),
     top_features: Number(value('topFeatures')),
@@ -286,6 +395,22 @@ function configFromForm() {
     voxel_size_x: Number(value('voxelSizeX')),
     voxel_size_y: Number(value('voxelSizeY')),
     voxel_size_z: Number(value('voxelSizeZ')),
+    threshold_method: value('thresholdMethod'),
+    segmentation_approach: value('segmentationApproach'),
+    threshold_sensitivity: Number(value('thresholdSensitivity')),
+    threshold_from: value('thresholdMethod') === 'otsu' ? value('thresholdFrom') : 'whole_stack',
+    substratum_slices: Number(value('substratumSlices')),
+    conversion_max: value('conversionMax'),
+    image_dimension: value('imageDimension'),
+    feature_groups: value('imageDimension') === '2d' || document.querySelector('#allFeatureGroups').checked ? ['all'] : [...document.querySelectorAll('input[name="feature_group"]:checked')].map((input) => input.value),
+    qc_only: document.querySelector('#qcOnly').checked && ['features_labelled', 'features_unlabelled', 'full'].includes(document.querySelector('input[name="workflow"]:checked').value),
+    threshold_scale: value('thresholdScale'),
+    threshold_value: value('segmentationApproach') === 'manual' ? value('thresholdValue') : '',
+    dim_class_assignment: value('dimClassAssignment'),
+    local_density_radius_um: Number(value('localDensityRadius')),
+    connectivity_3d: Number(value('connectivity3d')),
+    minimum_object_area_um2: decimalValue('minimumObjectArea'),
+    minimum_object_volume_um3: decimalValue('minimumObjectVolume'),
     all_learners: document.querySelector('input[name="learner_mode"]:checked').value === 'all',
     learner: value('learner'),
   };
@@ -306,6 +431,9 @@ function renderValidation(report) {
       const errors = (section.errors || []).map((error) => `<li>${escapeHtml(error)}</li>`).join('');
       const warnings = (section.warnings || []).map((warning) => `<li>${escapeHtml(warning)}</li>`).join('');
       return `<section class="validation-section"><strong>${escapeHtml(name.replace('_', ' '))}</strong><p>${section.rows} rows · ${section.features_read} features</p>${errors ? `<ul class="validation-errors">${errors}</ul>` : ''}${warnings ? `<ul>${warnings}</ul>` : ''}</section>`;
+    }
+    if (section.errors?.length) {
+      return `<section class="validation-section"><strong>${escapeHtml(name.replace('_', ' '))}</strong><ul class="validation-errors">${section.errors.map((error) => `<li>${escapeHtml(error)}</li>`).join('')}</ul></section>`;
     }
     const labels = Object.entries(section.images_per_label || {}).map(([label, count]) => `<li>${escapeHtml(label)}: ${count}</li>`).join('');
     return `<section class="validation-section"><strong>${escapeHtml(name.replace('_', ' '))}</strong><p>${section.total_images || 0} image(s)</p>${labels ? `<ul>${labels}</ul>` : ''}</section>`;
@@ -450,12 +578,86 @@ async function poll(refresh = false) {
   pollTimer = setTimeout(() => poll(false), 900);
 }
 
+async function reviewPreviousJobs(protectedIds = []) {
+  const response = await fetch('/api/jobs', {cache: 'no-store'});
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || 'Could not list previous jobs');
+  const jobs = payload.jobs.filter((job) => job.job_id !== uploadJobId || !protectedIds.includes(uploadJobId));
+  if (!jobs.length) return true;
+  const dialog = document.querySelector('#cleanupDialog');
+  const list = document.querySelector('#cleanupJobs');
+  const message = document.querySelector('#cleanupMessage');
+  const remove = document.querySelector('#deleteJobs');
+  const keep = document.querySelector('#keepJobs');
+  const cancel = document.querySelector('#cancelCleanup');
+  let busy = false;
+  list.innerHTML = '';
+  message.textContent = '';
+  for (const job of jobs) {
+    const protectedJob = job.is_active || protectedIds.includes(job.job_id);
+    const date = job.created_at ? new Date(job.created_at).toLocaleString() : 'Date unavailable';
+    const size = job.size_bytes == null ? 'Size unavailable' : formatBytes(job.size_bytes);
+    const models = job.has_models ? ` · ${job.model_count} saved model(s)` : '';
+    const reason = job.is_active ? ' · Running job: cannot delete' : protectedJob ? ' · Selected for this run: cannot delete' : '';
+    const row = document.createElement('label');
+    row.className = 'cleanup-job-row';
+    row.innerHTML = `<input type="checkbox" value="${escapeHtml(job.job_id)}" ${protectedJob ? 'disabled' : ''}><span><strong>${escapeHtml(date)} · ${escapeHtml(job.workflow.replaceAll('_', ' '))}</strong><small>${escapeHtml(job.job_id)}</small><small>${escapeHtml(size)} · ${escapeHtml(job.status)}${escapeHtml(models + reason)}</small></span>`;
+    list.append(row);
+  }
+  const selected = () => [...list.querySelectorAll('input:checked:not(:disabled)')];
+  const update = () => {
+    remove.disabled = busy || !selected().length;
+    message.textContent = selected().length ? `${selected().length} job(s) selected for permanent deletion.` : 'No jobs selected. Keep all to continue.';
+  };
+  list.onchange = update;
+  update();
+  return new Promise((resolve) => {
+    dialog.returnValue = '';
+    dialog.onclose = () => resolve(dialog.returnValue === 'continue');
+    dialog.oncancel = (event) => { if (busy) event.preventDefault(); };
+    cancel.onclick = () => dialog.close();
+    keep.onclick = () => dialog.close('continue');
+    remove.onclick = async () => {
+      const rows = selected();
+      if (!rows.length || !window.confirm(`Permanently delete ${rows.length} selected job(s), including uploads, results, and models?`)) return;
+      busy = true;
+      remove.disabled = keep.disabled = cancel.disabled = true;
+      list.querySelectorAll('input').forEach((input) => { input.disabled = true; });
+      try {
+        for (const input of rows) {
+          const deleted = await fetch(`/api/jobs/${encodeURIComponent(input.value)}`, {method: 'DELETE'});
+          const result = await deleted.json();
+          if (!deleted.ok) throw new Error(result.error || 'Could not delete job');
+          input.closest('label').remove();
+        }
+        dialog.close('continue');
+      } catch (error) {
+        message.textContent = `Deletion stopped: ${error.message} Already deleted jobs stay deleted.`;
+      } finally {
+        busy = false;
+        keep.disabled = cancel.disabled = false;
+        for (const input of list.querySelectorAll('input')) {
+          const job = jobs.find((item) => item.job_id === input.value);
+          input.disabled = job.is_active || protectedIds.includes(job.job_id);
+        }
+        remove.disabled = !selected().length;
+      }
+    };
+    dialog.showModal();
+  });
+}
+
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
     if (pendingUploads) throw new Error('Please wait for uploads to finish.');
     if (!uploadJobId) throw new Error('Upload the required input files first.');
     const config = configFromForm();
+    runButton.disabled = true;
+    if (cleanupBeforeRun) {
+      if (!await reviewPreviousJobs([uploadJobId, config.workflow === 'inference' ? config.model_job_id : ''].filter(Boolean))) return;
+      cleanupBeforeRun = false;
+    }
     const inputDescription = config.feature_file ? 'Validating the uploaded feature table' : 'Validating uploaded images';
     renderState({
       ...(latestState || {}),
@@ -492,16 +694,26 @@ form.addEventListener('submit', async (event) => {
 stopButton.addEventListener('click', async () => { try { await post('/api/stop'); } catch (error) { setFormMessage(error.message, 'error'); } });
 resetButton.addEventListener('click', async () => {
   try {
+    if (pendingUploads) throw new Error('Please wait for uploads to finish.');
+    resetButton.disabled = true;
+    if (!await reviewPreviousJobs()) return;
     renderState(await post('/api/reset'));
+    cleanupBeforeRun = false;
     uploadJobId = '';
     featureFileName = '';
+    additionalFeatureFileName = '';
+    featureUploadErrors.primary = '';
+    featureUploadErrors.additional = '';
     trainingUploadCount = 0;
     inferenceUploadCount = 0;
+    maskUploadCount = 0;
     document.querySelector('#trainingFileStatus').textContent = 'No training images uploaded.';
     document.querySelector('#inferenceFileStatus').textContent = 'No inference images uploaded.';
     document.querySelector('#featureFileStatus').textContent = 'No feature table uploaded.';
+    document.querySelector('#additionalFeatureFileStatus').textContent = 'No additional table uploaded.';
     setFormMessage('Ready for a new isolated job.', 'info');
   } catch (error) { setFormMessage(error.message, 'error'); }
+  finally { resetButton.disabled = false; }
 });
 document.querySelector('#refreshButton').addEventListener('click', () => poll(true));
 

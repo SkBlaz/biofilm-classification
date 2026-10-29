@@ -25,14 +25,11 @@ Build and start it from a source checkout:
 
 ```bash
 docker build -t microics .
-docker run --rm -p 8765:8765 microics
+mkdir -p "$HOME/Desktop/MicroICS-results"
+docker run --rm --user "$(id -u):$(id -g)" -e MPLCONFIGDIR=/tmp/microics-matplotlib -p 8765:8765 --mount "type=bind,source=$HOME/Desktop/MicroICS-results,target=/data" microics
 ```
 
-Open <http://localhost:8765>. The browser uploads inputs into an isolated job, computation runs inside that same container, and the completed job can be downloaded as a ZIP file. To keep jobs, models, and results after removing the container, optionally attach a named volume:
-
-```bash
-docker run --rm -p 8765:8765 -v microics-data:/data microics
-```
+Open <http://localhost:8765>. Jobs, uploads, and results are stored in the chosen host folder under `jobs/<job-id>/`; completed results can also be downloaded as a ZIP streamed directly to the browser. See [RUN.md](RUN.md) for Windows PowerShell commands, recovering existing Docker data, and cleanup.
 
 The application stores each run under `/data/jobs/<job-id>/` and never needs access to host filesystem paths. The image accepts `.tif` and `.tiff` uploads and compatible pre-generated `.tsv`/`.txt` feature tables.
 

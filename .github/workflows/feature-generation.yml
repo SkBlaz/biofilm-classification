@@ -29,6 +29,9 @@ jobs:
         docker images jsi/imagine:latest
         echo "SUCCESS: Docker image built successfully!"
 
+    - name: Run unit tests in the Docker runtime
+      run: docker run --rm --entrypoint python jsi/imagine:latest run_tests.py
+
     - name: Create test results directory
       run: |
         mkdir -p examples/test_images_results

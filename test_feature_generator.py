@@ -3,21 +3,31 @@
 Unit tests for feature_generator.py utility functions.
 """
 
+import json
+import subprocess
 import sys
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
+import tifffile
 
 # Add src directory to path
 sys.path.insert(0, "src")
 
 from feature_generator import (
     calculate_spatial_spreading,
+    fractal_dimension,
     get_cell_count,
     get_homogenity,
     get_transition_matrix,
+    mask_fractal_dimension,
     read_voxel_dimensions,
     rgb2gray,
+    segment,
 )
 
 
@@ -119,6 +129,15 @@ class TestCalculateSpatialSpreading(unittest.TestCase):
         self.assertGreater(Sz, 0.0)
         self.assertGreater(Sxyz, 0.0)
 
+    def test_spreading_uses_mask_voxel_calibration_per_axis(self):
+        mask = np.zeros((1, 1, 3), dtype=bool)
+        mask[0, 0, 0] = True
+        mask[0, 0, 2] = True
+        horizontal, vertical, total = calculate_spatial_spreading(mask, dimensions=(2.0, 3.0, 0.5))
+        self.assertEqual(horizontal, 2.0)
+        self.assertEqual(vertical, 0.0)
+        self.assertEqual(total, 2.0)
+
     def test_horizontal_spread(self):
         """Test with horizontal spread."""
         image_stack = np.zeros((3, 5, 5))
@@ -145,6 +164,329 @@ class TestCalculateSpatialSpreading(unittest.TestCase):
         self.assertTrue(np.isnan(Sxy))
         self.assertTrue(np.isnan(Sz))
         self.assertTrue(np.isnan(Sxyz))
+
+    def test_anisotropic_spacing_is_applied_per_axis(self):
+        image_stack = np.zeros((1, 1, 2))
+        image_stack[0, 0, :] = 1
+        horizontal, vertical, total = calculate_spatial_spreading(image_stack, (2.0, 3.0, 0.5))
+        self.assertEqual(horizontal, 1.0)
+        self.assertEqual(vertical, 0.0)
+        self.assertEqual(total, 1.0)
+
+
+class TestSegmentationIntegration(unittest.TestCase):
+    def test_threshold_layer_areas_reach_aggregated_training_table(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for folder in ("feature_generator", "raw", "analysis"):
+                (root / folder).mkdir()
+            stack = np.zeros((3, 16, 16), dtype=np.uint8)
+            stack[0, 2:4, 2:4] = 20
+            stack[1, 2:6, 2:6] = 100
+            stem = "04072023_s_Lm_st_L1323_p_C08_pos004_tm_24_ch_Syto9_z_21"
+            path = root / f"{stem}.tif"
+            tifffile.imwrite(path, stack, photometric="minisblack")
+            with patch("feature_generator.voxel_size_x", 2), patch("feature_generator.voxel_size_y", 3):
+                record = segment(str(path), str(root / "feature_generator"), feature_groups=["serial", "geometry"])
+            slices = pd.read_csv(root / "feature_generator" / f"{stem}CustomAlgos.txt", sep="\t")
+            names = [name for name in slices if name.startswith("LayerArea_um2Thr") and not name.endswith("Normalized")]
+            self.assertEqual(len(names), 29)
+            self.assertFalse(any(name.startswith("BioVolumeThr") for name in slices))
+            for name in names:
+                cutoff = float(name.removeprefix("LayerArea_um2Thr"))
+                expected = (stack / 255 >= cutoff).sum(axis=(1, 2)) * 6
+                np.testing.assert_allclose(slices[name], expected)
+                total = expected.sum()
+                np.testing.assert_allclose(slices[name + "Normalized"], 100 * expected / total)
+                self.assertNotIn(name, record["scalar_feature_names"])
+            for script, args in (
+                ("create_joint_df.py", [root / "feature_generator", root / "raw"]),
+                ("analysis.py", [root / "raw", root / "analysis"]),
+                ("create_final_df_from_results.py", [root / "analysis", root / "datafile.tsv"]),
+            ):
+                result = subprocess.run([sys.executable, str(Path("src") / script), *map(str, args)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            table = pd.read_csv(root / "datafile.tsv", sep="\t")
+            for statistic in ("mean", "std", "min", "max"):
+                column = f"{names[0]}-SUMMARYCustomAlgos.tsv_{statistic}.txt"
+                expected = getattr(slices[names[0]], statistic)()
+                self.assertAlmostEqual(table[column].iloc[0], expected)
+            for feature in ("FractalDimension", "FractalGrayscaleBoxDimension", "MaskFractalDimension"):
+                self.assertTrue(any(name.startswith(feature + "-") for name in table), feature)
+
+    def test_mask_fractal_uses_foreground_without_median_thresholding(self):
+        mask = np.zeros((32, 32), dtype=bool)
+        mask[3:12, 4:15] = True
+        counts = []
+        for size in (32, 16, 8, 4):
+            boxes = [mask[y : y + size, x : x + size] for y in range(0, 32, size) for x in range(0, 32, size)]
+            counts.append(sum(0 < box.sum() < size * size for box in boxes))
+        expected = -np.polyfit(np.log([32, 16, 8, 4]), np.log(counts), 1)[0]
+        self.assertAlmostEqual(mask_fractal_dimension(mask), expected)
+        self.assertTrue(np.isnan(fractal_dimension(mask.astype(float))))
+        for empty in (np.zeros((32, 32)), np.ones((32, 32)), np.eye(2)):
+            self.assertTrue(np.isnan(mask_fractal_dimension(empty)))
+
+    def test_unmodified_threshold_image_preserves_raw_features_and_exact_qc(self):
+        stack = np.full((2, 16, 16), 20, dtype=np.uint8)
+        stack[:, 7:9, 7:9] = 120
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "background.tif"
+            tifffile.imwrite(path, stack, photometric="minisblack")
+            qc = root / "segmentation"
+            qc.mkdir()
+            for suffix in ("_object_labels.tif", "_segmentation_qc.png"):
+                (qc / f"background{suffix}").touch()
+            record = segment(str(path), directory, manual_threshold=50, feature_groups=["intensity", "geometry"])
+            converted = tifffile.imread(qc / record["thresholding_image"])
+            mask = tifffile.imread(qc / record["mask"]) > 0
+            np.testing.assert_array_equal(converted, stack)
+            self.assertNotIn("rolling_ball_applied", record)
+            np.testing.assert_array_equal(mask, converted >= 50)
+            values = pd.read_csv(root / "backgroundCustomAlgos.txt", sep="\t")
+            np.testing.assert_allclose(values["RawIntensityMean"], stack.mean(axis=(1, 2)))
+            self.assertIn("FractalDimension", values)
+            self.assertIn("MaskFractalDimension", values)
+            self.assertNotIn("MaskFractalDimension", record["scalar_feature_names"])
+            self.assertIn("FractalGrayscaleBoxDimension", values)
+            self.assertNotIn("FractalDimension", record["scalar_feature_names"])
+            for suffix in ("_object_labels.tif", "_segmentation_qc.png"):
+                self.assertFalse((qc / f"background{suffix}").exists())
+
+    def test_fractal_dimension_matches_legacy_box_counts(self):
+        image = np.random.default_rng(5).integers(0, 256, (32, 32))
+        binary = image < np.median(image)
+        counts = []
+        for size in (32, 16, 8, 4):
+            boxes = [binary[y : y + size, x : x + size] for y in range(0, 32, size) for x in range(0, 32, size)]
+            counts.append(sum(0 < box.sum() < size * size for box in boxes))
+        expected = -np.polyfit(np.log([32, 16, 8, 4]), np.log(counts), 1)[0]
+        self.assertAlmostEqual(fractal_dimension(image), expected)
+        for image in (np.ones((16, 16)), np.zeros((2, 2)), np.eye(16)):
+            self.assertTrue(np.isnan(fractal_dimension(image)))
+
+    def test_raw_manual_threshold_and_qc_metadata(self):
+        stack = np.array(
+            [
+                [[0, 100], [200, 0]],
+                [[0, 100], [200, 0]],
+            ],
+            dtype=np.uint8,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = Path(directory) / "sample.tif"
+            tifffile.imwrite(image_path, stack, photometric="minisblack", metadata={"axes": "ZYX"})
+            segment(
+                str(image_path),
+                directory,
+                threshold_mode="comstat2",
+                threshold_method="manual",
+                threshold_scale="uint8",
+                manual_threshold=100,
+            )
+            record_path = Path(directory) / "segmentation" / "sample_segmentation.json"
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            self.assertEqual(record["selected_threshold_value"], 100)
+            self.assertEqual(record["selected_threshold_units"], "uint8")
+            self.assertEqual(record["threshold_boundary_mode"], "comstat2")
+            self.assertFalse(record["no_biomass_detected"])
+            self.assertFalse((Path(directory) / "segmentation" / "sample_segmentation_qc.png").exists())
+            self.assertFalse((Path(directory) / "segmentation" / "sample_object_labels.tif").exists())
+
+    def test_manual_otsu_override_controls_mask_and_all_slice_qc(self):
+        stack = np.array([[[0, 10], [100, 200]]] * 3, dtype=np.uint8)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "override.tif"
+            tifffile.imwrite(path, stack, photometric="minisblack")
+            record = segment(
+                str(path), directory, threshold_method="otsu", manual_threshold=0.78, threshold_scale="stack_normalized", qc_only=True
+            )
+            expected = stack >= 0.78 * 255
+            np.testing.assert_array_equal(tifffile.imread(Path(directory) / "segmentation" / record["mask"]) > 0, expected)
+            self.assertEqual(record["method"], "manual")
+            self.assertEqual(record["submitted_threshold_value"], 0.78)
+            self.assertAlmostEqual(record["threshold_uint8"], 198.9)
+            qc = Path(directory) / "segmentation"
+            overlay = tifffile.imread(qc / record["overlay"])
+            self.assertEqual(overlay.shape, (*stack.shape, 3))
+            self.assertFalse(list(qc.glob("*_mask_*.png")))
+            self.assertFalse(list(qc.glob("*_overlay_*.png")))
+            self.assertTrue((qc / record["object_labels_rgb"]).is_file())
+            self.assertFalse(list(Path(directory).glob("*CustomAlgos.txt")))
+
+    def test_intensity_only_skips_geometry_and_serial_calculation(self):
+        stack = np.array([[[0, 10], [100, 200]]] * 2, dtype=np.uint16)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "intensity.tif"
+            tifffile.imwrite(path, stack, photometric="minisblack")
+            with (
+                patch("feature_generator.comstat_metrics", side_effect=AssertionError("unselected geometry")),
+                patch("feature_generator.get_cell_count", side_effect=AssertionError("unselected serial features")),
+            ):
+                segment(str(path), directory, feature_groups=["intensity"])
+            table = pd.read_csv(Path(directory) / "intensityCustomAlgos.txt", sep="\t", index_col=0)
+            self.assertEqual(table["RawIntensityMax"].iloc[0], 200)
+            self.assertNotIn("ObjectCount3D", table)
+            self.assertNotIn("Homogeneity", table)
+
+    def test_imported_labels_survive_and_size_filter_updates_qc(self):
+        stack = np.zeros((3, 3, 4), dtype=np.uint8)
+        labels = np.zeros_like(stack, dtype=np.uint16)
+        labels[1, 1, 1:3] = [9, 25]
+        labels[2, 1, 2] = 25
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            masks = root / "masks"
+            masks.mkdir()
+            path = root / "labelled.tif"
+            tifffile.imwrite(path, stack, photometric="minisblack")
+            tifffile.imwrite(masks / "labelled_mask.tif", labels, photometric="minisblack")
+            with (
+                patch("feature_generator.voxel_size_x", 1),
+                patch("feature_generator.voxel_size_y", 1),
+                patch("feature_generator.voxel_size_z", 1),
+            ):
+                record = segment(
+                    str(path),
+                    directory,
+                    segmentation_approach="import",
+                    masks_dir=str(masks),
+                    feature_groups=["objects"],
+                    minimum_object_volume_um3=2,
+                )
+            self.assertIsNone(record["threshold_uint8"])
+            self.assertIsNone(record["threshold_curve"])
+            self.assertEqual(record["foreground_fraction"], 2 / stack.size)
+            table = pd.read_csv(root / "labelledCustomAlgos.txt", sep="\t", index_col=0)
+            self.assertEqual(table["ObjectCount3D"].iloc[0], 1)
+            self.assertEqual(table["ObjectVolume3DMean_um3"].iloc[0], 2)
+
+    def test_2d_package_has_objects_pores_and_texture_without_3d(self):
+        image = np.zeros((5, 5), dtype=np.uint8)
+        image[1:4, 1:4] = 200
+        image[2, 2] = 0
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "plane.tif"
+            tifffile.imwrite(path, image)
+            record = segment(str(path), directory, manual_threshold=100, image_dimension="2d")
+            table = pd.read_csv(Path(directory) / "planeCustomAlgos.txt", sep="\t", index_col=0)
+            self.assertIn("SubstratumObjectCount", table)
+            self.assertIn("SubstratumInternalPoreAreaMean_um2", table)
+            self.assertIn("GLCMContrast_d1_mean", table)
+            self.assertNotIn("ObjectCount3D", table)
+            self.assertNotIn("BiomassVolume_um3", table)
+            self.assertEqual(record["image_dimension"], "2d")
+
+    def test_imported_2d_mask_produces_scalar_training_table(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            generated = root / "feature_generator"
+            masks = root / "masks"
+            for folder in (generated, masks, root / "raw", root / "analysis"):
+                folder.mkdir()
+            image = np.zeros((12, 12), dtype=np.uint8)
+            mask = np.zeros_like(image, dtype=np.uint16)
+            mask[2:10, 2:10] = 50000
+            mask[0, 3] = 9
+            stem = "04072023_s_Lm_st_L1323_p_C08_pos004_tm_24_ch_Syto9_z_21"
+            path = root / f"{stem}.tif"
+            tifffile.imwrite(path, image)
+            tifffile.imwrite(masks / f"{stem}_mask.tif", mask)
+            record = segment(str(path), str(generated), segmentation_approach="import", masks_dir=str(masks), image_dimension="2d")
+            self.assertAlmostEqual(record["foreground_touching_image_border_fraction"], 1 / 65)
+            rgb = tifffile.imread(generated / "segmentation" / record["object_labels_rgb"])
+            self.assertTrue(rgb[0, 5, 5].any())
+            self.assertFalse(np.array_equal(rgb[0, 5, 5], rgb[0, 0, 3]))
+            for script, args in (
+                ("create_joint_df.py", [generated, root / "raw"]),
+                ("analysis.py", [root / "raw", root / "analysis"]),
+                ("create_final_df_from_results.py", [root / "analysis", root / "datafile.tsv"]),
+            ):
+                result = subprocess.run([sys.executable, str(Path("src") / script), *map(str, args)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            table = pd.read_csv(root / "datafile.tsv", sep="\t")
+            self.assertEqual(len(table), 1)
+            self.assertEqual(table["label"].iloc[0], "L1323")
+            count_columns = [name for name in table if name.startswith("SubstratumObjectCount-")]
+            self.assertEqual(len(count_columns), 1)
+            self.assertEqual(table[count_columns[0]].iloc[0], 2)
+            self.assertTrue(any(name.startswith("FractalDimension-") for name in table))
+            self.assertTrue(any(name.startswith("FractalGrayscaleBoxDimension-") for name in table))
+            self.assertTrue((root / "feature_generation_settings.json").is_file())
+
+    def test_3d_scalar_features_export_once_and_heights_vary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            generated = root / "feature_generator"
+            masks = root / "masks"
+            for folder in (generated, masks, root / "raw", root / "analysis"):
+                folder.mkdir()
+            for label, depth in (("L1323", 2), ("L394", 4)):
+                stem = f"04072023_s_Lm_st_{label}_p_C08_pos004_tm_24_ch_Syto9_z_21"
+                stack = np.zeros((6, 4, 4), dtype=np.uint8)
+                mask = np.zeros_like(stack)
+                mask[:depth, 1:3, 1:3] = 255
+                path = root / f"{stem}.tif"
+                tifffile.imwrite(path, stack, photometric="minisblack")
+                tifffile.imwrite(masks / f"{stem}_mask.tif", mask, photometric="minisblack")
+                record = segment(
+                    str(path),
+                    str(generated),
+                    segmentation_approach="import",
+                    masks_dir=str(masks),
+                    feature_groups=["basic", "objects"],
+                    threshold_from="substratum",
+                    substratum_slices=2,
+                )
+                self.assertNotIn("rolling_ball_applied", record)
+            for script, args in (
+                ("create_joint_df.py", [generated, root / "raw"]),
+                ("analysis.py", [root / "raw", root / "analysis"]),
+                ("create_final_df_from_results.py", [root / "analysis", root / "datafile.tsv"]),
+            ):
+                result = subprocess.run([sys.executable, str(Path("src") / script), *map(str, args)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            table = pd.read_csv(root / "datafile.tsv", sep="\t")
+            self.assertEqual(len(table), 2)
+            for removed in ("BiofilmExtentHeight_um", "MeanThickness_COMSTAT_um", "VerticalFillRatio", "FilledThicknessMean_um"):
+                self.assertFalse(any(name.startswith(removed) for name in table))
+            settings = json.loads((root / "feature_generation_settings.json").read_text())
+            self.assertEqual(settings["feature_schema_version"], 4)
+            self.assertNotIn("rolling_ball_radius_px", settings)
+            self.assertEqual(settings["threshold_from"], "substratum")
+            self.assertEqual(settings["substratum_slices"], 2)
+            for feature in (
+                "MaxBiofilmHeight_COMSTAT_um",
+                "BiomassCenterOfMassHeight_um",
+                "BiomassVolume_um3",
+                "MeanThickness_BiomassColumns_um",
+                "Roughness_RaStar",
+                "SpreadingHorizontal",
+                "ObjectCount3D",
+                "ObjectDensity3D_per_um3",
+                "ObjectNearestNeighbor3DIQR_um",
+                "ObjectVolume3DIQR_um3",
+                "MeanThickness_BiomassColumns_um",
+                "MaxCompactedColumnThickness_um",
+            ):
+                columns = [name for name in table if name.startswith(f"{feature}-")]
+                self.assertEqual(len(columns), 1, feature)
+                if feature.startswith(("MeanThickness", "MaxCompacted")):
+                    self.assertEqual(table[columns[0]].nunique(), 2, feature)
+
+    def test_advanced_package_keeps_maps_out_of_numeric_ml_table(self):
+        stack = np.zeros((3, 5, 5), dtype=np.uint8)
+        stack[:, 1:4, 1:4] = 200
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "geometry.tif"
+            tifffile.imwrite(path, stack, photometric="minisblack")
+            segment(str(path), directory, feature_groups=["advanced"])
+            table = pd.read_csv(Path(directory) / "geometryCustomAlgos.txt", sep="\t", index_col=0)
+            self.assertNotIn("LocalBiomassDensityMap", table)
+            self.assertIn("LocalBiomassDensityMean", table)
+            self.assertIn("LocalThicknessMean_um", table)
+            self.assertTrue(all(pd.api.types.is_numeric_dtype(table[column]) for column in table))
 
 
 class TestGetCellCount(unittest.TestCase):

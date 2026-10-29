@@ -19,9 +19,9 @@ import numpy as np
 import pandas as pd
 
 try:
-    from input_validation import validate_feature_table, write_json_report
+    from input_validation import read_feature_table, validate_feature_table, write_json_report
 except ImportError:  # Package import from the repository root.
-    from .input_validation import validate_feature_table, write_json_report
+    from .input_validation import read_feature_table, validate_feature_table, write_json_report
 
 try:
     import shap
@@ -105,8 +105,18 @@ def validate_cli_inputs(models_dir, images_dir, features_file=None):
         raise ValueError("Invalid CLI inputs:\n- " + "\n- ".join(errors) + f"\n{CLI_USAGE}")
 
 
+def validate_model_features(metadata, columns):
+    """Require complete features for current saved models."""
+    for model_name, meta in metadata.items():
+        if meta.get("strict_feature_columns") or meta.get("feature_generation_settings"):
+            missing = set(meta.get("feature_names", [])) - set(columns)
+            if missing:
+                raise ValueError(f"Feature table is incompatible with {model_name}: missing {sorted(missing)}")
+
+
 def format_predictions(models, metadata, X):
     """Format predictions from multiple models into a single DataFrame."""
+    validate_model_features(metadata, X.columns)
     results_list = []
 
     for sample_name in X.index:
@@ -186,12 +196,10 @@ def generate_features_for_images(images_dir, temp_dir):
             cmd = ["python", os.path.join(src_dir, "feature_generator.py"), "--outfolder", feature_generator_dir, "--file", tif_file]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
-                logger.error(f"Feature generation failed for {tif_file}: {result.stderr}")
-                continue
+                raise RuntimeError(f"Feature generation failed for {tif_file}: {result.stderr}")
             logger.info(f"Generated features for {os.path.basename(tif_file)}")
         except Exception as e:
-            logger.error(f"Error processing {tif_file}: {e}")
-            continue
+            raise RuntimeError(f"Error processing {tif_file}: {e}") from e
 
     # Create joint dataframe from individual feature files
     try:
@@ -246,7 +254,7 @@ def run_inference(models, metadata, features_file, output_dir, generate_explanat
 
     # Load the features dataframe
     try:
-        data = pd.read_csv(features_file, sep="\t", index_col=0)
+        data = read_feature_table(features_file).set_index("sampleName")
         logger.info(f"Loaded features with shape: {data.shape}")
         #        logger.info(f"Columns: {list(data.columns)}")
 
@@ -265,6 +273,8 @@ def run_inference(models, metadata, features_file, output_dir, generate_explanat
     write_json_report(feature_validation, validation_path)
     if not feature_validation["ok"]:
         raise ValueError("Feature validation failed: " + "; ".join(feature_validation["errors"]))
+
+    validate_model_features(metadata, data.columns)
 
     # Prepare results storage
     all_predictions = {}
@@ -755,6 +765,25 @@ def main():
             logger.info(f"Using precomputed features from {args.features_file}")
             features_file = args.features_file
         else:
+            saved_settings = [
+                meta.get("feature_generation_settings") for meta in metadata.values() if meta.get("feature_generation_settings")
+            ]
+            if not saved_settings:
+                raise ValueError("Raw-image inference requires current saved image settings; use original precomputed features or retrain")
+            if len(saved_settings) != len(models) or any(item != saved_settings[0] for item in saved_settings):
+                raise ValueError("Models require different feature-generation settings; use separate inference jobs")
+            from segmentation import ENV_SETTINGS, FEATURE_SCHEMA_VERSION
+
+            saved = saved_settings[0]
+            if saved.get("feature_schema_version") != FEATURE_SCHEMA_VERSION:
+                raise ValueError("Retrain for the current feature schema or supply original precomputed features")
+            for key, name in ENV_SETTINGS.items():
+                if key in saved:
+                    value = saved[key]
+                    os.environ[name] = ",".join(value) if isinstance(value, list) else "" if value is None else str(value)
+            for axis in ("X", "Y", "Z"):
+                if f"voxel_size_{axis.lower()}" in saved:
+                    os.environ[f"IMAGINE_VOXEL_SIZE_{axis}"] = str(saved[f"voxel_size_{axis.lower()}"])
             # Generate features for input images
             logger.info("Generating features for input images...")
             os.makedirs(args.temp_dir, exist_ok=True)

@@ -1,9 +1,18 @@
 import glob
+import json
 import logging
 import os
 import sys
+from pathlib import Path
 
 import pandas as pd
+
+try:
+    from feature_taxonomy import feature_catalog
+    from segmentation import FEATURE_SCHEMA_VERSION
+except ImportError:
+    from .feature_taxonomy import feature_catalog
+    from .segmentation import FEATURE_SCHEMA_VERSION
 
 logging.basicConfig(format="%(asctime)s - %(message)s", datefmt="%d-%b-%y %H:%M:%S")
 logging.getLogger(__name__).setLevel(logging.INFO)
@@ -36,6 +45,8 @@ if __name__ == "__main__":
         #     continue
         contents = pd.read_csv(results_file, sep="\t")
         if "sampleName" in contents.columns:
+            contents, _ = drop_export_artifact_columns(contents)
+            contents = contents[["sampleName", *[column for column in contents if column != "sampleName"]]]
             non_sname = contents.columns[1:]
             # fid = str(hash(results_file))
             fid = results_file.split("/")[-1].replace(".txt.", "")
@@ -62,3 +73,42 @@ if __name__ == "__main__":
     #    df_final.to_csv(f"../prepared_data/{date.today()}-{tag}.tsv", sep="\t")
     logging.info(f"Writing {outfile}")
     df_final.to_csv(outfile, sep="\t")
+    taxonomy_path = Path(outfile).with_name("feature_taxonomy.json")
+    taxonomy_path.write_text(json.dumps(feature_catalog(df_final.columns), indent=2), encoding="utf-8")
+    logging.info("Writing %s", taxonomy_path)
+
+    records = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in (Path(results_folder_analysis).parent / "feature_generator").rglob("*_segmentation.json")
+    ]
+    if records:
+        settings = []
+        for record in records:
+            if record.get("segmentation_version") != 2 or record.get("feature_schema_version") != FEATURE_SCHEMA_VERSION:
+                raise ValueError("Regenerate all images before assembling corrected feature tables")
+            settings.append(
+                {
+                    "segmentation_version": 2,
+                    "feature_schema_version": FEATURE_SCHEMA_VERSION,
+                    "segmentation_approach": record["segmentation_approach"],
+                    "threshold_method": record["requested_method"],
+                    "threshold_scale": record["submitted_threshold_units"] or "uint8",
+                    "threshold_value": record["submitted_threshold_value"],
+                    "threshold_sensitivity": record["configured_threshold_sensitivity"],
+                    "threshold_from": record["threshold_from"],
+                    "substratum_slices": record["substratum_slices"],
+                    "conversion_max": record["configured_conversion_max"],
+                    "conversion_range_mode": record.get("configured_conversion_range_mode", "storage"),
+                    "dim_class_assignment": record["dim_class_assignment"] or "foreground",
+                    "image_dimension": record["image_dimension"],
+                    "feature_groups": record["feature_groups"],
+                    "connectivity_3d": record["connectivity_3d"],
+                    "minimum_object_area_um2": record["minimum_object_area_um2"],
+                    "minimum_object_volume_um3": record["minimum_object_volume_um3"],
+                    "local_density_radius_um": record["local_density_radius_um"],
+                    **{f"voxel_size_{axis}": value for axis, value in record["voxel_size_um"].items()},
+                }
+            )
+        if any(item != settings[0] for item in settings):
+            raise ValueError("Images in one feature table must use matching generation settings")
+        Path(outfile).with_name("feature_generation_settings.json").write_text(json.dumps(settings[0], indent=2), encoding="utf-8")

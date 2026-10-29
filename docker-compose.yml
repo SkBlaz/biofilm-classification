@@ -28,10 +28,13 @@ x-base-test: &base-test
 services:
   microics:
     <<: *base
+    user: "${MICROICS_UID:-1000}:${MICROICS_GID:-1000}"
+    environment:
+      MPLCONFIGDIR: /tmp/microics-matplotlib
     ports:
       - "8765:8765"
     volumes:
-      - microics-data:/data
+      - ./.microics-data:/data
 
   # CI test services
   imagine-test-generate-features:
@@ -63,6 +66,3 @@ services:
     working_dir: /opt/microics
     entrypoint: ["python"]
     command: ["test_inference_fast.py"]
-
-volumes:
-  microics-data:

@@ -8,10 +8,73 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.input_validation import assess_replication_units, replication_group, validate_feature_table, validate_image_directory
+from src.input_validation import (
+    assess_replication_units,
+    merge_feature_tables,
+    read_feature_table,
+    replication_group,
+    validate_feature_table,
+    validate_image_directory,
+)
 
 
 class TestInputValidation(unittest.TestCase):
+    def test_duplicate_headers_fail_before_pandas_renames_them(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for suffix in (".xlsx", ".csv", ".tsv", ".txt"):
+                for column in ("sampleName", "assay", "NA"):
+                    with self.subTest(suffix=suffix, column=column):
+                        path = Path(directory) / f"features{suffix}"
+                        columns = ["sampleName", "label", column, column]
+                        frame = pd.DataFrame([["sample", "A", 1, 2]], columns=columns)
+                        if suffix == ".xlsx":
+                            frame.to_excel(path, index=False)
+                        else:
+                            frame.to_csv(path, sep="," if suffix == ".csv" else "\t", index=False)
+                        report = validate_feature_table(path)
+                        self.assertFalse(report["ok"])
+                        self.assertIn("Duplicate column names", report["errors"][0])
+
+    def test_excel_numeric_headers_match_delimited_names(self):
+        with tempfile.TemporaryDirectory() as directory:
+            primary = pd.DataFrame({"sampleName": ["a"], "label": ["A"], "1": [1]})
+            additional = pd.DataFrame({"sampleName": ["a"], 1: [2]})
+            path = Path(directory) / "measurements.xlsx"
+            additional.to_excel(path, index=False)
+            with self.assertRaisesRegex(ValueError, "overlap: 1"):
+                merge_feature_tables(primary, read_feature_table(path))
+
+    def test_join_preserves_exact_names_and_agreeing_labels(self):
+        primary = pd.DataFrame({"sampleName": ["001", "1"], "label": ["a", "b"], "feature": [1, 2]})
+        additional = pd.DataFrame({"sampleName": ["1", "001"], "label": ["b", "a"], "assay": [20, 10]})
+        with tempfile.TemporaryDirectory() as directory:
+            for suffix in (".xlsx", ".csv", ".tsv", ".txt"):
+                with self.subTest(suffix=suffix):
+                    path = Path(directory) / f"measurements{suffix}"
+                    if suffix == ".xlsx":
+                        additional.to_excel(path, index=False)
+                    else:
+                        additional.to_csv(path, sep="," if suffix == ".csv" else "\t", index=False)
+                    merged = merge_feature_tables(primary, read_feature_table(path))
+                    self.assertEqual(merged["sampleName"].tolist(), ["001", "1"])
+                    self.assertEqual(merged["assay"].tolist(), [10, 20])
+                    self.assertEqual(merged["label"].tolist(), ["a", "b"])
+        with self.assertRaisesRegex(ValueError, "Primary.*duplicate"):
+            merge_feature_tables(pd.concat([primary, primary.iloc[:1]]), additional)
+
+    def test_excel_csv_and_tsv_have_the_same_feature_contract(self):
+        frame = pd.DataFrame({"sampleName": ["image1", "image2"], "label": ["a", "b"], "measured_area": [2.5, 7.0]})
+        with tempfile.TemporaryDirectory() as directory:
+            for suffix in (".xlsx", ".csv", ".tsv"):
+                with self.subTest(suffix=suffix):
+                    path = Path(directory) / f"features{suffix}"
+                    if suffix == ".xlsx":
+                        frame.to_excel(path, index=False)
+                    else:
+                        frame.to_csv(path, sep="," if suffix == ".csv" else "\t", index=False)
+                    pd.testing.assert_frame_equal(read_feature_table(path), frame)
+                    self.assertTrue(validate_feature_table(path)["ok"])
+
     def test_image_report_counts_labels_by_date(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

@@ -16,11 +16,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import numpy as np
+import pandas as pd
+import tifffile
+
 import gui.app as app
 import gui.execution as execution
 from gui.app import (
     Handler,
-    create_results_zip,
     delete_job,
     preflight_error,
     receive_upload,
@@ -29,6 +32,8 @@ from gui.app import (
     start_pipeline,
     state,
     validate_config,
+    write_results_zip,
+    write_run_summary,
 )
 from gui.execution import ExecutionStep, build_execution_steps, create_job, job_paths
 
@@ -56,6 +61,205 @@ def training_table() -> bytes:
     return b"sampleName\tlabel\tfeature\n01012026--s--Lm--st--L1--p--C01--pos001--tm--24--ch--Syto9--z--21\tL1\t1\n"
 
 
+class TestSegmentationWorkflow(unittest.TestCase):
+    def test_training_merges_uploaded_tables_by_sample_name(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            primary = pd.DataFrame({"sampleName": ["a", "b"], "label": ["A", "B"], "RawIntensityMean": [1, 2]})
+            primary.to_csv(paths.feature_files / "primary.tsv", sep="\t", index=False)
+            extra = pd.DataFrame({"sampleName": ["b", "a"], "assay": [20, 10]})
+            extra.to_excel(paths.feature_files / "additional.xlsx", index=False)
+            config = validate_config(
+                {
+                    "job_id": paths.job_id,
+                    "workflow": "train",
+                    "feature_file": "primary.tsv",
+                    "additional_feature_file": "additional.xlsx",
+                }
+            )
+            report = app.preflight_config(config)
+            self.assertTrue(report["ok"], report)
+            self.assertEqual(report["features"]["features_read"], 2)
+            self.assertEqual(report["features"]["external_feature_names"], ["assay"])
+            staged = execution.stage_training_features(config)
+            merged = pd.read_csv(staged, sep="\t")
+            self.assertEqual(merged["sampleName"].tolist(), ["a", "b"])
+            self.assertEqual(merged["assay"].tolist(), [10, 20])
+            self.assertEqual(merged["label"].tolist(), ["A", "B"])
+            self.assertEqual(merged["RawIntensityMean"].tolist(), [1, 2])
+            self.assertIn(str(staged), build_execution_steps(config)[0].commands[0])
+            pd.testing.assert_frame_equal(pd.read_csv(paths.feature_files / "primary.tsv", sep="\t"), primary)
+
+    def test_training_preflight_rejects_unsafe_table_merges(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            pd.DataFrame({"sampleName": ["a", "b"], "label": ["A", "B"], "feature": [1, 2]}).to_csv(
+                paths.feature_files / "primary.tsv", sep="\t", index=False
+            )
+            cases = [
+                ({"sampleName": ["a", "a"], "assay": [1, 2]}, "duplicate sampleName"),
+                ({"sampleName": ["a"], "assay": [1]}, "1 missing"),
+                ({"sampleName": ["a", "b", "c"], "assay": [1, 2, 3]}, "1 extra"),
+                ({"sampleName": ["a", None], "assay": [1, 2]}, "missing sampleName"),
+                ({"sampleName": ["a", "b"], "feature": [1, 2]}, "overlap"),
+                ({"sampleName": ["a", "b"], "label": ["B", "A"], "assay": [1, 2]}, "conflicting label"),
+                ({"sampleName": ["a", "b"], "assay": ["bad", 2]}, "Could not parse"),
+                ({"sampleName": ["a", "b"]}, "requires numeric feature"),
+                ({"assay": [1, 2]}, "requires sampleName"),
+            ]
+            for data, error in cases:
+                with self.subTest(error=error):
+                    pd.DataFrame(data).to_csv(paths.feature_files / "additional.csv", index=False)
+                    config = validate_config(
+                        {
+                            "job_id": paths.job_id,
+                            "workflow": "train",
+                            "feature_file": "primary.tsv",
+                            "additional_feature_file": "additional.csv",
+                        }
+                    )
+                    report = app.preflight_config(config)
+                    self.assertFalse(report["ok"])
+                    self.assertIn(error, str(report["features"]["errors"]))
+                    self.assertFalse((paths.results / "datafile.tsv").exists())
+
+    def test_preprocessing_and_threshold_source_survive_execution_and_provenance(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            (paths.training_images / "sample.tif").touch()
+            config = validate_config(
+                {
+                    "job_id": paths.job_id,
+                    "threshold_from": "substratum",
+                    "substratum_slices": 2,
+                    "minimum_object_volume_um3": "0,025",
+                }
+            )
+            environment = execution.execution_environment(config)
+            self.assertEqual(environment["IMAGINE_THRESHOLD_FROM"], "substratum")
+            self.assertEqual(environment["IMAGINE_SUBSTRATUM_SLICES"], "2")
+            self.assertEqual(environment["IMAGINE_MIN_OBJECT_VOLUME_UM3"], "0.025")
+            saved = config["feature_generation_settings"]
+            self.assertEqual(saved["feature_schema_version"], 4)
+            self.assertEqual(saved["threshold_from"], "substratum")
+
+    def test_old_schema_model_requires_original_table_or_retraining(self):
+        with temporary_jobs_root():
+            model_paths = create_job()
+            (model_paths.results / "models").mkdir()
+            (model_paths.results / "models" / "rf_model.joblib").touch()
+            app.write_job_metadata(model_paths.job_id, feature_generation_settings={"segmentation_version": 2, "feature_schema_version": 3})
+            paths = create_job()
+            (paths.inference_images / "sample.tif").touch()
+            with self.assertRaisesRegex(ValueError, "retraining.*original precomputed"):
+                validate_config({"job_id": paths.job_id, "workflow": "inference", "model_job_id": model_paths.job_id})
+
+    def test_manual_cutoff_is_propagated_to_execution(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            (paths.training_images / labelled_image_name()).touch()
+            config = validate_config(
+                {"job_id": paths.job_id, "threshold_method": "otsu", "threshold_value": 0.78, "threshold_scale": "uint8"}
+            )
+            environment = execution.execution_environment(config)
+            self.assertEqual(environment["IMAGINE_SEGMENTATION_APPROACH"], "manual")
+            self.assertEqual(environment["IMAGINE_THRESHOLD_VALUE"], "0.78")
+            self.assertEqual(environment["IMAGINE_THRESHOLD_MODE"], "comstat2")
+
+    def test_qc_only_is_additional_work_on_uploaded_images(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            image = paths.training_images / "sample.tif"
+            tifffile.imwrite(image, np.zeros((3, 4, 5), dtype=np.uint8), photometric="minisblack")
+            config = validate_config({"job_id": paths.job_id, "qc_only": True})
+            report = app.preflight_config(config)
+            self.assertTrue(report["ok"], report)
+            steps = build_execution_steps(config)
+            self.assertEqual([step.step_id for step in steps], ["segmentation"])
+            self.assertIn("--qc-only", steps[0].commands[0])
+
+    def test_mask_dimensions_fail_before_execution(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            tifffile.imwrite(paths.inference_images / "sample.tif", np.zeros((3, 4, 5), dtype=np.uint8), photometric="minisblack")
+            tifffile.imwrite(paths.masks / "sample_mask.tif", np.zeros((3, 4, 4), dtype=np.uint8), photometric="minisblack")
+            config = validate_config({"job_id": paths.job_id, "workflow": "features_unlabelled", "segmentation_approach": "import"})
+            report = app.preflight_config(config)
+            self.assertFalse(report["ok"])
+            self.assertIn("mask dimensions", app.preflight_error(report))
+
+    def test_explicit_2d_does_not_accept_a_stack(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            tifffile.imwrite(paths.inference_images / "sample.tif", np.zeros((3, 4, 5), dtype=np.uint8), photometric="minisblack")
+            config = validate_config({"job_id": paths.job_id, "workflow": "features_unlabelled", "image_dimension": "2d"})
+            self.assertEqual(config["feature_groups"], ["2d", "intensity", "geometry"])
+            self.assertFalse(app.preflight_config(config)["ok"])
+
+    def test_inference_restores_training_settings_and_current_masks_directory(self):
+        with temporary_jobs_root():
+            model_paths = create_job()
+            (model_paths.results / "models").mkdir()
+            (model_paths.results / "models" / "rf_model.joblib").touch()
+            saved = {
+                "feature_schema_version": 4,
+                "threshold_from": "substratum",
+                "substratum_slices": 2,
+                "image_dimension": "3d",
+                "feature_groups": ["objects"],
+                "threshold_method": "otsu",
+                "segmentation_approach": "manual",
+                "threshold_scale": "uint8",
+                "threshold_value": 100,
+                "voxel_size_x": 2.0,
+            }
+            app.write_job_metadata(model_paths.job_id, feature_generation_settings=saved)
+            paths = create_job()
+            (paths.inference_images / "sample.tif").touch()
+            config = validate_config({"job_id": paths.job_id, "workflow": "inference", "model_job_id": model_paths.job_id})
+            self.assertEqual(config["threshold_value"], 100)
+            self.assertEqual(config["threshold_from"], "substratum")
+            self.assertEqual(config["substratum_slices"], 2)
+            self.assertEqual(config["feature_groups"], ["objects"])
+            self.assertEqual(config["voxel_size_x"], 2.0)
+            self.assertEqual(config["masks_dir"], str(paths.masks))
+
+    def test_training_table_does_not_use_image_settings_upload(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            (paths.feature_files / "training.tsv").write_bytes(training_table())
+            config = validate_config({"job_id": paths.job_id, "workflow": "train", "feature_file": "training.tsv"})
+            self.assertIsNone(config["feature_generation_settings"])
+            self.assertNotIn("feature_settings_file", config)
+
+    def test_qc_rerun_removes_stale_plots_and_preserves_training_provenance(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            outputs = paths.results / "feature_generator"
+            outputs.mkdir()
+            stale = outputs / "sample_threshold_curve.png"
+            stale.write_bytes(b"old plot")
+            provenance = paths.results / "feature_generation_settings.json"
+            provenance.write_text('{"threshold_value": 100}')
+            config = {"results_dir": str(paths.results), "qc_only": True, "feature_generation_settings": {"threshold_value": 200}}
+            app.prepare_generation_outputs(config)
+            self.assertFalse(stale.exists())
+            self.assertEqual(json.loads(provenance.read_text())["threshold_value"], 100)
+            self.assertNotIn("feature_generation_settings", app.settings_metadata(config))
+
+    def test_model_metadata_takes_priority_over_later_job_settings(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            models = paths.results / "models"
+            models.mkdir()
+            (models / "rf_model.joblib").touch()
+            app.joblib.dump(
+                {"feature_generation_settings": {"segmentation_version": 2, "threshold_value": 100}}, models / "rf_metadata.joblib"
+            )
+            app.write_job_metadata(paths.job_id, feature_generation_settings={"threshold_value": 200})
+            self.assertEqual(app.model_generation_settings(paths.job_id)["threshold_value"], 100)
+
+
 class TestJobUploads(unittest.TestCase):
     def test_model_upload_is_stored_as_a_model_job(self):
         with temporary_jobs_root():
@@ -71,6 +275,46 @@ class TestJobUploads(unittest.TestCase):
             delete_job(first.job_id)
             self.assertFalse(first.root.exists())
             self.assertTrue(second.root.exists())
+
+    def test_cleanup_listing_includes_sizes_and_active_job_protection(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            (paths.training_images / "image.tif").write_bytes(b"1234")
+            (paths.results / "datafile.tsv").write_bytes(b"table")
+            original_state, original_runtime = dict(state), dict(runtime)
+            try:
+                state.update(status="running", job_id=paths.job_id)
+                runtime.update(active_job_id=paths.job_id)
+                self.assertIsNone(app.list_jobs()[0]["size_bytes"])
+                listing = app.list_jobs(include_sizes=True)[0]
+                self.assertEqual(listing["size_bytes"], 9)
+                self.assertTrue(listing["is_active"])
+                with self.assertRaisesRegex(ValueError, "Stop the active job"):
+                    delete_job(paths.job_id)
+                self.assertTrue(paths.root.exists())
+            finally:
+                state.clear()
+                state.update(original_state)
+                runtime.clear()
+                runtime.update(original_runtime)
+
+    def test_deleting_displayed_completed_job_resets_state(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            original_state, original_runtime = dict(state), dict(runtime)
+            try:
+                state.update(status="completed", job_id=paths.job_id)
+                runtime.update(active_job_id=None, process=None)
+                delete_job(paths.job_id)
+                self.assertFalse(paths.root.exists())
+                self.assertEqual(app.snapshot(refresh=True)["status"], "idle")
+                self.assertIsNone(state["job_id"])
+                self.assertIsNone(state["download_url"])
+            finally:
+                state.clear()
+                state.update(original_state)
+                runtime.clear()
+                runtime.update(original_runtime)
 
     def test_jobs_have_isolated_input_work_and_output_directories(self):
         with temporary_jobs_root():
@@ -92,6 +336,32 @@ class TestJobUploads(unittest.TestCase):
             self.assertEqual(selected["file"], "escape.tif")
             self.assertEqual(destination.read_bytes(), b"TIFF")
             self.assertEqual(destination.resolve().parent, paths.training_images.resolve())
+
+
+class TestRunSummary(unittest.TestCase):
+    def test_summary_records_parameters_validation_and_outcome(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(state, {"started_at": "2026-09-25T12:00:00Z"}):
+            config = {
+                "job_id": "a" * 32,
+                "workflow": "features_labelled",
+                "results_dir": directory,
+                "voxel_size_x": 0.21,
+            }
+            write_run_summary(config, "completed", finished_at="2026-09-25T12:01:00Z", validation={"ok": True})
+            summary = json.loads((Path(directory) / "run_summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["status"], "completed")
+            self.assertEqual(summary["parameters"]["voxel_size_x"], 0.21)
+            self.assertTrue(summary["validation"]["ok"])
+
+    def test_excel_upload_stages_a_training_tsv(self):
+        with temporary_jobs_root():
+            stream = io.BytesIO()
+            frame = pd.DataFrame({"sampleName": ["image1", "image2"], "label": ["a", "b"], "measured_area": [1.5, 3.0]})
+            frame.to_excel(stream, index=False)
+            uploaded = receive_upload(upload_handler("features.xlsx", stream.getvalue()), "feature", {".xlsx"}, "Excel files")
+            config = validate_config({"job_id": uploaded["job_id"], "workflow": "train", "feature_file": uploaded["file"]})
+            staged = execution.stage_training_features(config)
+            pd.testing.assert_frame_equal(pd.read_csv(staged, sep="\t"), frame)
 
     def test_tiff_and_feature_table_uploads_are_supported(self):
         with temporary_jobs_root():
@@ -317,10 +587,36 @@ class TestResultsAndRecovery(unittest.TestCase):
             result = paths.results / "datafile.tsv"
             result.write_text("sampleName\tfeature\nA\t1\n", encoding="utf-8")
 
-            archive = create_results_zip(paths.job_id)
+            archive = io.BytesIO()
+            write_results_zip(paths.output, archive)
 
             with zipfile.ZipFile(archive) as bundle:
                 self.assertEqual(bundle.namelist(), ["results/datafile.tsv"])
+
+    def test_zip_stream_supports_zip64_without_seeking_or_disk_cache(self):
+        class Stream:
+            def __init__(self):
+                self.data = bytearray()
+
+            def write(self, chunk):
+                self.data.extend(chunk)
+                return len(chunk)
+
+            def flush(self):
+                pass
+
+        with temporary_jobs_root():
+            paths = create_job()
+            payload = bytes(range(256)) * 32
+            (paths.results / "stack.tif").write_bytes(payload)
+            stream = Stream()
+            with patch.object(zipfile, "ZIP64_LIMIT", 1024):
+                write_results_zip(paths.output, stream)
+            with zipfile.ZipFile(io.BytesIO(stream.data)) as bundle:
+                self.assertEqual(bundle.read("results/stack.tif"), payload)
+                self.assertGreaterEqual(bundle.getinfo("results/stack.tif").extract_version, 45)
+                self.assertIsNone(bundle.testzip())
+            self.assertEqual(list(paths.work.iterdir()), [])
 
     def test_failed_subprocess_marks_job_failed_without_raising(self):
         with temporary_jobs_root():
@@ -395,6 +691,49 @@ class TestHTTPAndImage(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+    def test_download_sends_headers_before_building_zip_and_keeps_results(self):
+        with temporary_jobs_root():
+            paths = create_job()
+            result = paths.results / "datafile.tsv"
+            result.write_bytes(b"sampleName\tfeature\nA\t1\n")
+            release = threading.Event()
+            server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            original = app.write_results_zip
+
+            def delayed_write(output, target):
+                if not release.wait(timeout=5):
+                    raise RuntimeError("Headers were not received before ZIP generation")
+                original(output, target)
+
+            try:
+                url = f"http://127.0.0.1:{server.server_port}/api/jobs/{paths.job_id}/download"
+                with patch("gui.app.write_results_zip", side_effect=delayed_write):
+                    with urllib.request.urlopen(url, timeout=3) as response:
+                        self.assertEqual(response.status, 200)
+                        self.assertEqual(response.headers["Content-Type"], "application/zip")
+                        self.assertIn(paths.job_id, response.headers["Content-Disposition"])
+                        release.set()
+                        data = response.read()
+                with zipfile.ZipFile(io.BytesIO(data)) as bundle:
+                    self.assertEqual(bundle.read("results/datafile.tsv"), result.read_bytes())
+                    self.assertIsNone(bundle.testzip())
+                # A repeat download must not reuse or create an archive.
+                with urllib.request.urlopen(url, timeout=3) as response:
+                    with zipfile.ZipFile(io.BytesIO(response.read())) as bundle:
+                        self.assertIsNone(bundle.testzip())
+                self.assertEqual(list(paths.work.iterdir()), [])
+                self.assertTrue(result.exists())
+                with self.assertRaises(urllib.error.HTTPError) as missing:
+                    urllib.request.urlopen(url.replace(paths.job_id, "0" * 32), timeout=3)
+                self.assertEqual(missing.exception.code, 404)
+            finally:
+                release.set()
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
 
     def test_dockerfile_launches_one_self_contained_gui(self):
         repository = Path(__file__).parent

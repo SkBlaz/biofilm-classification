@@ -1,3 +1,6 @@
 # Only the local GUI preflight needs these packages. The analysis stack runs in Docker.
 numpy
 pandas
+scipy
+tifffile>=2024.8.30
+joblib
