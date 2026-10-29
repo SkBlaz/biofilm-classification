@@ -74,6 +74,7 @@ Keep newest entry at the top.
 
 | Date (UTC) | Bot/Agent | PR/Commit | AGENTS.md update summary |
 |---|---|---|---|
+| 2026-10-29 | Copilot | current change | Preflight accepts both replication-option spellings used by the CLI and shell pipeline; grouped feasibility checks remain enforced. |
 | 2026-10-29 | Codex | current change | Restored optional grouped cross-validation by date, well, or imaging position while preserving published stratified CV as the default. |
 | 2026-10-28 | Codex | current change | Fixed ZIP downloads with direct streaming; added confirmed selective job cleanup, host-owned bind mounts, recovery guidance, and scoped Docker image/cache cleanup. |
 | 2026-10-25 | Codex | current change | Follow-up verification: duplicate-header rejection, exact numeric sample identifiers through learning, strict feature-column metadata for table-trained models, and failed-upload recovery documented. |

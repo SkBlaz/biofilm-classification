@@ -20,7 +20,7 @@ def main() -> int:
     parser.add_argument("--images", required=True, help="Folder containing .tif images")
     parser.add_argument("--features", help="Feature TSV to validate")
     parser.add_argument("--unlabelled", "--unlabeled", action="store_true")
-    parser.add_argument("--replication-unit", choices=REPLICATION_UNITS)
+    parser.add_argument("--replication-unit", "--replication_unit", choices=REPLICATION_UNITS)
     parser.add_argument("--nested-cv", action="store_true", help="Require nested CV for tuned learners")
     parser.add_argument("--output", help="Write the JSON report to this file")
     args = parser.parse_args()
