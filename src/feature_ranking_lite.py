@@ -158,11 +158,11 @@ def benchmark_configurations(component_counts, feature_count, threshold_feature_
 
 
 def partial_evaluation_path(partial_dir, filter_mode, repetition, n_components, thr_features, model_name, fold, replication_unit):
-    """Return a cache path pinned to the published-main evaluation protocol."""
-    del replication_unit
+    """Return a cache path specific to the selected evaluation protocol."""
+    protocol = f"grouped-{replication_unit}" if replication_unit else "published-main"
     filename = (
         f"v{PARTIAL_CACHE_VERSION}_{filter_mode}_partial_{repetition}_n{n_components}_"
-        f"thr{thr_features}_{model_name}_reppublished-main_fold{fold}.tsv"
+        f"thr{thr_features}_{model_name}_rep{protocol}_fold{fold}.tsv"
     )
     return os.path.join(partial_dir, filename)
 
@@ -421,6 +421,7 @@ def do_classification_simple(
     progress_phase_total=5,
 ):
     all_cols = X.columns
+    sample_names = X.index.astype(str).tolist()
     thr_indices = np.asarray([enx for enx, column in enumerate(all_cols) if is_threshold_derived_feature(column)])
     X = X.values
     y = pd.Categorical(ys.values).codes
@@ -430,12 +431,16 @@ def do_classification_simple(
     # Create tuned RandomForest using RandomizedSearchCV
     # Adapt CV folds and iterations based on dataset and class size
     n_samples = X.shape[0]
+    groups = None
     if replication_unit:
-        logger.warning(
-            "Ignoring replication unit %s: published-main benchmark compatibility uses ordinary stratified cross-validation",
-            replication_unit,
-        )
-    cv_rf, n_splits, min_class_count, cv_strategy, cv_reason = get_adaptive_cv(y, max_splits=5)
+        try:
+            from input_validation import replication_group
+        except ImportError:
+            from .input_validation import replication_group
+        groups = np.asarray([replication_group(name, replication_unit) for name in sample_names])
+    cv_rf, n_splits, min_class_count, cv_strategy, cv_reason = get_adaptive_cv(y, max_splits=5, groups=groups)
+    if groups is not None:
+        cv_rf = list(cv_rf.split(np.zeros((len(y), 1)), y, groups))
     runtime_config = get_benchmark_runtime_config()
     n_iter = runtime_config["n_iter"]
     logger.info(
@@ -513,7 +518,9 @@ def do_classification_simple(
     cv_results = []
     failed_models = []
 
-    skf, outer_n_splits, outer_min_class_count, outer_cv_strategy, outer_cv_reason = get_adaptive_cv(y, max_splits=3)
+    skf, outer_n_splits, outer_min_class_count, outer_cv_strategy, outer_cv_reason = get_adaptive_cv(y, max_splits=3, groups=groups)
+    if groups is not None:
+        skf = list(skf.split(np.zeros((len(y), 1)), y, groups))
     logger.info(
         f"Outer evaluation uses {outer_n_splits} folds (strategy: {outer_cv_strategy}, "
         f"minimum class count: {outer_min_class_count}). {outer_cv_reason}"
@@ -536,7 +543,7 @@ def do_classification_simple(
 
     for repetition in range(runtime_config["repetitions"]):
         for desc_components, thr_features, component_setting in configurations:
-            split_iterator = skf.split(X, y)
+            split_iterator = iter(skf) if groups is not None else skf.split(X, y)
             for i, (train_index, test_index) in enumerate(split_iterator):
                 x_train = X[train_index]
                 x_test = X[test_index]
@@ -559,7 +566,7 @@ def do_classification_simple(
                         thr_features,
                         model_name,
                         i,
-                        None,
+                        replication_unit,
                     )
 
                     if os.path.isfile(partial_path):
@@ -602,9 +609,12 @@ def do_classification_simple(
 
                     model_for_fold = clone(model)
                     if isinstance(model, RandomizedSearchCV | GridSearchCV):
+                        groups_train = groups[train_index] if groups is not None else None
                         cv_inner, n_splits_inner, min_class_count_inner, inner_cv_strategy, inner_cv_reason = get_adaptive_cv(
-                            y_train, max_splits=5
+                            y_train, max_splits=5, groups=groups_train
                         )
+                        if groups_train is not None:
+                            cv_inner = list(cv_inner.split(np.zeros((len(y_train), 1)), y_train, groups_train))
                         logger.info(
                             f"Using {n_splits_inner} inner CV folds for {model_name} on fold {i} "
                             f"(strategy: {inner_cv_strategy}, minimum class count: {min_class_count_inner}). {inner_cv_reason}"
@@ -935,6 +945,7 @@ def do_classification_simple(
                     metadata = {
                         "feature_names": list(all_cols),
                         "strict_feature_columns": True,
+                        "replication_unit": replication_unit or "stratified",
                         "target_mapping": catmap,
                         "n_components": config["n_components"],
                         "thr_features": config["thr_features"],
@@ -977,11 +988,13 @@ def do_classification_simple(
 
 def compute_ablation_scores(xs, y, replication_unit=None, report_progress=False):
     """Reproduce the published main-branch RF feature-column ablation."""
+    groups = None
     if replication_unit:
-        logger.warning(
-            "Ignoring replication unit %s: published-main ablation uses ordinary stratified cross-validation",
-            replication_unit,
-        )
+        try:
+            from input_validation import replication_group
+        except ImportError:
+            from .input_validation import replication_group
+        groups = np.asarray([replication_group(name, replication_unit) for name in xs.index.astype(str)])
 
     # This deliberately preserves the published protocol: rank once on the full
     # labelled table, then evaluate increasingly large prefixes of that ranking.
@@ -991,12 +1004,12 @@ def compute_ablation_scores(xs, y, replication_unit=None, report_progress=False)
 
     X_init = xs.values
     y_init = pd.Categorical(y.values).codes
-    skf, rfe_n_splits, rfe_min_class_count, rfe_cv_strategy, rfe_cv_reason = get_adaptive_cv(y_init, max_splits=3)
+    skf, rfe_n_splits, rfe_min_class_count, rfe_cv_strategy, rfe_cv_reason = get_adaptive_cv(y_init, max_splits=3, groups=groups)
     logger.info(
         f"RFE evaluation uses {rfe_n_splits} folds (strategy: {rfe_cv_strategy}, "
         f"minimum class count: {rfe_min_class_count}). {rfe_cv_reason}"
     )
-    splits = list(skf.split(X_init, y_init))
+    splits = list(skf.split(X_init, y_init, groups))
     top_feature_counts = list(range(1, len(sorted_indices), 20))
     progress_total = len(splits) * len(top_feature_counts)
     progress_completed = 0
@@ -1087,7 +1100,7 @@ if __name__ == "__main__":
         "--replication-unit",
         choices=["position", "well", "date"],
         default=None,
-        help="Deprecated compatibility option; published-main evaluation always uses ordinary stratified folds",
+        help="Optional grouped CV: keep date, well, or imaging position together",
     )
     parser.add_argument(
         "--learner",

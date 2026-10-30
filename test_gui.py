@@ -776,8 +776,7 @@ class TestHTTPAndImage(unittest.TestCase):
         self.assertIn("fallbackCopyText", javascript)
         self.assertIn("event.stopPropagation()", javascript)
         self.assertNotIn('value="plate"', html)
-        self.assertNotIn("/api/replication-options", javascript)
-        self.assertNotIn("Unit of replication", html)
+        self.assertIn("Unit of replication", html)
 
 
 if __name__ == "__main__":

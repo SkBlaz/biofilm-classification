@@ -162,7 +162,7 @@ Labelled image filenames must retain the naming convention expected by `src/inpu
 
 A complete training table is tab-separated and contains `sampleName`, `label`, and numeric feature columns. A compatible inference table contains `sampleName` and the numeric columns required by the selected saved model. Generated feature columns are retained even when they contain zero, `NaN`, or infinite values; the learning and inference loaders apply the established value-level imputation consistently.
 
-Voxel sizes are measured in micrometres. Select the actual acquisition values in the GUI. Learning intentionally follows the published main-branch evaluation protocol: ordinary stratified cross-validation, three seeded benchmark repetitions, and the original generated-column ablation. Training tables therefore require `sampleName` and `label`, but `sampleName` does not need to encode a selectable replication unit.
+Voxel sizes are measured in micrometres. Select the actual acquisition values in the GUI. Training defaults to the published ordinary stratified cross-validation protocol. Optionally select `date`, `well`, or `position` as the replication unit in Train models; samples in each group then remain together in outer evaluation, nested tuning, and ablation folds. Grouped evaluation requires parseable MicroICS `sampleName` values and enough independent groups in each class. Choose a unit that reflects the experimental design; its scores use a different protocol and should not be compared directly with ordinary stratified results.
 
 ## Local development checks
 

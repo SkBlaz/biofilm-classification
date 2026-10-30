@@ -44,7 +44,7 @@ The GUI supports the real MicroICS stages:
 3. run inference from uploaded images or a compatible precomputed data file using models from a completed training job;
 4. run labelled feature generation, training, and image inference together.
 
-Before generating features, enter the X, Y, and Z voxel dimensions from the microscope metadata. GUI and command-line learning use the published main-branch benchmark protocol so newly generated results remain directly comparable with the published results.
+Before generating features, enter the X, Y, and Z voxel dimensions from the microscope metadata. Training defaults to the published ordinary stratified benchmark protocol. In **Train models**, optionally choose date, well, or imaging position as the replication unit to keep related samples together during cross-validation and estimate performance on independent groups.
 
 ## Development validation
 

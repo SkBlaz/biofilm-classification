@@ -209,6 +209,10 @@ def build_execution_steps(config: dict) -> list[ExecutionStep]:
         ]
         if workflow == "features_unlabelled":
             validation.append("--unlabelled")
+        elif workflow == "full" and config.get("replication_unit"):
+            validation.extend(["--replication-unit", config["replication_unit"]])
+            if config.get("all_learners") or config.get("learner") in {"rf", "gridsearch"}:
+                validation.append("--nested-cv")
         steps.append(ExecutionStep("validate", "Validate generated features", (tuple(validation),)))
 
     if workflow in {"train", "full"}:
@@ -227,6 +231,8 @@ def build_execution_steps(config: dict) -> list[ExecutionStep]:
             "--correlation-threshold",
             str(config["correlation_threshold"]),
         ]
+        if config.get("replication_unit"):
+            learner_args.extend(["--replication_unit", config["replication_unit"]])
         if config["all_learners"]:
             learner_args.append("--all_learners")
         steps.append(ExecutionStep("models", "Train and benchmark models", (tuple(learner_args),)))

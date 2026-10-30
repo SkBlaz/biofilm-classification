@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,6 +22,43 @@ from src.input_validation import (
 
 
 class TestInputValidation(unittest.TestCase):
+    def test_cli_replication_aliases_preserve_grouped_validation(self):
+        validator = Path(__file__).resolve().parent / "src" / "validate_inputs.py"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = []
+            for label, prefix in (("L1", "C"), ("L2", "D")):
+                for number in range(1, 6):
+                    name = f"01012026_s_Lm_st_{label}_p_{prefix}{number:02d}_pos001_tm_24_ch_Syto9_z_21"
+                    (root / f"{name}.tif").touch()
+                    rows.append({"sampleName": name, "label": label, "external_score": number})
+            features = root / "features.tsv"
+            pd.DataFrame(rows).to_csv(features, sep="\t", index=False)
+            for option in ("--replication-unit", "--replication_unit"):
+                for unit, expected_status in (("position", 0), ("date", 1)):
+                    with self.subTest(option=option, unit=unit):
+                        result = subprocess.run(
+                            [
+                                sys.executable,
+                                str(validator),
+                                "--images",
+                                str(root),
+                                "--features",
+                                str(features),
+                                option,
+                                unit,
+                                "--nested-cv",
+                            ],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+                        self.assertEqual(result.returncode, expected_status, result.stderr)
+                        report = json.loads(result.stdout)
+                        self.assertEqual(report["replication"]["selected_unit"], unit)
+                        self.assertEqual(report["replication"]["ok"], expected_status == 0)
+                        self.assertEqual(report["ok"], expected_status == 0)
+
     def test_duplicate_headers_fail_before_pandas_renames_them(self):
         with tempfile.TemporaryDirectory() as directory:
             for suffix in (".xlsx", ".csv", ".tsv", ".txt"):
