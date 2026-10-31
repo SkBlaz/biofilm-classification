@@ -1,8 +1,4 @@
-"""Preflight checks shared by the command line pipeline and the GUI.
-
-The checks in this module deliberately do not repair input.  A report is useful
-only when it describes what will actually be passed to the learning code.
-"""
+"""Feature table loading and preflight checks shared by CLI and GUI."""
 
 from __future__ import annotations
 
@@ -197,7 +193,7 @@ def _is_microics_feature(name: str) -> bool:
 
 
 def read_feature_table(path: str | Path) -> pd.DataFrame:
-    """Read an image feature spreadsheet or delimited table."""
+    """Read a feature table and encode boolean measurements numerically."""
     source = Path(path)
     if source.suffix.lower() == ".xlsx":
         with pd.ExcelFile(source, engine="openpyxl") as workbook:
@@ -210,7 +206,20 @@ def read_feature_table(path: str | Path) -> pd.DataFrame:
             header = next((row for row in csv.reader(stream, delimiter=separator) if any(value.strip() for value in row)), [])
             validate_feature_headers(header)
         frame = pd.read_csv(source, sep=separator, dtype={"sampleName": str})
-    return frame.rename(columns=str)
+    frame = frame.rename(columns=str)
+    boolean_values = {"true": 1, "false": 0, "t": 1, "f": 0}
+    for column in frame.columns:
+        if column in METADATA_COLUMNS or str(column).startswith("Unnamed:"):
+            continue
+        values = frame[column]
+        if pd.api.types.is_bool_dtype(values):
+            frame[column] = values.astype("int8")
+            continue
+        normalized = values.astype("string").str.strip().str.lower()
+        present = normalized.dropna()
+        if len(present) and present.isin(boolean_values).all():
+            frame[column] = normalized.map(boolean_values).astype("float64")
+    return frame
 
 
 def validate_feature_headers(headers) -> None:
