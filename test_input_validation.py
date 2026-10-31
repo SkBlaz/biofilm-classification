@@ -75,6 +75,26 @@ class TestInputValidation(unittest.TestCase):
                     pd.testing.assert_frame_equal(read_feature_table(path), frame)
                     self.assertTrue(validate_feature_table(path)["ok"])
 
+    def test_boolean_feature_values_are_read_as_numeric(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "features.tsv"
+            pd.DataFrame(
+                {
+                    "sampleName": ["a", "b"],
+                    "label": ["True", "False"],
+                    "NoBiomassDetected-SUMMARYImageFeaturesCustomAlgos": ["T", "F"],
+                }
+            ).to_csv(path, sep="\t", index=False)
+
+            frame = read_feature_table(path)
+
+            self.assertEqual(
+                frame["NoBiomassDetected-SUMMARYImageFeaturesCustomAlgos"].tolist(),
+                [1.0, 0.0],
+            )
+            self.assertEqual(frame["label"].tolist(), [True, False])
+            self.assertTrue(validate_feature_table(path, require_label=False)["ok"])
+
     def test_image_report_counts_labels_by_date(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
